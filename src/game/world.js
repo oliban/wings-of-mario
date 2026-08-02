@@ -17,6 +17,7 @@
 import { SCREEN_W, SCREEN_H, TILE, LAYER } from '../core/constants.js';
 import { Camera } from './camera.js';
 import { BlockSystem, tileKey } from './blocks.js';
+import { blastTiles, parseTileKey } from '../wings/blast.js';
 
 // ---------------------------------------------------------------------------
 // Cross-agent modules. Every one of these is authored in parallel, so each is
@@ -580,6 +581,9 @@ export class World {
     this.recByCode = new Array(128).fill(null);
     this.contents = new Map();
     this.decor = [];
+    // Destroyed tile keys for the level currently loaded. Cleared by loadLevel
+    // and re-seeded from opts.damage.
+    this.damage = new Set();
 
     this.entities = [];
     this.popups = [];
@@ -747,6 +751,8 @@ export class World {
     }
 
     this._buildTiles(lvl);
+    this.damage = new Set();
+    if (opts.damage && opts.damage.length) this.applyDamage(opts.damage);
     this._buildDecor();
     this._buildContents(lvl);
 
@@ -1451,6 +1457,49 @@ export class World {
 
   breakBlock(tx, ty, by) {
     return this.blocks.shatter(tx | 0, ty | 0, by || this.player);
+  }
+
+  // -------------------------------------------------------------------------
+  // Destructible terrain — see MODS.md
+  // -------------------------------------------------------------------------
+  // Clear tiles without any feedback. Used when loading a level that was
+  // already bombed, where a hundred simultaneous explosions would be absurd.
+  applyDamage(keys) {
+    for (const key of keys) {
+      const { tx, ty } = parseTileKey(key);
+      if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
+      this.damage.add(key);
+      this.setTile(tx, ty, '.');
+    }
+  }
+
+  // A live detonation. Everything in the radius goes: ground, brick, pipe,
+  // castle stone, flagpole base. Returns only the keys that actually removed
+  // something, so callers can tell a direct hit from a splash into open air.
+  destroyTiles(keys) {
+    const changed = [];
+    for (const key of keys) {
+      const { tx, ty } = parseTileKey(key);
+      if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
+      if (this.damage.has(key)) continue;
+      const rec = this.recAt(tx, ty);
+      const wasSomething = !!(rec.solid || rec.platform || rec.climb);
+      this.damage.add(key);
+      if (!wasSomething) continue;
+      this.setTile(tx, ty, '.');
+      this.contents.delete(tileKey(tx, ty));
+      this.fx('brickShatter', tx * TILE + TILE / 2, ty * TILE + TILE / 2);
+      changed.push(key);
+    }
+    if (changed.length) {
+      this.sfx('break');
+      this.shake(3, 10);
+    }
+    return changed;
+  }
+
+  blast(cx, cy, radiusTiles) {
+    return this.destroyTiles(blastTiles(cx, cy, radiusTiles));
   }
 
   // -------------------------------------------------------------------------
