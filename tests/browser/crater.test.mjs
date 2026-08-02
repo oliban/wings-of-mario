@@ -59,24 +59,68 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
     assert.deepEqual(r.after, r.before, 'a blast into open air should record nothing');
   });
 
-  await t.test('a tile the live blast left alone does not vanish on reload', async () => {
+  await t.test('a decor tile hanging in mid-air is destroyed by a blast', async () => {
     const r = await page.evaluate(async () => {
       await window.__GAME.loadLevel('1-1');
       const w = window.__GAME.world;
       // Tile 20,2 is a decor cloud ('c') — not solid, not platform, not climb —
-      // sitting well above 1-1's ground rows, so a small blast centred on it
-      // never touches solid tile.
+      // sitting well above 1-1's ground rows. Section 4.1 of the design spec
+      // says no material is immune, clouds included.
       const before = w.tileAt(20, 2).decor;
-      window.__GAME.blast(20 * 16 + 8, 2 * 16 + 8, 1);
+      const changed = window.__GAME.blast(20 * 16 + 8, 2 * 16 + 8, 1);
       const survivedLiveBlast = w.tileAt(20, 2).decor;
-      const damage = window.__GAME.damageKeys();
-      await window.__GAME.loadLevel('1-1', null, damage);
-      const survivedReload = window.__GAME.world.tileAt(20, 2).decor;
-      return { before, survivedLiveBlast, survivedReload };
+      return { before, changed, survivedLiveBlast };
     });
     assert.ok(r.before, 'expected decor cloud at tile 20,2 of 1-1');
-    assert.ok(r.survivedLiveBlast, 'the live blast destroyed a tile it should have left alone');
-    assert.ok(r.survivedReload, 'the tile vanished on reload though the live blast left it alone');
+    assert.ok(r.changed.includes('20,2'), 'blast did not destroy the decor cloud');
+    assert.ok(!r.survivedLiveBlast, 'the decor cloud survived the blast');
+  });
+
+  await t.test('a free-standing coin is destroyed by a blast', async () => {
+    const r = await page.evaluate(async () => {
+      // 1-1's bonus room (1-1b) has a row of free-standing coins at y=5,
+      // x=5..9 — 'o' tiles, solid:false, not platform, not climb.
+      await window.__GAME.loadLevel('1-1', '1-1b');
+      const w = window.__GAME.world;
+      const before = w.tileAt(5, 5).coin;
+      const changed = window.__GAME.blast(5 * 16 + 8, 5 * 16 + 8, 1);
+      const survivedLiveBlast = w.tileAt(5, 5).coin;
+      return { before, changed, survivedLiveBlast };
+    });
+    assert.ok(r.before, 'expected a free-standing coin at tile 5,5 of 1-1b');
+    assert.ok(r.changed.includes('5,5'), 'blast did not destroy the free-standing coin');
+    assert.ok(!r.survivedLiveBlast, 'the free-standing coin survived the blast');
+  });
+
+  await t.test('a live blast and a reload agree on a mixed solid/non-solid region', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      const w = window.__GAME.world;
+      // Column 2, rows 10-13 of 1-1 stack decor hill ('h', not solid) directly
+      // on top of ground ('#', solid) — a blast here hits both kinds at once.
+      const changed = window.__GAME.blast(2 * 16 + 8, 12 * 16 + 8, 2);
+      const keys = window.__GAME.damageKeys();
+      const liveTiles = keys.map((k) => {
+        const [tx, ty] = k.split(',').map(Number);
+        return { k, name: w.tileAt(tx, ty).name };
+      });
+      await window.__GAME.loadLevel('1-1', null, keys);
+      const w2 = window.__GAME.world;
+      const reloadedTiles = keys.map((k) => {
+        const [tx, ty] = k.split(',').map(Number);
+        return { k, name: w2.tileAt(tx, ty).name };
+      });
+      const reloadedKeys = window.__GAME.damageKeys();
+      return { changed, keys, liveTiles, reloadedTiles, reloadedKeys };
+    });
+    assert.ok(r.changed.length > 1, 'expected the blast to hit more than one tile');
+    assert.ok(r.liveTiles.every((t) => t.name === 'air'), 'live blast left a non-air tile in its own damage set');
+    assert.deepEqual(r.reloadedKeys, r.keys, 'reload recorded a different damage set than the live blast');
+    assert.deepEqual(
+      r.reloadedTiles.map((t) => t.name),
+      r.liveTiles.map((t) => t.name),
+      'reload produced a different map than the live blast'
+    );
   });
 
   await t.test('Mario falls into a crater blown out beneath him', async () => {

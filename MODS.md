@@ -35,11 +35,11 @@ two-line damage block anchored immediately after the tile map is rebuilt and
 before anything reads it.
 
 **`destroyTiles` vs. `applyDamage`, and `contents`:** `destroyTiles` only
-records a key in `this.damage` for a tile it actually cleared (solid,
-platform or climb); a splash into open air, a free coin, a lava pool or a
-hidden block it left alone is never recorded. `applyDamage` then clears every
-recorded key unconditionally on load — safe only because the two agree on
-what "recorded" means. `destroyTiles` also calls
+records a key in `this.damage` for a tile it actually cleared — any tile
+whose record's `name` isn't `'air'`, per the design spec's "no material is
+immune"; a splash into open air is the only thing it ever leaves alone.
+`applyDamage` then clears every recorded key unconditionally on load — safe
+only because the two agree on what "recorded" means. `destroyTiles` also calls
 `this.contents.delete(tileKey(tx, ty))`, but `applyDamage` does not: this
 looks like the same asymmetry and is not. `_buildContents` runs later in
 `loadLevel` and repopulates `this.contents` from the level's own data

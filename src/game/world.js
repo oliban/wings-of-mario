@@ -1485,7 +1485,11 @@ export class World {
       if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
       if (this.damage.has(key)) continue;
       const rec = this.recAt(tx, ty);
-      const wasSomething = !!(rec.solid || rec.platform || rec.climb);
+      // Any non-air tile is destructible — coins, decor, lava, hidden blocks,
+      // all of it. Checking `rec.name` rather than `rec.solid` is what makes
+      // this correct: most of those tiles have `solid: false` but are still
+      // real tiles, not air.
+      const wasSomething = rec.name !== 'air';
       // Record ONLY what was actually removed. `applyDamage` clears its keys
       // unconditionally, so a key recorded here but skipped below would vanish
       // on the next load — lava pools and hidden blocks disappearing on reload
