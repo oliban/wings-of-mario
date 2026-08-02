@@ -1,5 +1,6 @@
 import { bakeAll } from '../core/gfx.js';
 import { GameLoop } from '../core/loop.js';
+import { rampThrottle } from './flight.js';
 import { PilotRenderer } from './pilot-renderer.js';
 import { Scene } from './scene.js';
 import { WingsSim } from './sim.js';
@@ -13,7 +14,8 @@ if (HEADLESS) document.body.classList.add('headless');
 const KEYMAP = {
   ArrowUp: 'up',
   ArrowDown: 'down',
-  ArrowLeft: 'slow',
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
   KeyG: 'gear',
   KeyR: 'respawn',
 };
@@ -21,12 +23,17 @@ const KEYMAP = {
 const keys = Object.create(null);
 let scripted = null;
 let gear = true;
+// The throttle lever's own position — it persists across ticks with no key
+// held, exactly like a real lever, and only Right/Left advance or retard it.
+let throttle = 0;
 
 function readKeys() {
   if (scripted) return scripted;
+  const dir = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
+  throttle = rampThrottle(throttle, dir);
   return {
     pitch: (keys.up ? 1 : 0) + (keys.down ? -1 : 0),
-    throttle: keys.slow ? 0 : 1,
+    throttle,
     gear,
   };
 }
@@ -61,6 +68,7 @@ class Pilot {
     this.sim = new WingsSim({ squadron: opts.squadron });
     this.scene = new Scene();
     gear = true;
+    throttle = 0;
     scripted = null;
     return this.sim;
   }
@@ -71,7 +79,10 @@ class Pilot {
     e.preventDefault();
     if (down && !keys[name]) {
       if (name === 'gear') gear = !gear;
-      if (name === 'respawn' && this.sim.plane.mode === 'down') this.sim.respawn();
+      if (name === 'respawn' && this.sim.plane.mode === 'down') {
+        this.sim.respawn();
+        throttle = 0;
+      }
     }
     keys[name] = down;
   }
@@ -171,6 +182,7 @@ window.__WINGS = {
 
   respawn() {
     const ok = pilot.sim.respawn();
+    if (ok) throttle = 0;
     pilot.render();
     return ok;
   },

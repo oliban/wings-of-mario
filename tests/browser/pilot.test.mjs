@@ -30,17 +30,51 @@ test('the pilot page', async (t) => {
 
   await t.test('the arrow keys fly the plane off the deck', async () => {
     const before = await page.evaluate(() => window.__WINGS.state());
-    // Throttle is on unless ArrowLeft is held, so the roll starts with no key
-    // at all; Up is what rotates once there is flying speed.
+    // The lever starts at idle, so Right has to open the throttle before Up
+    // does anything; Up is what rotates once there is flying speed.
+    await page.keyboard.down('ArrowRight');
     await page.keyboard.down('ArrowUp');
-    await page.evaluate(() => window.__WINGS.tick(200));
+    await page.evaluate(() => window.__WINGS.tick(220));
     await page.keyboard.up('ArrowUp');
+    await page.keyboard.up('ArrowRight');
     const after = await page.evaluate(() => window.__WINGS.state());
 
     assert.equal(after.mode, 'air', 'holding Up never got the plane airborne');
     assert.equal(after.gear, false, 'the hook should retract on rotation');
     assert.ok(after.x - before.x > 80, 'used almost no deck');
     assert.ok(after.y < before.y, 'the plane never climbed');
+  });
+
+  await t.test('Right advances the throttle and Left retards it, continuously', async () => {
+    await page.evaluate(() => window.__WINGS.reset());
+    // Fresh plane, lever at idle.
+    assert.equal((await page.evaluate(() => window.__WINGS.state())).throttle, 0);
+
+    await page.keyboard.down('ArrowRight');
+    await page.evaluate(() => window.__WINGS.tick(30));
+    const midClimb = await page.evaluate(() => window.__WINGS.state());
+    await page.evaluate(() => window.__WINGS.tick(60));
+    const full = await page.evaluate(() => window.__WINGS.state());
+    await page.keyboard.up('ArrowRight');
+
+    assert.ok(midClimb.throttle > 0 && midClimb.throttle < 1, 'a partial hold should be a partial advance, not a snap to full');
+    assert.ok(full.throttle > midClimb.throttle, 'holding Right longer should keep advancing the throttle');
+    assert.equal(full.throttle, 1, 'holding Right long enough should reach full throttle');
+
+    // Release: the lever holds where it is, it does not fall back to idle.
+    await page.evaluate(() => window.__WINGS.tick(30));
+    const held = await page.evaluate(() => window.__WINGS.state());
+    assert.equal(held.throttle, 1, 'the throttle drifted with no key held');
+
+    await page.keyboard.down('ArrowLeft');
+    await page.evaluate(() => window.__WINGS.tick(30));
+    const midDescent = await page.evaluate(() => window.__WINGS.state());
+    await page.evaluate(() => window.__WINGS.tick(90));
+    const idle = await page.evaluate(() => window.__WINGS.state());
+    await page.keyboard.up('ArrowLeft');
+
+    assert.ok(midDescent.throttle < held.throttle && midDescent.throttle > 0, 'Left should be retarding the lever gradually');
+    assert.equal(idle.throttle, 0, 'holding Left long enough should reach idle');
   });
 
   // Looping straight off the deck brings the plane back down onto the ship with

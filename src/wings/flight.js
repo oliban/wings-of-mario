@@ -24,6 +24,11 @@ export const FLIGHT = {
   FUEL_MAX: 100,
   FUEL_IDLE: 0.004,
   FUEL_THROTTLE: 0.01,
+  // A full 0..1 sweep of the lever takes 90 ticks (~1.5s): fast enough that a
+  // cruise-to-idle deceleration reaches the landing envelope (carrier.js
+  // LANDING, 0.6-1.8) well inside the length of the deck, slow enough that
+  // there is no on/off snap — the pilot has to commit to a setting.
+  THROTTLE_RAMP: 1 / 90,
 };
 
 export const MODE = { DECK: 'deck', ROLL: 'roll', AIR: 'air', DOWN: 'down' };
@@ -42,6 +47,21 @@ export function turnToward(a, target, step) {
   const d = normalizeAngle(target - a);
   if (Math.abs(d) <= step) return normalizeAngle(target);
   return normalizeAngle(a + Math.sign(d) * step);
+}
+
+// The throttle lever. dir is +1 (advancing), -1 (retarding) or 0 (hand off
+// the lever — it stays wherever it was, this is not a spring). One tick's
+// worth of movement at a time, so the ramp is exact and frame-rate independent.
+export function rampThrottle(current, dir, rate = FLIGHT.THROTTLE_RAMP) {
+  if (!dir) return clamp(current, 0, 1);
+  const next = current + Math.sign(dir) * rate;
+  // Snap within an epsilon rather than clamp the float sum: 90 additions of
+  // 1/90 land a few ulps short of 1 (or 0), and a lever that can never quite
+  // reach full throttle — or never quite let go of it — is a bug the player
+  // would eventually feel even if no test ever printed the exact float.
+  if (next >= 1 - 1e-9) return 1;
+  if (next <= 1e-9) return 0;
+  return next;
 }
 
 export function createPlane(opts = {}) {

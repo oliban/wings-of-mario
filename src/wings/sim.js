@@ -104,6 +104,7 @@ export class WingsSim {
       vy: p.vy,
       angle: p.angle,
       speed: p.speed,
+      throttle: p.throttle,
       mode: p.mode,
       gear: p.gear,
       fuel: p.fuel,

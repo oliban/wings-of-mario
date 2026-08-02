@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CEILING_Y, DECK_X0, DECK_X1, DECK_Y, PLANE_H } from '../../src/wings/geo.js';
 import {
-  FLIGHT, MODE, createPlane, stepPlane, normalizeAngle, turnToward, nosePoint,
+  FLIGHT, MODE, createPlane, stepPlane, normalizeAngle, turnToward, nosePoint, rampThrottle,
 } from '../../src/wings/flight.js';
 
 const FULL = { throttle: 1, pitch: 0 };
@@ -138,6 +138,52 @@ test('the nose leads the hitbox', () => {
   assert.ok(nosePoint(p).x > p.x + 12, 'nose should be ahead when flying right');
   p.angle = Math.PI;
   assert.ok(nosePoint(p).x < p.x + 12, 'nose should be behind when flying left');
+});
+
+test('the throttle lever advances and retards continuously, not as a switch', () => {
+  let t = 0;
+  for (let i = 0; i < 10; i++) t = rampThrottle(t, 1);
+  assert.ok(t > 0 && t < 1, `10 ticks of Right should be a partial advance, got ${t}`);
+  assert.ok(Math.abs(t - 10 * FLIGHT.THROTTLE_RAMP) < 1e-9, 'advance should be linear in ticks held');
+});
+
+test('the throttle lever retards symmetrically', () => {
+  let t = 0.5;
+  const before = t;
+  t = rampThrottle(t, -1);
+  assert.ok(t < before, 'Left should reduce throttle');
+  assert.ok(Math.abs((before - t) - FLIGHT.THROTTLE_RAMP) < 1e-9, 'one tick of Left is one ramp step');
+});
+
+test('the throttle lever holds position with no key held — it is a lever, not a spring', () => {
+  let t = 0.37;
+  for (let i = 0; i < 50; i++) t = rampThrottle(t, 0);
+  assert.equal(t, 0.37, 'throttle drifted with no input');
+});
+
+test('the throttle lever clamps at both ends', () => {
+  let t = 0;
+  for (let i = 0; i < 500; i++) t = rampThrottle(t, -1);
+  assert.equal(t, 0, 'throttle went below idle');
+  for (let i = 0; i < 500; i++) t = rampThrottle(t, 1);
+  assert.equal(t, 1, 'throttle went past full');
+});
+
+test('a sustained pitch reverses heading from due east to due west, at more than one starting speed', () => {
+  // Cruise (2.7, the level-flight equilibrium) and a slow approach speed
+  // (1.2, inside the carrier's landing envelope) both must come around.
+  for (const speed of [2.7, 1.2]) {
+    const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed, angle: 0, gear: false });
+    let ticks = 0;
+    let facedWest = -1;
+    while (ticks < 300 && facedWest < 0) {
+      stepPlane(p, { throttle: 1, pitch: 1 });
+      ticks++;
+      if (Math.cos(p.angle) < -0.99) facedWest = ticks;
+    }
+    assert.ok(facedWest > 0, `speed ${speed}: never turned to face due west within 300 ticks`);
+    assert.ok(facedWest < 100, `speed ${speed}: reversal at tick ${facedWest} is not a brisk loop`);
+  }
 });
 
 test('the model is deterministic', () => {
