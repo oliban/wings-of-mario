@@ -37,16 +37,21 @@ test('the pilot page', async (t) => {
   await t.test('the arrow keys fly the plane off the deck', async () => {
     const before = await page.evaluate(() => window.__WINGS.state());
     // Right thrusts East, which is the way the plane starts pointed, so it
-    // builds speed; Up is pitch, and pull-back is what rotates once there is
-    // flying speed.
+    // builds speed; DOWN is pull-back, and pull-back is what rotates once
+    // there is flying speed.
+    //
+    // 165 ticks, not the 220 this used to hold for: rotation is at tick 133
+    // and the climb is established well before 165, whereas by 220 an
+    // unreleased stick has flown a whole loop and is on its way round a second
+    // one — which is a loop test, not a takeoff test.
     await page.keyboard.down('ArrowRight');
-    await page.keyboard.down('ArrowUp');
-    await page.evaluate(() => window.__WINGS.tick(220));
-    await page.keyboard.up('ArrowUp');
+    await page.keyboard.down('ArrowDown');
+    await page.evaluate(() => window.__WINGS.tick(165));
+    await page.keyboard.up('ArrowDown');
     await page.keyboard.up('ArrowRight');
     const after = await page.evaluate(() => window.__WINGS.state());
 
-    assert.equal(after.mode, 'air', 'holding Right+Up never got the plane airborne');
+    assert.equal(after.mode, 'air', 'holding Right+Down never got the plane airborne');
     assert.equal(after.gear, false, 'the hook should retract on rotation');
     assert.ok(after.x - before.x > 80, 'used almost no deck');
     assert.ok(after.y < before.y, 'the plane never climbed');

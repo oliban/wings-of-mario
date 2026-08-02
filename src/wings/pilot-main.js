@@ -11,8 +11,16 @@ if (HEADLESS) document.body.classList.add('headless');
 // is Mario's, its two maps are already spoken for, and a second consumer of the
 // same key events is a bug waiting to happen.
 const KEYMAP = {
-  ArrowUp: 'up',
-  ArrowDown: 'down',
+  // DOWN LIFTS. The stick, not the nose: you pull BACK to climb, and back is
+  // toward you — down the screen. Every arcade flight game of the era is
+  // wired this way and the user asked for it explicitly. There is no attitude
+  // in which this flips: pitch is body-relative in flight.js and the stall
+  // turn never inverts the aeroplane, so "back" means "climb" facing either
+  // way round, upside down or not.
+  // The actions are named for what the AEROPLANE does, not for which key does
+  // it, so that this table stays the only place the binding lives.
+  ArrowDown: 'climb',
+  ArrowUp: 'dive',
   ArrowLeft: 'left',
   ArrowRight: 'right',
   KeyG: 'gear',
@@ -37,12 +45,43 @@ let gear = true;
 // before they ever reach the latch.
 const pending = { drop: false, fire: false };
 
+// WHICH WAY THE STICK TURNS THE AIRFRAME.
+//
+// `pitch` in flight.js is not "pull back", it is a fixed direction of
+// rotation: +1 always sweeps the nose the same way round the compass. Facing
+// East that is a climb. Facing West — which is where every stall turn leaves
+// you — the same rotation is a DIVE, so a straight key swap would give "Down
+// lifts" on the outbound leg only, which is the mental translation step the
+// user asked to be rid of.
+//
+// What decides it is not the heading, it is which side of the aeroplane the
+// canopy is on. A stall turn changes ends by rolling half way round the
+// fuselage axis (scene.js animates exactly that), so the aeroplane comes out
+// mirrored — upright, facing the other way — and the elevator now rotates it
+// the other way round in world terms. Two reversals and it is back as it was.
+//
+// So the sign flips once per COMPLETED stall turn and at no other time. That
+// is what keeps a loop clean: a loop does not change ends, does not reverse
+// this, and the earlier attempt at "down lifts" — which flipped on heading —
+// is precisely what used to leave the aeroplane stuck at the vertical, the
+// sign reversing under the player's thumb half way round. Input is ignored
+// for the whole duration of a turn anyway, so the flip lands on the exact
+// tick control comes back.
+//
+// This is the KEYBOARD's translation of what the player meant, and it lives
+// here rather than in the simulation: __WINGS.hold({pitch}) is the raw
+// airframe rotation and is deliberately untouched by it.
+let mirrored = false;
+let wasTurning = false;
+
 function readKeys() {
   if (scripted) return scripted;
   return {
-    // Pitch is body-relative — Up always noses up, Down always noses down —
-    // and unaffected by which way the aeroplane is facing.
-    pitch: (keys.up ? 1 : 0) + (keys.down ? -1 : 0),
+    // Pitch is body-relative — pulling back always noses up, pushing forward
+    // always noses down — and unaffected by which way the aeroplane is
+    // facing. `pitch: +1` is nose-up here and everywhere else, including
+    // __WINGS.hold(); only which KEY produces it lives in KEYMAP.
+    pitch: (mirrored ? -1 : 1) * ((keys.climb ? 1 : 0) + (keys.dive ? -1 : 0)),
     // Thrust is a WORLD-frame direction, not a lever position: Right always
     // means "thrust East", Left "thrust West". See flight.js's stepAir for
     // how that becomes acceleration, deceleration, or a stall turn depending
@@ -89,6 +128,8 @@ class Pilot {
     scripted = null;
     pending.drop = false;
     pending.fire = false;
+    mirrored = false;
+    wasTurning = false;
     return this.sim;
   }
 
@@ -115,6 +156,7 @@ class Pilot {
       // press again.
       pending.drop = false;
       pending.fire = false;
+      this.trackAttitude();
       // The model raises the hook on rotation and lowers it again on the wire.
       // Without mirroring that back, the next tick's input would re-assert the
       // player's stale toggle and the hook would never actually come up.
@@ -123,6 +165,21 @@ class Pilot {
     } catch (e) {
       this.crash(e);
     }
+  }
+
+  // One completed stall turn leaves the aeroplane mirrored; two put it back.
+  // On the deck it is upright by definition, which is also what makes a
+  // respawn or a landing hand the player back a normal stick.
+  trackAttitude() {
+    const p = this.sim.plane;
+    if (p.mode === 'deck' || p.mode === 'roll') {
+      mirrored = false;
+      wasTurning = false;
+      return;
+    }
+    const turning = this.sim.turnState().turning;
+    if (wasTurning && !turning) mirrored = !mirrored;
+    wasTurning = turning;
   }
 
   render() {

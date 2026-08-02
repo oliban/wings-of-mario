@@ -32,6 +32,94 @@ test('bombs, islands and the stall-turn roll', { timeout: 120000 }, async (t) =>
     return true;
   }, opts);
 
+  // DOWN LIFTS, in both directions of flight. The user asked for this
+  // explicitly and it has been reverted once already, so it is asserted
+  // against the real keyboard rather than against the scripted API: only the
+  // KEY BINDING moves, `hold({pitch: 1})` still means nose-up.
+  // Fly a real reversal: brake against your own heading until the airspeed
+  // hits zero and the stall turn wings the aeroplane onto the other heading.
+  // Hand-setting angle = PI would NOT do — the aeroplane would be pointing
+  // west without ever having rolled, which is not a state flying produces.
+  const reverseWest = () => page.evaluate(() => {
+    const W = window.__WINGS;
+    W.hold({ pitch: 0, thrust: -1 });
+    for (let i = 0; i < 400 && !W.state().turning; i++) W.tick(1);
+    while (W.state().turning) W.tick(1);
+    W.hold({ pitch: 0, thrust: 0 });
+    W.tick(10);
+    W.release();
+    return W.state();
+  });
+
+  for (const heading of ['east', 'west']) {
+    await t.test(`Down climbs and Up dives flying ${heading}`, async () => {
+      const pull = async (key) => {
+        await fly({ x: 900, y: 250, speed: 3 });
+        if (heading === 'west') await reverseWest();
+        const start = await page.evaluate(() => window.__WINGS.state());
+        await page.keyboard.down(key);
+        await page.evaluate(() => window.__WINGS.tick(30));
+        await page.keyboard.up(key);
+        const to = await page.evaluate(() => window.__WINGS.state());
+        return { from: start.y, angle: start.angle, to };
+      };
+      const down = await pull('ArrowDown');
+      const up = await pull('ArrowUp');
+      assert.ok(
+        Math.cos(down.angle) * (heading === 'east' ? 1 : -1) > 0,
+        `the test aeroplane set off pointing the wrong way (angle ${down.angle})`
+      );
+      assert.ok(down.to.y < down.from, `flying ${heading}, holding Down sank ${down.from} -> ${down.to.y} instead of climbing`);
+      assert.ok(up.to.y > up.from, `flying ${heading}, holding Up climbed ${up.from} -> ${up.to.y} instead of diving`);
+    });
+  }
+
+  await t.test('Down still climbs after a second reversal has put it back the way it started', async () => {
+    // The sign the keyboard applies toggles per completed stall turn, so two
+    // of them have to compose back to where they began. A player crosses the
+    // ocean and comes home; that is two reversals, every sortie.
+    await fly({ x: 900, y: 250, speed: 3 });
+    await reverseWest();
+    await page.evaluate(() => {
+      const W = window.__WINGS;
+      W.hold({ pitch: 0, thrust: 1 });
+      for (let i = 0; i < 400 && !W.state().turning; i++) W.tick(1);
+      while (W.state().turning) W.tick(1);
+      W.release();
+    });
+    const start = await page.evaluate(() => window.__WINGS.state());
+    await page.keyboard.down('ArrowDown');
+    await page.evaluate(() => window.__WINGS.tick(30));
+    await page.keyboard.up('ArrowDown');
+    const end = await page.evaluate(() => window.__WINGS.state());
+    assert.ok(Math.cos(start.angle) > 0, `two reversals should point it East again (angle ${start.angle})`);
+    assert.ok(end.y < start.y, `after two reversals Down sank ${start.y} -> ${end.y} instead of climbing`);
+  });
+
+  await t.test('the scripted API keeps its own convention: hold({pitch}) is raw airframe rotation', async () => {
+    // Only the KEY BINDINGS moved, and the mirrored-attitude sign that makes
+    // "Down lifts" hold after a reversal belongs to the keyboard. A bot that
+    // says pitch: 1 gets the same rotation of the airframe it always got,
+    // before and after a reversal — no hidden flip leaked into this path.
+    const sweep = async (reversed) => {
+      await fly({ x: 900, y: 250, speed: 3 });
+      if (reversed) await reverseWest();
+      return page.evaluate(() => {
+        const W = window.__WINGS;
+        const a0 = W.state().angle;
+        W.hold({ pitch: 1, thrust: 0 });
+        W.tick(10);
+        W.release();
+        const d = W.state().angle - a0;
+        return Math.atan2(Math.sin(d), Math.cos(d));
+      });
+    };
+    const east = await sweep(false);
+    const west = await sweep(true);
+    assert.ok(east < -0.1, `hold({pitch: 1}) should sweep the airframe one fixed way (got ${east})`);
+    assert.ok(west < -0.1, `hold({pitch: 1}) swept the other way after a reversal (${west}) — the key layer's sign leaked in`);
+  });
+
   await t.test('a keypress drops a bomb and the loadout decrements', async () => {
     await fly({ x: 900, y: 200, speed: 2.5 });
     const before = await page.evaluate(() => window.__WINGS.sim.loadout.bomb);
