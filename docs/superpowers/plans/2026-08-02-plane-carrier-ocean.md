@@ -31,13 +31,17 @@ Copied from the spec and from `ARCHITECTURE.md`, which remains binding. Every ta
 
 ## Already built by Plan 1 — consume, do not rebuild
 
-- `src/wings/blast.js` — `blastTiles(cx, cy, radiusTiles) -> string[]`, `tileKey(tx, ty)`, `parseTileKey(key)`.
+- `src/wings/blast.js` — `blastTiles(cx, cy, radiusTiles) -> string[]`, `tileKey(tx, ty)`, `parseTileKey(key)`. `parseTileKey` now **rejects** anything that is not a string matching `/^-?\d+,-?\d+$/`, and `blastTiles` clamps its radius. Both are stricter than when this plan was drafted; nothing here feeds them a malformed key, but do not paper over a throw from `parseTileKey` — it means a key was built wrong somewhere upstream of it.
 - `src/wings/damage.js` — `class DamageMap` (`add`/`has`/`keys`/`hash`/`toJSON`/`fromJSON`), `hashKeys(keys)`.
 - On `World`: `world.damage` (a `Set`), `world.destroyTiles(keys)`, `world.applyDamage(keys)`, `world.blast(cx, cy, radiusTiles)`. Damage travels in through `loadLevel`'s options bag — `game.loadLevel(id, areaId, { damage })`.
+- `src/wings/debug-panel.js` — a bomb-test panel loaded from `index.html`. It drives the game **only** through `window.__GAME`, which does not exist on `pilot.html`, so it cannot be dropped into the pilot page as-is. Do not fork it: the pilot's equivalent dev surface is `window.__WINGS` plus the on-screen HUD in `scene.js`. If the pilot later wants real panel controls, the right move is to generalise `debug-panel.js` to take an API object rather than reaching for the `__GAME` global.
 - `tests/browser/helpers.mjs` — `boot()` and `shutdown(ctx)` on port 8199. **Reuse it. Do not write a second boot helper.**
 - npm scripts: `test:unit` → `node --test "tests/unit/*.test.js"`, `test:browser` → `node --test "tests/browser/*.test.mjs"`, `test` → both.
+- Baseline before this plan starts: **20 unit tests and 14 browser tests, all green.** Every `Expected: PASS` below is on top of those.
 
-**The one behaviour of Plan 1 this plan must mirror exactly.** `world.destroyTiles()` decides what a blast removes with `rec.name !== 'air'` — *every* non-air tile, including coins, decor, hidden blocks, water and lava, not just solid ones. And it records **only** the keys it actually removed: recording a key that was already air would make `applyDamage` clear it unconditionally on the next load, which is how lava pools and hidden blocks vanish on reload after a blast that never touched them. `Island.blast()` in Task 2 is a copy of that predicate, and the two must stay identical or the pilot's crater and Mario's crater diverge and Plan 3's desync hash fires.
+**The one behaviour of Plan 1 this plan must mirror exactly.** `world.destroyTiles()` decides what a blast removes with `rec.name !== 'air'` — *every* non-air tile, including coins, decor, hidden blocks, water, lava and unknown tiles, not just solid ones. And it records **only** the keys it actually removed: recording a key that was already air would make `applyDamage` clear it unconditionally on the next load, which is how lava pools and hidden blocks vanish on reload after a blast that never touched them. `Island.blast()` in Task 2 is a copy of that predicate, and the two must stay identical or the pilot's crater and Mario's crater diverge and Plan 3's desync hash fires.
+
+**`world.blast()` and `Island.blast()` are not the same call, and this plan uses only the second.** On the engine side `world.blast()` is the *live detonation* entry point: it kills entities in the radius and rebuilds the decor and flagpole/castle snapshots, which are compiled once from the tile map and go stale after a crater. `world.destroyTiles()` does neither. The pilot has no `World` and no entities and no decor snapshot, so `Island.blast()` mirrors only the tile bookkeeping — deliberately, not by omission. When Plan 3 gives Mario's client the `detonate` event, **that** client calls `world.blast(cx, cy, radiusTiles)` so the kills and the snapshot rebuild happen where the entities actually live.
 
 ---
 
@@ -60,11 +64,12 @@ Mario renders through `src/render/post.js`, which gives the game its bloom, scan
 Every simulation module in this plan was built and run against this repo's real level data before the plan was written. The working copies are at:
 
 ```
-/private/tmp/claude-501/-Users-fredriksafsten-games-wings-of-mario/
-  af7973d9-1e31-45c4-9ad8-38e8850685f5/scratchpad/verified-wings/
+.superpowers/plan2-verified-wings/
 ```
 
-**That directory is unversioned scratch, not a source of truth.** It is a sibling copy of the repo, it predates some of the tuning below, and it will not survive the session. Implement from the code in this plan. The scratchpad is there only if you want to watch something run before you trust it.
+containing `geo.js`, `flight.js`, `carrier.js`, `island.js`, `ordnance.js`, `sim.js`, `bot.js`, and the two art scratch files `art.mjs` / `art2.mjs`.
+
+**That directory is unversioned reference material, not a source of truth.** It was built in a sibling copy of the repo and it predates some of the tuning in this plan — most importantly, its `island.js` still uses the old `solid || platform` blast predicate, which Task 2 replaces. **Implement from the code in this plan, not from those files.** They are there so you can watch something run before you trust it, and so the tick counts below are reproducible rather than asserted.
 
 Measured behaviour the tasks below assert against, so you inherit it instead of rediscovering it:
 
@@ -1942,7 +1947,7 @@ Then **open `http://localhost:8199/pilot.html` in a real browser and fly it.** H
 Run: `git status --porcelain -- src/core src/game src/render src/data src/ui src/audio src/main.js index.html`
 Expected: **empty output.**
 
-Run: `npm run test:unit` — Expected: PASS, 41 new tests plus Plan 1's.
+Run: `npm run test:unit` — Expected: PASS, 41 new tests on top of the 20 that were already green.
 
 ```bash
 git add src/wings/geo.js src/wings/flight.js src/wings/carrier.js src/wings/sim.js \
@@ -2386,6 +2391,8 @@ world.destroyTiles exactly, including recording only non-air tiles."
 ## Task 3: Ordnance
 
 The full Wings of Fury arsenal, the craters it makes, and the mistake of dropping from too low. `predictImpact` runs the *same* integrator as the live bomb, so the telegraph Plan 4 draws will agree with the crater to the pixel.
+
+**Do not reach for `world.blast()` here.** It is the engine's live-detonation entry point — it kills entities and rebuilds the decor and flagpole snapshots — and it needs a `World`, which the pilot page does not have and must not construct. `sim.detonate()` calls `island.blast()`, which mirrors only the tile bookkeeping. The kills belong to whichever client owns the entities, and in Plan 3 that is Mario's.
 
 **Files:**
 - Create: `src/wings/ordnance.js`, `tests/unit/ordnance.test.js`
