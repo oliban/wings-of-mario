@@ -48,6 +48,11 @@ export const PLANE_SCALE = PLANE_LEN / LOCAL_LEN;
 export const PLANE_ASPECT = 2.64;
 export const PLANE_HEIGHT = PLANE_LEN / PLANE_ASPECT;
 
+// Half the wingspan, in the same local units as the profile. Seen edge-on the
+// wing is a chord line inside the silhouette; seen from above it is the widest
+// thing on the aeroplane, and that contrast is the whole point of the roll.
+const SPAN = 22;
+
 // Local frame: origin at the centre of mass, +x toward the nose, +y down.
 const NOSE = 29;
 const TAIL = -23;
@@ -187,7 +192,23 @@ function gradients(ctx) {
   glass.addColorStop(0.62, PLANE.canopyDark);
   glass.addColorStop(1, PLANE.canopyFrame);
 
-  grads = { body, cowl, wing, fin, glass };
+  // Seen from above the aeroplane is lit across the SPAN rather than across the
+  // depth, so the planform gets its own gradient: one wing into the light, the
+  // other away from it. Without that the top view reads as a flat paper dart.
+  const plan = ctx.createLinearGradient(0, -SPAN, 0, SPAN);
+  plan.addColorStop(0, PLANE.dark);
+  plan.addColorStop(0.34, PLANE.shade);
+  plan.addColorStop(0.5, PLANE.mid);
+  plan.addColorStop(0.68, PLANE.skin);
+  plan.addColorStop(1, PLANE.light);
+
+  const planBody = ctx.createLinearGradient(0, -5, 0, 5);
+  planBody.addColorStop(0, PLANE.shade);
+  planBody.addColorStop(0.45, PLANE.mid);
+  planBody.addColorStop(0.6, PLANE.skin);
+  planBody.addColorStop(1, PLANE.shade);
+
+  grads = { body, cowl, wing, fin, glass, plan, planBody };
   return grads;
 }
 
@@ -295,10 +316,10 @@ function drawInsignia(ctx, cx, cy, r) {
 // Draw the aircraft in the local frame. The caller has already translated to the
 // centre of mass and rotated; nothing in here knows about the world.
 export function drawPlaneBody(ctx, opts = {}) {
-  const { tick = 0, throttle = 1, gear = false, hook = false } = opts;
+  const { tick = 0, throttle = 1, gear = false, hook = false, prop = true } = opts;
   const g = gradients(ctx);
 
-  drawProp(ctx, tick, throttle);
+  if (prop) drawProp(ctx, tick, throttle);
   if (gear) drawGear(ctx);
   if (hook) drawHook(ctx);
 
@@ -538,21 +559,234 @@ export function drawPlaneBody(ctx, opts = {}) {
   ctx.globalAlpha = 1;
 }
 
-// World-space entry point. Handles the heading flip: the aeroplane is drawn
-// right-facing and mirrored for the leftward half of a loop, which is the flip
-// the original does as the nose passes through the vertical.
+// ---------------------------------------------------------------------------
+// The planform — the same aeroplane seen from above
+// ---------------------------------------------------------------------------
+//
+// Rolling about the fuselage axis swings the wing out of the screen and into
+// it: at ninety degrees of bank the side view has collapsed to a line and what
+// the pilot's eye is left with is the PLANFORM. So the roll needs a second
+// drawing of the same aeroplane, from directly above, in the same local frame:
+// +x still toward the nose, but +y is now SPANWISE instead of down.
+//
+// Only bodies that stand out of the wing plane belong to the profile (fin,
+// canopy, undercarriage); only bodies that lie in it belong here (wings,
+// tailplane) — and the fuselage, being round, appears in both. Drawing each at
+// its own trigonometric scale is what makes the two views one solid object
+// instead of a cross-fade between two pictures.
+
+// The proportion that decides whether the top view reads as a fighter or as a
+// manta ray is CHORD AGAINST SPAN. A Hellcat's wing is a long taper — root
+// chord a third of the semi-span, tip chord half of that again — so the chord
+// here shrinks from 22 at the root to 12 at the tip across 22 of semi-span.
+function planWingPath(ctx, sign) {
+  const s = sign;
+  ctx.beginPath();
+  ctx.moveTo(13, s * 3.4);
+  ctx.lineTo(9.6, s * 12);
+  ctx.lineTo(7.2, s * (SPAN - 2.6));
+  ctx.quadraticCurveTo(6, s * SPAN, 3, s * SPAN);
+  ctx.lineTo(-2.5, s * SPAN);
+  ctx.quadraticCurveTo(-5, s * SPAN, -5.6, s * (SPAN - 2.6));
+  ctx.lineTo(-7.6, s * 12);
+  ctx.lineTo(-9.6, s * 3.6);
+  ctx.closePath();
+}
+
+function planTailPath(ctx, sign) {
+  const s = sign;
+  ctx.beginPath();
+  ctx.moveTo(-12.5, s * 2.2);
+  ctx.lineTo(-16.2, s * 9);
+  ctx.quadraticCurveTo(-17.4, s * 10.2, -19.6, s * 10);
+  ctx.lineTo(TAIL - 3.2, s * 8.6);
+  ctx.lineTo(TAIL - 3.2, s * 1.4);
+  ctx.closePath();
+}
+
+function planFuselagePath(ctx) {
+  ctx.beginPath();
+  ctx.moveTo(13, -4.6);
+  ctx.lineTo(27.4, -4.5);
+  ctx.quadraticCurveTo(NOSE + 1.8, -4.2, NOSE + 1.8, -2.6);
+  ctx.lineTo(NOSE + 1.8, 2.6);
+  ctx.quadraticCurveTo(NOSE + 1.8, 4.2, 27.4, 4.5);
+  ctx.lineTo(13, 4.6);
+  ctx.lineTo(-8, 3.2);
+  ctx.quadraticCurveTo(TAIL - 1.6, 1.4, TAIL - 2.2, 0);
+  ctx.quadraticCurveTo(TAIL - 1.6, -1.4, -8, -3.2);
+  ctx.closePath();
+}
+
+// Drawn in the local frame with +y spanwise. The caller scales y by sin(roll).
+export function drawPlanformBody(ctx, opts = {}) {
+  const g = gradients(ctx);
+
+  // Tailplane first, then the wing over it, then the fuselage over both — the
+  // same back-to-front order the profile uses.
+  for (const s of [-1, 1]) {
+    planTailPath(ctx, s);
+    ctx.fillStyle = g.plan;
+    ctx.fill();
+    ctx.strokeStyle = s > 0 ? PLANE.skin : PLANE.mid;
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(-12.5, s * 2.2);
+    ctx.lineTo(-16.2, s * 9);
+    ctx.stroke();
+  }
+
+  for (const s of [-1, 1]) {
+    planWingPath(ctx, s);
+    ctx.fillStyle = g.plan;
+    ctx.fill();
+    // Leading edge: the hard lit line that says which way the wing is pointing.
+    ctx.strokeStyle = s > 0 ? PLANE.light : PLANE.mid;
+    ctx.lineWidth = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(13, s * 3.4);
+    ctx.lineTo(9.6, s * 12);
+    ctx.lineTo(7.2, s * (SPAN - 2.6));
+    ctx.stroke();
+  }
+
+  // Wing markings. The star-and-bar sits ACROSS the span out on the panel,
+  // which is where the eye finds it in the reference, and the white stripe on
+  // the profile's wing continues out to the tip as the same band.
+  for (const s of [-1, 1]) {
+    ctx.save();
+    planWingPath(ctx, s);
+    ctx.clip();
+    ctx.strokeStyle = PLANE.insignia;
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.moveTo(-3, s * 3);
+    ctx.lineTo(-4.6, s * SPAN);
+    ctx.stroke();
+    ctx.restore();
+    ctx.save();
+    ctx.translate(1.5, s * 13.5);
+    ctx.rotate(Math.PI / 2);
+    drawInsignia(ctx, 0, 0, 2.6);
+    ctx.restore();
+  }
+
+  // Fuselage: a round tube from any angle, so it is the one part that is nearly
+  // as wide from above as it is deep from the side.
+  planFuselagePath(ctx);
+  ctx.fillStyle = g.planBody;
+  ctx.fill();
+  // The wing root fairing shadow, and the spine highlight down the centreline.
+  ctx.save();
+  planFuselagePath(ctx);
+  ctx.clip();
+  ctx.strokeStyle = PLANE.contact;
+  ctx.globalAlpha = 0.45;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(13.4, -5);
+  ctx.lineTo(13.4, 5);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = PLANE.skin;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(12, 0.4);
+  ctx.lineTo(TAIL, 0.2);
+  ctx.stroke();
+  ctx.fillStyle = PLANE.insignia;
+  ctx.fillRect(-11.6, -5, 2.1, 10);
+  ctx.fillStyle = PLANE.flash;
+  ctx.fillRect(-15.4, -5, 1.8, 10);
+  ctx.restore();
+
+  // Canopy from above: a narrow slot, not a bathtub. Glazing seen from directly
+  // above is mostly the dark inside of the cockpit, so this is the DARK end of
+  // the canopy ramp — the pale end belongs to the profile, where the sky is
+  // what you see reflected in it.
+  const glassTop = ctx.createLinearGradient(0, -2, 0, 2);
+  glassTop.addColorStop(0, PLANE.canopyDark);
+  glassTop.addColorStop(0.45, PLANE.canopy);
+  glassTop.addColorStop(1, PLANE.canopyFrame);
+  ctx.fillStyle = glassTop;
+  ctx.beginPath();
+  ctx.moveTo(7, 0);
+  ctx.quadraticCurveTo(5.6, -1.9, 0.5, -2);
+  ctx.lineTo(-5.5, -1.4);
+  ctx.lineTo(-7.6, 0);
+  ctx.lineTo(-5.5, 1.4);
+  ctx.lineTo(0.5, 2);
+  ctx.quadraticCurveTo(5.6, 1.9, 7, 0);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = PLANE.pilot;
+  ctx.beginPath();
+  ctx.ellipse(-2.4, 0, 1.6, 1.2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // The fin, edge-on: a blade standing on the tail boom, tapering forward.
+  ctx.fillStyle = PLANE.dark;
+  ctx.beginPath();
+  ctx.moveTo(-7, 0);
+  ctx.lineTo(-17.5, -1);
+  ctx.lineTo(TAIL - 0.8, -1.1);
+  ctx.lineTo(TAIL - 0.8, 1.1);
+  ctx.lineTo(-17.5, 1);
+  ctx.closePath();
+  ctx.fill();
+
+  // Spinner.
+  ctx.fillStyle = PLANE.spec;
+  ctx.beginPath();
+  ctx.ellipse(NOSE + 1.8, 0, 1.7, 1.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ---------------------------------------------------------------------------
+
+// World-space entry point.
+//
+// `roll` is the bank angle about the fuselage axis, in radians, and it replaces
+// the mirror the old version did the instant cos(angle) changed sign. It is the
+// same operation at the ends — at roll = PI the profile is drawn upside down,
+// which through the heading rotation is EXACTLY the mirrored aeroplane the flip
+// produced — but now every value in between is available too, so a reversal can
+// roll through the planform instead of popping between two pictures.
+//
+// The projection is the honest one for a rotation about +x: a point (x, y, z)
+// lands at screen y = y*cos(roll) - z*sin(roll). Profile geometry has z = 0 and
+// scales by cos; planform geometry has y = 0 and scales by sin. The propeller
+// disc lies in the plane normal to the axis and so is invariant under the roll:
+// it is drawn once, unscaled, which is why it does not thin out at the midpoint.
 export function drawPlane(ctx, cx, cy, angle, opts = {}) {
-  const flip = Math.cos(angle) < 0;
+  const roll = opts.roll == null ? (Math.cos(angle) < 0 ? Math.PI : 0) : opts.roll;
+  const c = Math.cos(roll);
+  const s = Math.sin(roll);
+
   ctx.save();
   ctx.translate(cx, cy);
-  if (flip) {
-    ctx.scale(-1, 1);
-    ctx.rotate(Math.PI - angle);
-  } else {
-    ctx.rotate(angle);
-  }
+  ctx.rotate(angle);
   if (PLANE_SCALE !== 1) ctx.scale(PLANE_SCALE, PLANE_SCALE);
-  drawPlaneBody(ctx, opts);
+
+  drawProp(ctx, opts.tick || 0, opts.throttle == null ? 1 : opts.throttle);
+
+  const profile = () => {
+    if (Math.abs(c) < 1e-3) return;
+    ctx.save();
+    ctx.scale(1, c);
+    drawPlaneBody(ctx, { ...opts, prop: false });
+    ctx.restore();
+  };
+  const plan = () => {
+    if (Math.abs(s) < 1e-3) return;
+    ctx.save();
+    ctx.scale(1, s);
+    drawPlanformBody(ctx, opts);
+    ctx.restore();
+  };
+  // Whichever view is the more foreshortened is the one further from the eye.
+  if (Math.abs(c) >= Math.abs(s)) { plan(); profile(); } else { profile(); plan(); }
+
   ctx.restore();
 }
 

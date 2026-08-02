@@ -2,7 +2,7 @@ import { LAYER } from '../core/constants.js';
 import {
   VIEW_W, VIEW_H, SEA_Y, CEILING_Y, DECK_X0, DECK_X1, DECK_Y, PLANE_W, PLANE_H, clamp,
 } from './geo.js';
-import { MODE, FLIGHT } from './flight.js';
+import { MODE, FLIGHT, normalizeAngle } from './flight.js';
 import { drawSky, drawClouds } from './art/sky.js';
 import { drawSea, drawWake, drawBowWave, drawSplash, surfaceAt } from './art/sea.js';
 import {
@@ -48,11 +48,90 @@ export const ISLAND_X = DECK_X1 - 150;
 const PARK_X = DECK_X1 - 74;
 const CREW_X = DECK_X0 + 132;
 
+// THE REVERSAL.
+//
+// The aeroplane changes ends by looping, and at the top of that loop it is
+// upside down and pointing the other way. The original resolves this the way
+// every pilot does — it rolls upright — and the way a 1987 sprite engine could
+// afford to: instantly, at the frame where the nose passes the vertical. The
+// instant version is what reads as a sprite being flipped rather than an
+// aeroplane being flown, so here that same half-roll is given a duration.
+//
+// It is a second-order system, not a curve lookup, because the two things that
+// make a manoeuvre read as having weight are exactly what a spring gives for
+// free: it does not arrive at the new attitude the instant the input says so,
+// and it does not stop dead when it gets there.
+//
+//   STIFFNESS/DAMPING put the half-roll through the planform three ticks after
+//   the nose passes the vertical and settled by tick twelve — a fifth of a
+//   second of roll, with a wing-rock behind it. This happens every time the
+//   player turns round, several times a minute, so it is deliberately at the
+//   short end: anything statelier is charming twice and irritating thereafter.
+//
+//   LEAD is the anticipation. The bank is offset by the rate the nose is
+//   moving, so pulling into the loop banks the aeroplane a few degrees BEFORE
+//   the reversal commits, and relaxing the stick rolls it level again. It costs
+//   nothing — the pitch rate is just the difference between two angles — and it
+//   is most of why the roll looks like it was flown rather than triggered.
+const ROLL = {
+  STIFFNESS: 0.11,
+  DAMPING: 0.4,
+  LEAD: 5.2,
+  LEAD_MAX: 0.3,
+  // A jump bigger than any one tick of TURN_RATE can produce is a respawn or a
+  // teleport, not flying. Snap rather than roll through it.
+  TELEPORT: 0.5,
+  // Never integrate more than this many ticks of catch-up in one frame.
+  MAX_STEPS: 8,
+};
+
 export class Scene {
   constructor() {
     this.fx = [];
     this.consumed = 0;
     this.tick = 0;
+    // Bank angle about the fuselage axis, its rate, and the attitude it is
+    // heading for. `rollTarget` accumulates a half turn per crossing of the
+    // vertical, in the direction the nose is already sweeping, so a full loop
+    // rolls all the way round once and comes out where it started.
+    this.roll = 0;
+    this.rollVel = 0;
+    this.rollTarget = 0;
+    this.prevAngle = 0;
+  }
+
+  // One tick of the roll. Called once per elapsed SIMULATION tick — never once
+  // per rendered frame and never against a clock — so the attitude at sim tick
+  // N is the same attitude however many frames the browser managed to draw.
+  stepRoll(p) {
+    const a = p.angle;
+    // On the deck the aeroplane is upright, facing right, by definition. This
+    // is also what puts a respawn back the right way up without a special case.
+    if (p.mode === MODE.DECK || p.mode === MODE.ROLL) {
+      this.roll = 0;
+      this.rollVel = 0;
+      this.rollTarget = 0;
+      this.prevAngle = a;
+      return;
+    }
+    const d = normalizeAngle(a - this.prevAngle);
+    if (Math.abs(d) > ROLL.TELEPORT) {
+      this.rollTarget = Math.cos(a) < 0 ? Math.PI : 0;
+      this.roll = this.rollTarget;
+      this.rollVel = 0;
+      this.prevAngle = a;
+      // The jump is not a pitch rate, so it must not lead the bank either.
+      return;
+    }
+    if ((Math.cos(this.prevAngle) >= 0) !== (Math.cos(a) >= 0)) {
+      this.rollTarget += d < 0 ? -Math.PI : Math.PI;
+    }
+    this.prevAngle = a;
+
+    const lead = clamp(ROLL.LEAD * d, -ROLL.LEAD_MAX, ROLL.LEAD_MAX);
+    this.rollVel += (this.rollTarget + lead - this.roll) * ROLL.STIFFNESS;
+    this.rollVel *= 1 - ROLL.DAMPING;
+    this.roll += this.rollVel;
   }
 
   // Turn sim events into visual effects. Called once per rendered frame; the
@@ -68,6 +147,11 @@ export class Scene {
         : { kind: 'fire', x, y, t: 0, life: 46 });
     }
     this.consumed = sim.events.length;
+    // Catch up the roll one simulation tick at a time. A dropped frame costs
+    // the intermediate headings, not the tick count, so a long stall settles to
+    // the same attitude instead of leaving the aeroplane banked.
+    const steps = Math.min(Math.max(sim.tick - this.tick, 0), ROLL.MAX_STEPS);
+    for (let i = 0; i < steps; i++) this.stepRoll(sim.plane);
     this.tick = sim.tick;
     for (const f of this.fx) f.t++;
     this.fx = this.fx.filter((f) => f.t < f.life);
@@ -140,6 +224,7 @@ export class Scene {
     if (p.mode === MODE.DOWN) return;
     drawPlane(ctx, p.x + PLANE_W / 2 - cam.x, p.y + PLANE_H / 2 - cam.y, p.angle, {
       tick: this.tick,
+      roll: this.roll,
       throttle: p.throttle,
       gear: p.gear,
       hook: p.gear,
