@@ -67,6 +67,28 @@ inert — every reader of `contents` (block bump, item spawn) requires the
 underlying tile to be non-air first, and damaged tiles stay air. Nothing
 needs to delete on load.
 
+**Bombs kill on contact (§3.1):** `blast()` now also calls a new private
+`_blastKill(cx, cy, radiusPx)`, which kills anything — enemy or Mario — whose
+hitbox overlaps the blast circle (closest-point-on-rect-to-circle test, not
+just a corner check). This is deliberately NOT in `destroyTiles()`: only a
+live detonation knows the blast's centre, and the coming networking plan
+replays a peer's destroyed tiles through `destroyTiles()` on every other
+client without re-killing entities locally, so the two had to stay separate.
+Enemies die through the engine's own `enemyDie()` helper (imported from
+`./entities/index.js`), the same one every fire/shell/star kill already uses,
+so they get the normal corpse animation, poof and sound; a bomb kill is
+scored like a fire kill but with `score: 0` — no enemy-specific point value
+is knowable from a blast radius alone, so none is awarded. The player goes
+through the existing `hurtPlayer()` → `hurt()` → `die()` chain used by every
+enemy touch, which is why star power and the post-hit invulnerability window
+both protect against a blast exactly as they do against a Goomba: that
+protection is a property of `canBeHurt()`/`starFrames`, not of the kill site,
+and duplicating it in `_blastKill` would just be a second copy to keep in
+sync. Only active (already-activated) entities are checked, since a dormant
+enemy the camera hasn't reached yet isn't really "there".
+- Added `import { enemyDie } from './entities/index.js';`
+- Added `_blastKill()` and the two lines in `blast()` that call it.
+
 **Known, deliberate gaps left for the networking plan:**
 - `applyDamage` silently drops a key whose tile falls outside `this.w`/`this.h`
   instead of recording it in `this.damage` — correct for the tile map, but it

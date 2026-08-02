@@ -18,6 +18,7 @@ import { SCREEN_W, SCREEN_H, TILE, LAYER } from '../core/constants.js';
 import { Camera } from './camera.js';
 import { BlockSystem, tileKey } from './blocks.js';
 import { blastTiles, parseTileKey } from '../wings/blast.js';
+import { enemyDie } from './entities/index.js';
 
 // ---------------------------------------------------------------------------
 // Cross-agent modules. Every one of these is authored in parallel, so each is
@@ -1527,7 +1528,41 @@ export class World {
   }
 
   blast(cx, cy, radiusTiles) {
-    return this.destroyTiles(blastTiles(cx, cy, radiusTiles));
+    const changed = this.destroyTiles(blastTiles(cx, cy, radiusTiles));
+    this._blastKill(cx, cy, radiusTiles * TILE);
+    return changed;
+  }
+
+  // Anything whose hitbox overlaps the blast circle dies — enemies and Mario
+  // alike (design spec §3.1, "crater terrain and kill on contact"). This is
+  // deliberately NOT part of destroyTiles(): a networked client replays a
+  // peer's destroyed-tile list through destroyTiles() and must not re-kill
+  // entities locally when it does, whereas only a live detonation, which
+  // knows the blast's centre and radius, gets to kill.
+  _blastKill(cx, cy, radiusPx) {
+    const r2 = radiusPx * radiusPx;
+    // Closest point on the hitbox to the blast centre — catches a large
+    // entity that overlaps the circle without its corner being inside it.
+    const inBlast = (e) => {
+      const nx = Math.max(e.x, Math.min(cx, e.x + e.w));
+      const ny = Math.max(e.y, Math.min(cy, e.y + e.h));
+      const dx = cx - nx;
+      const dy = cy - ny;
+      return dx * dx + dy * dy <= r2;
+    };
+    for (const e of this.entities) {
+      // Not yet activated entities aren't really "there" yet (SMB's forward
+      // enemy cursor hasn't reached them); a dead/removed one is already gone.
+      if (!e || e.dead || e.removed || !e.isEnemy || !e.active) continue;
+      if (!inBlast(e)) continue;
+      enemyDie(e, 'fireball', null, 0);
+    }
+    const roster = this.players && this.players.length ? this.players : [this.player];
+    for (const p of roster) {
+      if (!p || p.dead) continue;
+      if (!inBlast(p)) continue;
+      this.hurtPlayer(p);
+    }
   }
 
   // -------------------------------------------------------------------------

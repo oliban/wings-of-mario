@@ -202,25 +202,94 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
     assert.deepEqual(r.keys, ['3,13'], 'only the well-formed key should have been recorded');
   });
 
-  await t.test('Mario falls into a crater blown out beneath him', async () => {
+  await t.test('Mario falls into a crater blown out ahead of him', async () => {
     const r = await page.evaluate(async () => {
       await window.__GAME.loadLevel('1-1');
-      window.__GAME.teleport(20, 11);
+      // Five tiles back from the blast centre below — close enough that the
+      // hole reaches him once he walks into it, far enough that the
+      // detonation itself doesn't overlap his hitbox (that's covered by the
+      // blast-kill tests above; this one is purely about terrain collapse).
+      window.__GAME.teleport(15, 11);
       window.__GAME.tick(40); // let him fall the two tiles onto the ground and settle
       const p = window.__GAME.world.player;
       const groundedBefore = p.grounded;
       const yBefore = p.y;
-      // Clear a wide, deep hole directly under him. Rows 13-14 are the only
-      // ground in this stretch of 1-1, so this opens straight through to the pit.
+      // Clear a wide, deep hole. Rows 13-14 are the only ground in this
+      // stretch of 1-1, so this opens straight through to the pit.
       window.__GAME.blast(20 * 16 + 8, 13 * 16 + 8, 3);
-      window.__GAME.tick(30);
-      return { groundedBefore, yBefore, groundedAfter: p.grounded, y: p.y };
+      window.__GAME.hold({ right: true, run: true });
+      // Just enough ticks to walk into the crater and start falling — not so
+      // many that he reaches the pit-death hazard below, which is a separate,
+      // pre-existing mechanic this test has no business exercising.
+      window.__GAME.tick(35);
+      window.__GAME.release();
+      return { groundedBefore, yBefore, groundedAfter: p.grounded, y: p.y, dead: !!p.dead };
     });
     assert.ok(r.groundedBefore, 'Mario was not standing on anything to begin with');
+    assert.ok(!r.dead, 'Mario died walking towards the hole — the blast reached him, invalidating this test');
     assert.ok(
       !r.groundedAfter && r.y > r.yBefore,
       `Mario ignored the hole (grounded=${r.groundedAfter}, y=${r.yBefore} -> ${r.y})`
     );
+  });
+
+  await t.test('an enemy inside the blast dies', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      const w = window.__GAME.world;
+      // Open air well clear of any tile geometry — the goomba only needs to
+      // exist here for one tick, not stand on anything.
+      const e = w.spawn('goomba', 100, 100);
+      const before = { dead: !!e.dead, removed: !!e.removed };
+      window.__GAME.blast(e.x + e.w / 2, e.y + e.h / 2, 2);
+      return { before, after: { dead: !!e.dead, removed: !!e.removed } };
+    });
+    assert.ok(!r.before.dead && !r.before.removed, 'goomba was already dead before the blast');
+    assert.ok(r.after.dead || r.after.removed, 'goomba survived a blast centred on it');
+  });
+
+  await t.test('an enemy outside the blast survives', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      const w = window.__GAME.world;
+      const e = w.spawn('goomba', 100, 100);
+      // Far enough away, in both x and y, that a radius-1 blast can't reach it.
+      window.__GAME.blast(e.x + 400, e.y + 400, 1);
+      return { dead: !!e.dead, removed: !!e.removed };
+    });
+    assert.ok(!r.dead && !r.removed, 'a blast that never reached the goomba killed it anyway');
+  });
+
+  await t.test('Mario dies to a blast on him and loses a life', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      window.__GAME.teleport(20, 11);
+      window.__GAME.tick(10); // let him land and settle, well clear of star/invuln windows
+      const w = window.__GAME.world;
+      const p = w.player;
+      const livesBefore = w.lives;
+      const stateBefore = p.state;
+      window.__GAME.blast(p.x + p.w / 2, p.y + p.h / 2, 2);
+      const immediately = { dead: !!p.dead, state: p.state };
+      // Run the normal death sequence (rise, freeze, fall off the bottom of
+      // the screen) out to completion so onPlayerDeath actually fires.
+      window.__GAME.tick(300);
+      return { livesBefore, stateBefore, immediately, livesAfter: w.lives };
+    });
+    assert.equal(r.stateBefore, 'normal', 'Mario was not in his normal state before the blast');
+    assert.ok(r.immediately.dead && r.immediately.state === 'dying', 'blast did not run the normal death path');
+    assert.equal(r.livesAfter, r.livesBefore - 1, 'blast death did not cost a life');
+  });
+
+  await t.test('destroyTiles does not kill — only a live blast does', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      const w = window.__GAME.world;
+      const e = w.spawn('goomba', 160, 160); // tile 10,10
+      const changed = w.destroyTiles(['10,10', '10,11', '9,10', '11,10']);
+      return { changed, dead: !!e.dead, removed: !!e.removed };
+    });
+    assert.ok(!r.dead && !r.removed, 'destroyTiles killed an entity — that responsibility belongs to blast() alone');
   });
 
   await t.test('no uncaught page errors', () => {
