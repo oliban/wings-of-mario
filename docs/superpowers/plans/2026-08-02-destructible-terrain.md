@@ -632,17 +632,31 @@ export async function boot() {
     ['http-server', '-p', String(PORT), '-c-1', '--silent', '.'],
     { stdio: 'ignore' }
   );
-  const browser = await chromium.launch();
-  const page = await browser.newPage();
+  let browser;
+  try {
+    await waitForServer();
+    browser = await chromium.launch();
+    const page = await browser.newPage();
 
-  const errors = [];
-  page.on('pageerror', (e) => errors.push(e.message));
+    const errors = [];
+    page.on('pageerror', (e) => errors.push(e.message));
 
-  await waitForServer();
-  await page.goto(BASE + '/');
-  await page.evaluate(() => window.__GAME.ready);
+    await page.goto(BASE + '/');
+    // goto resolves before the ES module graph has run, so __GAME does not
+    // exist yet. Wait for it before touching it, or every test races the loader.
+    await page.waitForFunction(() => window.__GAME && window.__GAME.ready, null, {
+      timeout: 30000,
+    });
+    await page.evaluate(() => window.__GAME.ready);
 
-  return { server, browser, page, errors };
+    return { server, browser, page, errors };
+  } catch (err) {
+    // Without this, a failed boot leaks the server and the browser, and the
+    // test process never exits — it hangs instead of reporting the failure.
+    if (browser) await browser.close().catch(() => {});
+    server.kill();
+    throw err;
+  }
 }
 
 async function waitForServer() {
