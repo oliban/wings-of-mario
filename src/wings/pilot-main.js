@@ -32,7 +32,11 @@ function readKeys() {
   const dir = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
   throttle = rampThrottle(throttle, dir);
   return {
-    pitch: (keys.up ? 1 : 0) + (keys.down ? -1 : 0),
+    // Down is pull-back (climbs when upright, dives when inverted), Up is
+    // push-forward — see flight.js's stepAir. Which screen arrow that makes
+    // "the one that climbs" therefore depends on the aeroplane's own
+    // upright/inverted state, not fixed to either key.
+    pitch: (keys.down ? 1 : 0) + (keys.up ? -1 : 0),
     throttle,
     gear,
   };

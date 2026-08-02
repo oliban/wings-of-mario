@@ -186,61 +186,92 @@ test('a sustained pitch reverses heading from due east to due west, at more than
   }
 });
 
-// Angle is the plane's ONLY heading state (this is a vertical-plane sim, no
-// yaw): reversing direction means passing through vertical, and arrival
-// heading west looks identical whether you got there over the top of a loop
-// or under the bottom of one. There is no separate "inverted" flag to consult.
-// So "pulling back climbs" cannot mean "pitch:+1 always climbs" — held through
-// a full loop that would have to reverse the turn rate exactly at vertical,
-// which is the discontinuity the user actually feels. It means: whichever
-// arrow is, at the plane's CURRENT attitude, the one that raises the nose
-// toward the top of the loop it is presently flying. Flying east that is Up
-// (pitch:+1); flying west — arrived at via looping — that is Down (pitch:-1).
-function vyFor(angle, pitch) {
-  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle, gear: false });
+// Angle alone is not enough to say which key climbs: a plane facing west can
+// be upright (it turned around and its roll has landed) or still mid-loop
+// (it has crossed vertical but not yet rolled — still completing a loop, not
+// reversing it). `upright` is the extra state that tells those apart, and
+// pull-back (pitch:+1) is defined relative to it, not to the heading:
+// `upright: true` is the ORIGINAL, never-reversed convention (matches plain
+// angle:0 on the deck) and flips exactly once per landed reversal.
+function vyFor(angle, pitch, upright = true) {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle, upright, gear: false });
   stepPlane(p, { throttle: 1, pitch });
   return p.vy;
 }
 
-test('pulling back climbs when heading east', () => {
-  // +Y is down, so climbing means vy < 0.
-  assert.ok(vyFor(0, 1) < 0, 'pitch:+1 (Up) should climb when facing east');
+test('pulling back climbs in level flight, both eastbound and westbound', () => {
+  // +Y is down, so climbing means vy < 0. Eastbound with the original
+  // convention (never reversed) is the ordinary case.
+  assert.ok(vyFor(0, 1, true) < 0, 'pull-back should climb heading east, upright true (never reversed)');
+  // Westbound only reads as a completed, settled reversal — not still mid-loop
+  // — once `upright` has flipped to false, which is exactly what a landed
+  // roll means here.
+  assert.ok(vyFor(Math.PI, 1, false) < 0, 'pull-back should climb heading west once the reversal has landed (upright: false)');
+  // The contrast that proves `upright` is doing the work, not the heading: the
+  // same pull-back, same heading, dives instead while still mid-loop (the
+  // roll has not landed yet, so the original convention is still in force).
+  assert.ok(vyFor(Math.PI, 1, true) > 0, 'pull-back should dive heading west mid-loop (upright: true, unreversed) — it is completing the loop, not reversing it');
 });
 
-test('pulling back climbs when heading west', () => {
-  // Reached by looping (the only way to reverse in a vertical-plane sim), so
-  // this is genuinely the "back stick" input at that attitude, not Up.
-  assert.ok(vyFor(Math.PI, -1) < 0, 'pitch:-1 (Down) should climb when facing west');
-  assert.ok(vyFor(Math.PI, 1) > 0, 'pitch:+1 (Up) dives when facing west — completing the loop, not reversing it');
+test('a real reversal lands, and a fresh pull-back afterward climbs', () => {
+  // The end-to-end version of the test above: drive an actual half-loop with
+  // stepPlane (not a hand-set `upright`), let the background roll settle, and
+  // confirm a FRESH pull-back press then climbs facing west — exactly the
+  // manoeuvre the user described ("turn around, down still lifts").
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle: 0, gear: false });
+  let ticks = 0;
+  while (Math.cos(p.angle) > -0.99 && ticks < 200) {
+    stepPlane(p, { throttle: 1, pitch: 1 }); // one continuous pull-back through the reversal
+    ticks++;
+  }
+  assert.ok(ticks < 200, 'never turned to face west');
+  for (let i = 0; i < 10; i++) stepPlane(p, { throttle: 1, pitch: 0 }); // let go of the stick, let the roll settle
+  // One landed reversal flips the convention away from the original — see the
+  // test above: `upright: false` is what makes pull-back climb facing west.
+  assert.equal(p.upright, false, 'a single completed reversal should flip the upright flag exactly once');
+
+  const before = p.y;
+  stepPlane(p, { throttle: 1, pitch: 1 }); // a FRESH pull-back press
+  assert.ok(p.y < before, 'a fresh pull-back should climb facing west after turning around');
 });
 
-test('the pitch response does not discontinuously flip sign through vertical', () => {
-  // A naive `if (facing west) invert pitch` flips which arrow climbs at a hard
-  // cos(angle)==0 cutoff. That does not just move the crossing point around —
-  // it makes vertical an unstable equilibrium: a plane exactly at the boundary
-  // gets rotated back toward the boundary every tick from either side, so
-  // holding a key never carries it through vertical at all. Prove that a
-  // single held pitch instead sweeps the angle straight through, tick over
-  // tick, in one rotational direction the whole way.
-  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle: -Math.PI / 2 + 0.3, gear: false });
+test('a held pull-back still completes a full loop and comes back upright', () => {
+  // Requirement 1: reversing direction is a single sustained input. If
+  // `upright` flipping in the background fought a continuous hold, this would
+  // stall or reverse direction mid-loop instead of completing it.
+  const p = createPlane({ mode: MODE.AIR, x: 1000, y: 200, speed: 2.7, gear: false });
+  let turned = 0;
   let prev = p.angle;
-  let crossedVertical = false;
-  for (let i = 0; i < 20; i++) {
+  let ticks = 0;
+  let sawReversal = false;
+  while (Math.abs(turned) < Math.PI * 2 && ticks < 300) {
     stepPlane(p, { throttle: 1, pitch: 1 });
     const step = normalizeAngle(p.angle - prev);
-    assert.ok(step < -1e-6, `angle stalled or reversed at tick ${i} (angle ${p.angle.toFixed(4)}, prev ${prev.toFixed(4)}) — got stuck at the vertical boundary`);
-    if (Math.sign(Math.cos(prev)) !== Math.sign(Math.cos(p.angle))) crossedVertical = true;
+    // The rotation must never reverse sign mid-hold, loop-wide, background
+    // upright flips or not — that reversal is exactly the stall-at-vertical
+    // bug a naive per-tick heading check would reproduce.
+    assert.ok(step <= 1e-9, `rotation reversed direction at tick ${ticks} — the hold was fought mid-loop`);
+    if (!p.upright) sawReversal = true;
+    turned += step;
     prev = p.angle;
+    ticks++;
   }
-  assert.ok(crossedVertical, 'test premise: the plane should have swept through vertical (cos(angle) sign change) in this window');
+  assert.ok(Math.abs(turned) >= Math.PI * 2, 'never completed a loop');
+  assert.ok(ticks > 40 && ticks < 300, `a loop taking ${ticks} ticks is not Wings of Fury`);
+  assert.ok(sawReversal, 'test premise: the plane should have read as inverted partway through its own loop');
+  assert.equal(p.upright, true, 'a completed full loop should come back upright');
+});
 
-  // Also check the instantaneous response is proportional to how far off
-  // vertical the plane is — near zero right at vertical, not near its peak —
-  // which is the other signature of a smooth crossing rather than a snap.
-  const response = (angle) => vyFor(angle, 1) - vyFor(angle, -1);
-  const atVertical = Math.abs(response(-Math.PI / 2));
-  const peak = Math.abs(response(0));
-  assert.ok(atVertical < peak * 0.05, `response at vertical (${atVertical.toFixed(4)}) should be near zero, not near the peak (${peak.toFixed(4)})`);
+test('upright flips exactly once per reversal, not once per tick near vertical', () => {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle: 0, gear: false });
+  let flips = 0;
+  let prevUpright = p.upright;
+  for (let i = 0; i < 60; i++) {
+    stepPlane(p, { throttle: 1, pitch: 1 });
+    if (p.upright !== prevUpright) flips++;
+    prevUpright = p.upright;
+  }
+  assert.equal(flips, 1, `expected exactly one upright flip crossing into a half-loop, saw ${flips}`);
 });
 
 test('the model is deterministic', () => {

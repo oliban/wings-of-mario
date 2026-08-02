@@ -35,16 +35,18 @@ test('the pilot page', async (t) => {
 
   await t.test('the arrow keys fly the plane off the deck', async () => {
     const before = await page.evaluate(() => window.__WINGS.state());
-    // The lever starts at idle, so Right has to open the throttle before Up
-    // does anything; Up is what rotates once there is flying speed.
+    // The lever starts at idle, so Right has to open the throttle before Down
+    // does anything; Down is pull-back, and pull-back is what rotates once
+    // there is flying speed (rotating off the ground is a climb input on a
+    // real elevator too — Down is not special-cased here, it is just pitch>0).
     await page.keyboard.down('ArrowRight');
-    await page.keyboard.down('ArrowUp');
+    await page.keyboard.down('ArrowDown');
     await page.evaluate(() => window.__WINGS.tick(220));
-    await page.keyboard.up('ArrowUp');
+    await page.keyboard.up('ArrowDown');
     await page.keyboard.up('ArrowRight');
     const after = await page.evaluate(() => window.__WINGS.state());
 
-    assert.equal(after.mode, 'air', 'holding Up never got the plane airborne');
+    assert.equal(after.mode, 'air', 'holding Down never got the plane airborne');
     assert.equal(after.gear, false, 'the hook should retract on rotation');
     assert.ok(after.x - before.x > 80, 'used almost no deck');
     assert.ok(after.y < before.y, 'the plane never climbed');
@@ -85,7 +87,9 @@ test('the pilot page', async (t) => {
   // Looping straight off the deck brings the plane back down onto the ship with
   // the hook up, which is a crash — correctly. So climb out and level off
   // first, exactly as a pilot would before turning back for the islands.
-  await t.test('holding Up turns the plane by looping it round', async () => {
+  // Uses W.hold({pitch}) directly (a held pull-back, pitch:1), not a real key
+  // — the real-key version of "which arrow completes the loop" lives below.
+  await t.test('holding pull-back turns the plane by looping it round', async () => {
     await page.evaluate(() => window.__WINGS.reset());
     const r = await page.evaluate(() => {
       const W = window.__WINGS;
@@ -143,19 +147,20 @@ test('the pilot page', async (t) => {
   });
 
   // Real keydown/keyup, not W.hold() — this is the one test that proves the
-  // physical arrow the player presses, not just the pitch value, is the one
-  // that lifts the nose. Angle is the plane's only heading state (no separate
-  // "inverted" flag), so heading west only ever happens after looping, and
-  // that is genuinely the situation the user described: turn around, and Down
-  // — not Up — is now the one that climbs.
-  await t.test('the arrow that lifts the plane reverses with heading', async () => {
+  // physical Down arrow, not just a pitch value, is the one that lifts the
+  // nose — in level flight, facing either way, across repeated reversals.
+  // Down is pull-back; Up is push-forward. Which one used to climb depended
+  // on heading (see flight.js's stepAir upright/controlSign machinery); now
+  // it must not, once each reversal's roll has landed.
+  await t.test('the real Down arrow always lifts the plane in level flight, across repeated reversals', async () => {
     await page.evaluate(() => window.__WINGS.reset());
 
-    // Take off and climb to a safe altitude, level and facing east, entirely
-    // under autopilot — mirrors "holding Up turns the plane by looping it
-    // round" above, which established this same climb-out. ArrowRight stays
-    // physically held throughout so the throttle lever is already open once
-    // control is handed to the real keyboard below.
+    // Take off (Down rotates it off, per the new keymap) and climb to a safe
+    // altitude, level and facing east, entirely under autopilot — mirrors
+    // "holding pull-back turns the plane by looping it round" above, which
+    // established this same climb-out. ArrowRight stays physically held
+    // throughout so the throttle lever is already open once control is
+    // handed to the real keyboard below.
     await page.keyboard.down('ArrowRight');
     await page.evaluate(() => {
       const W = window.__WINGS;
@@ -178,38 +183,36 @@ test('the pilot page', async (t) => {
       W.release();
     });
 
-    // Facing east: the real Up arrow should climb.
-    await page.keyboard.down('ArrowUp');
-    let before = await page.evaluate(() => window.__WINGS.state());
-    await page.evaluate(() => window.__WINGS.tick(15));
-    let after = await page.evaluate(() => window.__WINGS.state());
-    assert.ok(Math.cos(before.angle) > 0.9, 'test premise: should be level and facing east');
-    assert.ok(after.y < before.y, 'the real Up arrow did not climb while facing east');
-    await page.keyboard.up('ArrowUp');
-
-    // Loop round to face west, the only way this sim can reverse heading.
-    await page.evaluate(() => {
+    // One held pull-back through a half-loop, then coast level long enough
+    // for the roll to land (mirrors flight.js's ROLL_SETTLE_TICKS), then hand
+    // back to the real keyboard.
+    const reverse = () => page.evaluate(() => {
       const W = window.__WINGS;
       W.hold({ pitch: 1, throttle: 1, gear: false });
       let ticks = 0;
-      while (Math.cos(W.state().angle) > -0.99 && ticks < 200) {
+      const startCos = Math.sign(Math.cos(W.state().angle)) || 1;
+      // Keep pulling until level and facing the OPPOSITE way (not just past
+      // the sign flip — that is still mid-loop, nowhere near level).
+      while ((Math.sign(Math.cos(W.state().angle)) === startCos || Math.abs(Math.cos(W.state().angle)) < 0.99) && ticks < 200) {
         W.tick(1);
         ticks++;
       }
       W.hold({ pitch: 0, throttle: 1, gear: false });
-      for (let i = 0; i < 20; i++) W.tick(1);
+      for (let i = 0; i < 30; i++) W.tick(1);
       W.release();
     });
 
-    // Facing west: the real Down arrow — not Up — should now be the one that
-    // climbs.
-    await page.keyboard.down('ArrowDown');
-    before = await page.evaluate(() => window.__WINGS.state());
-    await page.evaluate(() => window.__WINGS.tick(15));
-    after = await page.evaluate(() => window.__WINGS.state());
-    assert.ok(Math.cos(before.angle) < -0.9, 'test premise: should be facing west');
-    assert.ok(after.y < before.y, 'the real Down arrow did not climb while facing west, after turning around');
-    await page.keyboard.up('ArrowDown');
+    // Two reversals: east -> west -> east again. Down must lift every time.
+    for (let i = 0; i < 2; i++) {
+      await reverse();
+      await page.keyboard.down('ArrowDown');
+      const before = await page.evaluate(() => window.__WINGS.state());
+      await page.evaluate(() => window.__WINGS.tick(15));
+      const after = await page.evaluate(() => window.__WINGS.state());
+      assert.ok(Math.abs(Math.cos(before.angle)) > 0.9, `reversal ${i}: test premise, should be level`);
+      assert.ok(after.y < before.y, `reversal ${i}: the real Down arrow did not climb (heading cos=${Math.cos(before.angle).toFixed(2)})`);
+      await page.keyboard.up('ArrowDown');
+    }
     await page.keyboard.up('ArrowRight');
   });
 

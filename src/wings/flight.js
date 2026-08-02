@@ -29,6 +29,23 @@ export const FLIGHT = {
   // LANDING, 0.6-1.8) well inside the length of the deck, slow enough that
   // there is no on/off snap — the pilot has to commit to a setting.
   THROTTLE_RAMP: 1 / 90,
+  // How long after the nose sweeps through vertical the aeroplane reads as
+  // rolled upright/inverted for CONTROL purposes — see the "upright" block
+  // below stepAir. Chosen to land at or after the half-roll scene.js animates
+  // for the same crossing: a damped spring, and driving it with the same
+  // reversal a player flies (a brief pull past the crossing, then level)
+  // measured its bank settling within 0.05 rad of its target about 17 ticks
+  // after the crossing. This is deliberately a plain sim-owned number rather
+  // than a re-derivation of scene.js's spring constants — the sim must not
+  // depend on the renderer — so if that spring is retuned, this should be
+  // retuned with it.
+  ROLL_SETTLE_TICKS: 20,
+  // A same-tick angle jump bigger than any one tick of TURN_RATE can produce
+  // is a snap (the ceiling levelling the nose, a respawn), not a swept
+  // crossing — mirrors scene.js's own ROLL.TELEPORT cutoff for the identical
+  // reason: a snap has no meaningful "direction the nose is sweeping" to
+  // roll through, so upright snaps to match instead of queueing a roll.
+  ROLL_TELEPORT: 0.5,
 };
 
 export const MODE = { DECK: 'deck', ROLL: 'roll', AIR: 'air', DOWN: 'down' };
@@ -77,10 +94,26 @@ export function createPlane(opts = {}) {
     gear: opts.gear != null ? !!opts.gear : true,
     fuel: opts.fuel != null ? opts.fuel : FLIGHT.FUEL_MAX,
     ticks: 0,
+    // Upright/inverted, for CONTROL purposes: which way "pull back" needs to
+    // rotate the nose to read as a climb to the pilot. Flips once per crossing
+    // of the vertical, delayed to land with the visual roll — see stepAir.
+    upright: opts.upright != null ? !!opts.upright : true,
+    // Queued upright flips: sim ticks (p.ticks) at which a crossing that
+    // already happened takes effect. A queue, not a single slot, because nothing
+    // stops two crossings (a tight double reversal) from being in flight together.
+    rollFlipQueue: [],
+    // The sign actually applied to the current pull-back/push-forward hold,
+    // latched the instant the stick leaves centre and held fixed until it
+    // returns to centre. This is what lets a single held key ride out a
+    // background upright flip without the loop it is mid-way through reversing
+    // underneath it.
+    controlSign: 1,
+    pulling: false,
   };
 }
 
-// input: { pitch: -1..1 (+1 pulls the nose UP), throttle: 0..1, gear: bool }
+// input: { pitch: -1..1 (+1 is pull-back — climbs when upright, dives when
+// inverted; -1 is push-forward, the opposite), throttle: 0..1, gear: bool }
 export function stepPlane(p, input = {}) {
   if (p.mode === MODE.DOWN) return p;
 
@@ -102,6 +135,14 @@ export function stepPlane(p, input = {}) {
 // rolling friction, and only rotates once there is air over the wings.
 function stepRoll(p, pitch, throttle) {
   p.angle = 0;
+  // On the deck the aeroplane is upright, facing right, by definition — the
+  // same rule scene.js uses for its own roll spring — which is also what
+  // puts a respawn or a fresh landing back the right way up with no special
+  // case beyond just being here every tick while grounded.
+  p.upright = true;
+  p.rollFlipQueue.length = 0;
+  p.controlSign = 1;
+  p.pulling = false;
   p.y = DECK_Y - PLANE_H;
   p.speed += FLIGHT.ROLL_THRUST * throttle - FLIGHT.ROLL_DRAG * p.speed;
   if (p.speed < 0) p.speed = 0;
@@ -125,7 +166,29 @@ function stepRoll(p, pitch, throttle) {
 
 function stepAir(p, pitch, throttle) {
   const authority = Math.min(1, p.speed / FLIGHT.TURN_SPEED_REF);
-  p.angle = normalizeAngle(p.angle - pitch * FLIGHT.TURN_RATE * authority);
+  const prevAngle = p.angle;
+
+  // Pull-back is pilot-relative, not screen-relative. `p.upright` already IS
+  // the correctly-signed answer to "which raw rotation direction is pull-back
+  // right now" — it starts at the old convention (+1, matching plain angle:0
+  // takeoff) and flips once per crossing of vertical, lagged so it only takes
+  // effect once the visual roll (scene.js) has had time to complete it. So the
+  // mapping is just that flag, read once: latched the instant the stick
+  // leaves centre and held for the whole time it stays away from centre —
+  // never re-read while pitch stays nonzero — so a single continuous hold
+  // rides out any upright flip that happens in the background mid-manoeuvre
+  // instead of having its own rotation reverse direction under it (which is
+  // exactly how the pre-existing full-loop behaviour keeps working: one hold,
+  // one constant sign, start to finish). Letting the stick return to centre
+  // and pulling again is what picks up a roll that has since completed.
+  if (pitch !== 0) {
+    if (!p.pulling) p.controlSign = p.upright ? 1 : -1;
+    p.pulling = true;
+  } else {
+    p.pulling = false;
+  }
+  const rawPitch = pitch * p.controlSign;
+  p.angle = normalizeAngle(p.angle - rawPitch * FLIGHT.TURN_RATE * authority);
 
   // Below flying speed the nose falls toward straight down whatever the stick
   // is doing. This is what makes a botched climb cost altitude.
@@ -152,6 +215,33 @@ function stepAir(p, pitch, throttle) {
       p.vy = 0;
       p.vx = Math.cos(p.angle) * p.speed;
     }
+  }
+
+  // The upright/inverted flip itself: queued the instant the nose sweeps
+  // through vertical, same trigger as scene.js's rollTarget, but not READ
+  // into the pull-back mapping above until FLIGHT.ROLL_SETTLE_TICKS later —
+  // the time the visual half-roll takes to read as complete. A crossing that
+  // lands mid-loop (still held through the reversal) sits in the queue and
+  // does nothing until it is due; nothing here depends on whether pitch is
+  // held. Compared against the FINAL angle for the tick (after the ceiling
+  // above), so a ceiling level-off is judged as one whole move, not two.
+  const swept = normalizeAngle(p.angle - prevAngle);
+  const crossedVertical = (Math.cos(prevAngle) >= 0) !== (Math.cos(p.angle) >= 0);
+  if (crossedVertical) {
+    if (Math.abs(swept) > FLIGHT.ROLL_TELEPORT) {
+      // A jump this big (the ceiling levelling the nose, a snap-back) is not a
+      // manoeuvre with a direction to roll through — mirrors scene.js's own
+      // TELEPORT handling: snap upright to match the landed heading instead of
+      // queuing a roll that was never really flown.
+      p.rollFlipQueue.length = 0;
+      p.upright = Math.cos(p.angle) >= 0;
+    } else {
+      p.rollFlipQueue.push(p.ticks + FLIGHT.ROLL_SETTLE_TICKS);
+    }
+  }
+  while (p.rollFlipQueue.length && p.rollFlipQueue[0] <= p.ticks) {
+    p.rollFlipQueue.shift();
+    p.upright = !p.upright;
   }
 }
 
