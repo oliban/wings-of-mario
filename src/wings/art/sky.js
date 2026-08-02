@@ -82,13 +82,13 @@ const DECKS = [
   { x: 240, y: 96, m: 0.16, w: 170, h: 15 },
   { x: 760, y: 260, m: 0.34, w: 124, h: 11 },
   { x: 1180, y: 150, m: 0.22, w: 196, h: 17 },
-  { x: 1620, y: 372, m: 0.5, w: 146, h: 12 },
+  { x: 1620, y: 262, m: 0.5, w: 146, h: 12 },
   { x: 2080, y: 62, m: 0.13, w: 158, h: 14 },
   { x: 2520, y: 300, m: 0.42, w: 178, h: 15 },
   { x: 2980, y: 190, m: 0.26, w: 136, h: 11 },
-  { x: 3440, y: 410, m: 0.55, w: 200, h: 17 },
+  { x: 3440, y: 322, m: 0.55, w: 200, h: 17 },
   { x: 3900, y: 120, m: 0.18, w: 150, h: 12 },
-  { x: 4380, y: 330, m: 0.46, w: 170, h: 15 },
+  { x: 4380, y: 286, m: 0.46, w: 170, h: 15 },
   { x: 4860, y: 220, m: 0.3, w: 132, h: 11 },
   { x: 5340, y: 80, m: 0.15, w: 188, h: 16 },
 ];
@@ -115,7 +115,7 @@ function bankPath(ctx, x, y, w, h) {
   }
   // The flat base, inset so it never sticks out past the lobes and reads as a
   // ruled bar.
-  ctx.rect(x - w * 0.4, y - h * 0.5, w * 0.8, h * 0.5);
+  ctx.rect(x - w * 0.38, y - h * 0.42, w * 0.76, h * 0.42);
 }
 
 function drawBank(ctx, x, y, w, h) {
@@ -124,8 +124,8 @@ function drawBank(ctx, x, y, w, h) {
   const g = ctx.createLinearGradient(0, y - h * 1.9, 0, y + 1);
   g.addColorStop(0, CLOUD.crown);
   g.addColorStop(0.3, CLOUD.lit);
-  g.addColorStop(0.66, CLOUD.core);
-  g.addColorStop(0.9, CLOUD.base);
+  g.addColorStop(0.6, CLOUD.core);
+  g.addColorStop(0.76, CLOUD.base);
   g.addColorStop(1, 'rgba(11,18,41,0)');
   ctx.globalAlpha = 0.8;
   ctx.fillStyle = g;

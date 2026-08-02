@@ -20,6 +20,30 @@ import { drawPanel, HUD_H } from './art/hud.js';
 // bright band of sea between the horizon and the panel comes out at roughly a
 // tenth of the play area — the proportion the original uses — without touching
 // the simulation's camera or its world bounds.
+// How much of a world pixel a screen pixel is worth. Below 1 the pilot sees
+// MORE of the world at once, and everything in it — aircraft, ship, ordnance —
+// gets smaller together, so every proportion fought for so far survives intact.
+//
+// The user's own reference draws the whole world small and fine: a wide field of
+// open sky with modest ground features in it, the aeroplane about 14% of the
+// frame. Ours was drawn at 1:1 with the simulation and came out zoomed in — the
+// aeroplane at 16% and a carrier filling two thirds of the width. This is the
+// one knob that fixes both, and it is a pure render transform: the simulation
+// still works in world pixels at TILE 16, and nothing downstream of `submit`
+// knows the difference.
+//
+// There is a gameplay reason too. Plan 3 has the pilot hunting Mario across an
+// archipelago, and seeing a third more world at a glance is worth having.
+export const WORLD_SCALE = 0.76;
+
+// The play area is what the world is framed in; the panel sits below it.
+export const PLAY_H = VIEW_H - HUD_H;
+
+// The widest band of sea allowed on screen. Zooming out reveals more below the
+// horizon, and the original keeps the water to a thin strip, so the vertical
+// framing is clamped here rather than by widening the simulation's world box.
+const SEA_BAND = 32;
+
 export const ISLAND_X = DECK_X1 - 150;
 const PARK_X = DECK_X1 - 74;
 const CREW_X = DECK_X0 + 132;
@@ -50,28 +74,53 @@ export class Scene {
     return this;
   }
 
+  // The world viewport, in world pixels, once WORLD_SCALE has been applied. The
+  // drawing functions take these instead of VIEW_W/VIEW_H and are otherwise
+  // unaware that any zoom happened.
+  frame(sim) {
+    const vw = VIEW_W / WORLD_SCALE;
+    const vh = VIEW_H / WORLD_SCALE;
+    // Re-centre: the simulation frames the aeroplane in the middle of a 512x240
+    // window, but the bottom of that window is under the panel, so the world is
+    // centred on the middle of the PLAY area instead.
+    const x = sim.cam.x + VIEW_W / 2 - vw / 2;
+    let y = sim.cam.y + VIEW_H / 2 - PLAY_H / 2 / WORLD_SCALE;
+    // Keep the sea a thin strip at the bottom however low the aeroplane goes.
+    y = Math.min(y, SEA_Y - (PLAY_H - SEA_BAND) / WORLD_SCALE);
+    return { vw, vh, cam: { x, y } };
+  }
+
   submit(r, sim) {
-    const cam = sim.cam;
-    r.draw(LAYER.SKY, (ctx) => {
-      drawSky(ctx, VIEW_W, VIEW_H, cam.y, CEILING_Y, SEA_Y);
-      drawStars(ctx, VIEW_W, VIEW_H, cam, this.tick);
-    });
-    r.draw(LAYER.PARALLAX_FAR, (ctx) => drawClouds(ctx, VIEW_W, VIEW_H, cam, this.tick));
-    r.draw(LAYER.BG_TILES, (ctx) => this.drawShip(ctx, cam));
-    r.draw(LAYER.PLAYER, (ctx) => this.drawAircraft(ctx, sim, cam));
-    r.draw(LAYER.OVERLAY, (ctx) => {
-      drawSea(ctx, VIEW_W, VIEW_H, cam, SEA_Y, this.tick);
-      this.drawShipWater(ctx, cam);
+    const f = this.frame(sim);
+    const cam = f.cam;
+    // Every world layer draws through the same zoom; the panel does not.
+    const world = (fn) => (ctx) => {
+      ctx.save();
+      ctx.scale(WORLD_SCALE, WORLD_SCALE);
+      fn(ctx);
+      ctx.restore();
+    };
+
+    r.draw(LAYER.SKY, world((ctx) => {
+      drawSky(ctx, f.vw, f.vh, cam.y, CEILING_Y, SEA_Y);
+      drawStars(ctx, f.vw, f.vh, cam, this.tick);
+    }));
+    r.draw(LAYER.PARALLAX_FAR, world((ctx) => drawClouds(ctx, f.vw, f.vh, cam, this.tick)));
+    r.draw(LAYER.BG_TILES, world((ctx) => this.drawShip(ctx, cam, f)));
+    r.draw(LAYER.PLAYER, world((ctx) => this.drawAircraft(ctx, sim, cam)));
+    r.draw(LAYER.OVERLAY, world((ctx) => {
+      drawSea(ctx, f.vw, f.vh, cam, SEA_Y, this.tick);
+      this.drawShipWater(ctx, cam, f);
       this.drawFx(ctx, cam);
-    });
+    }));
     r.draw(LAYER.HUD, (ctx) => this.drawHud(ctx, sim));
     return this;
   }
 
   // -------------------------------------------------------------------------
 
-  drawShip(ctx, cam) {
-    if (DECK_X1 + 60 - cam.x < 0 || DECK_X0 - 60 - cam.x > VIEW_W) return;
+  drawShip(ctx, cam, f) {
+    if (DECK_X1 + 60 - cam.x < 0 || DECK_X0 - 60 - cam.x > f.vw) return;
     ctx.save();
     ctx.translate(-cam.x, -cam.y);
     drawHull(ctx, DECK_X0, DECK_X1, DECK_Y, SEA_Y);
@@ -83,8 +132,8 @@ export class Scene {
   }
 
   // The ship's own water, drawn over the sea so it is not washed out by it.
-  drawShipWater(ctx, cam) {
-    if (DECK_X1 + 80 - cam.x < 0 || DECK_X0 - 220 - cam.x > VIEW_W) return;
+  drawShipWater(ctx, cam, f) {
+    if (DECK_X1 + 80 - cam.x < 0 || DECK_X0 - 220 - cam.x > f.vw) return;
     drawWake(ctx, cam, DECK_X0 - 6, SEA_Y, this.tick);
     drawBowWave(ctx, cam, DECK_X1 + 8, SEA_Y, this.tick);
   }

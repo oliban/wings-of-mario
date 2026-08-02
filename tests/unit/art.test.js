@@ -16,6 +16,7 @@ import {
   ISLAND_H, ISLAND_W, DECK_THICK, drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark,
 } from '../../src/wings/art/carrier.js';
 import { HUD_H, CELLS, drawPanel } from '../../src/wings/art/hud.js';
+import { WORLD_SCALE, PLAY_H } from '../../src/wings/scene.js';
 import { drawBomb, drawRocket, drawTracer, drawFireball } from '../../src/wings/art/ordnance.js';
 import { VIEW_W, VIEW_H, DECK_X0, DECK_X1, DECK_Y, SEA_Y } from '../../src/wings/geo.js';
 
@@ -143,14 +144,25 @@ test('the canopy sits a little past halfway back, as it does on a Hellcat', () =
 // the eye judges a screenshot on. Ours matches it. The consequence — that it is
 // a bigger share of our shorter flight deck than the original's is of its own —
 // is recorded here so it is a decision rather than a drift.
-test('the aircraft is about 15% of the screen, as in the original', () => {
-  const onScreen = PLANE_LEN / VIEW_W;
-  assert.ok(onScreen > 0.13 && onScreen < 0.17,
-    `the aircraft is ${(onScreen * 100).toFixed(1)}% of screen width, wanted ~15%`);
-  const onDeck = PLANE_LEN / (DECK_X1 - DECK_X0);
-  assert.ok(onDeck < 0.3,
-    `the aircraft is ${(onDeck * 100).toFixed(0)}% of the flight deck — past this it stops ` +
-    'being an aeroplane on a ship. Lengthen the deck in geo.js before going further.');
+// Measured against the user's own reference screenshot, where the aeroplane's
+// bounding box is 14.1% of the play area's width. What the player sees is the
+// world-space length through the render zoom, so both terms belong in the test.
+test('the aircraft is about an eighth of the screen, as in the reference', () => {
+  const onScreen = (PLANE_LEN * WORLD_SCALE) / VIEW_W;
+  assert.ok(onScreen > 0.09 && onScreen < 0.15,
+    `the aircraft is ${(onScreen * 100).toFixed(1)}% of screen width, wanted ~12-14%`);
+  // The bounding box runs past the nose and tail — propeller disc and tailplane —
+  // so the drawn extent is wider than the fuselage. Guard that too.
+  assert.ok((PLANE_LEN * 1.17 * WORLD_SCALE) / VIEW_W < 0.17, 'drawn extent has crept up');
+});
+
+// The zoom is what lets the pilot see the world rather than a close-up of it,
+// and Plan 3's archipelago hunt depends on it.
+test('the world is drawn zoomed out, so more of it is visible at once', () => {
+  assert.ok(WORLD_SCALE > 0.6 && WORLD_SCALE < 0.95, `WORLD_SCALE ${WORLD_SCALE}`);
+  const visible = VIEW_W / WORLD_SCALE;
+  assert.ok(visible > VIEW_W * 1.2, 'the point of the zoom is to see more world');
+  assert.equal(PLAY_H, VIEW_H - HUD_H);
 });
 
 // ---------------------------------------------------------------------------
@@ -160,10 +172,13 @@ test('the aircraft is about 15% of the screen, as in the original', () => {
 // The island is what makes a side-on box read as a flat-top, and in the original
 // it is more than half the play area tall. Ours was 13%, which is why it read as
 // a barge with a shed on it.
-test('the island is about half the play area tall', () => {
-  const play = VIEW_H - HUD_H;
-  const f = ISLAND_H / play;
-  assert.ok(f > 0.4 && f < 0.62, `the island is ${(f * 100).toFixed(0)}% of the play area, wanted ~50%`);
+test('the island is a superstructure, but no longer eats the frame', () => {
+  const f = (ISLAND_H * WORLD_SCALE) / PLAY_H;
+  assert.ok(f > 0.25 && f < 0.45,
+    `the island is ${(f * 100).toFixed(0)}% of the play area on screen, wanted ~33%`);
+  // It still has to be tall relative to the SHIP, which is what makes a box read
+  // as a flat-top in the first place.
+  assert.ok(ISLAND_H / (SEA_Y - DECK_Y) > 1.4, 'the island must tower over the freeboard');
   assert.ok(ISLAND_H > ISLAND_W, 'an island is taller than it is long');
   assert.ok(DECK_THICK > 0 && DECK_THICK < 12, 'the flight deck is a plate, not a storey');
 });

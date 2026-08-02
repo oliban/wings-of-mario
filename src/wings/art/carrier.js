@@ -19,7 +19,7 @@ import { drawParkedPlane } from './plane.js';
 // number, a deck-crew figure, aircraft parked with their wings folded up into a
 // V — is dressing, but it is the dressing that makes the ship specific.
 
-export const ISLAND_H = 96;
+export const ISLAND_H = 86;
 export const ISLAND_W = 68;
 export const DECK_THICK = 7;
 
@@ -213,7 +213,7 @@ export function drawIsland(ctx, x, deckY, tick) {
 
   // Mast: a pale pole rising nearly as far again above the bridge, with two
   // yardarms. Half the island's height is mast, exactly as in the original.
-  const bridgeTop = baseY - 52;
+  const bridgeTop = baseY - 47;
   const mastX = x + 26;
   ctx.strokeStyle = SHIP.rule;
   ctx.lineWidth = 1.6;
@@ -248,18 +248,18 @@ export function drawIsland(ctx, x, deckY, tick) {
   drawEnsign(ctx, mastX + 1, baseY - ISLAND_H + 7, tick);
 
   // Lower block: the widest tier, carrying the hull number.
-  block(ctx, x, baseY - 22, ISLAND_W, 22, 4);
+  block(ctx, x, baseY - 20, ISLAND_W, 20, 3);
   // Middle block: bridge proper, four tiers of windows.
-  block(ctx, x + 6, baseY - 40, ISLAND_W - 14, 18, 4);
+  block(ctx, x + 6, baseY - 36, ISLAND_W - 14, 16, 4);
   // Upper block, stepped back — the short arm of the L.
-  block(ctx, x + 16, baseY - 52, ISLAND_W - 34, 12, 3);
+  block(ctx, x + 16, baseY - 47, ISLAND_W - 34, 11, 3);
 
   // Hull number, chunky and white, on the lower block.
   ctx.fillStyle = SHIP.rule;
   ctx.font = 'bold 13px ui-monospace, Menlo, monospace';
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
-  ctx.fillText('18', x + 42, baseY - 6);
+  ctx.fillText('18', x + 42, baseY - 5);
   ctx.restore();
 }
 
