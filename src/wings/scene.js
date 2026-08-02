@@ -100,6 +100,28 @@ export class Scene {
     this.prevAngle = 0;
   }
 
+  // THE TRIGGER, and the only part of the roll that knows WHY the aeroplane is
+  // changing ends. Everything below it cares about one scalar — `rollTarget`,
+  // the bank angle in radians the aeroplane is heading for — so replacing this
+  // method replaces the manoeuvre without touching the animation.
+  //
+  // Today it is inferred: the nose crossing the vertical is what reverses the
+  // heading, so each crossing adds a half turn, signed by the direction the
+  // nose is already sweeping. That makes a whole loop a whole barrel roll
+  // rather than a roll and an unroll.
+  //
+  // When the simulation owns the manoeuvre and publishes its progress, this
+  // whole body becomes the one line that reads it. For a progress in 0..1 that
+  // is `this.rollTarget = this.rollBase + Math.PI * progress * dir`, with
+  // `rollBase` latched to the settled bank when the manoeuvre begins; for a
+  // discrete began/ended pair it is the same `+= PI` this does now, just fired
+  // by the event instead of by the angle. Neither needs the spring changed.
+  reversalTarget(p, d) {
+    if ((Math.cos(this.prevAngle) >= 0) !== (Math.cos(p.angle) >= 0)) {
+      this.rollTarget += d < 0 ? -Math.PI : Math.PI;
+    }
+  }
+
   // One tick of the roll. Called once per elapsed SIMULATION tick — never once
   // per rendered frame and never against a clock — so the attitude at sim tick
   // N is the same attitude however many frames the browser managed to draw.
@@ -123,11 +145,12 @@ export class Scene {
       // The jump is not a pitch rate, so it must not lead the bank either.
       return;
     }
-    if ((Math.cos(this.prevAngle) >= 0) !== (Math.cos(a) >= 0)) {
-      this.rollTarget += d < 0 ? -Math.PI : Math.PI;
-    }
+    this.reversalTarget(p, d);
     this.prevAngle = a;
 
+    // Anticipation, and the only other thing the bank reads: the rate the nose
+    // is moving. It is manoeuvre-agnostic — a wingover swings the nose too — so
+    // it survives the trigger being replaced.
     const lead = clamp(ROLL.LEAD * d, -ROLL.LEAD_MAX, ROLL.LEAD_MAX);
     this.rollVel += (this.rollTarget + lead - this.roll) * ROLL.STIFFNESS;
     this.rollVel *= 1 - ROLL.DAMPING;
