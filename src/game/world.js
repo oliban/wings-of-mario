@@ -751,7 +751,7 @@ export class World {
     }
 
     this._buildTiles(lvl);
-    this.damage = new Set();
+    this.damage.clear();
     if (opts.damage && opts.damage.length) this.applyDamage(opts.damage);
     this._buildDecor();
     this._buildContents(lvl);
@@ -1466,8 +1466,9 @@ export class World {
   // already bombed, where a hundred simultaneous explosions would be absurd.
   applyDamage(keys) {
     for (const key of keys) {
-      const { tx, ty } = parseTileKey(key);
-      if (!Number.isInteger(tx) || !Number.isInteger(ty)) continue;
+      const parsed = parseTileKey(key);
+      if (!parsed) continue;
+      const { tx, ty } = parsed;
       if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
       this.damage.add(key);
       this.setTile(tx, ty, '.');
@@ -1480,16 +1481,19 @@ export class World {
   destroyTiles(keys) {
     const changed = [];
     for (const key of keys) {
-      const { tx, ty } = parseTileKey(key);
-      if (!Number.isInteger(tx) || !Number.isInteger(ty)) continue;
+      const parsed = parseTileKey(key);
+      if (!parsed) continue;
+      const { tx, ty } = parsed;
       if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
       if (this.damage.has(key)) continue;
       const rec = this.recAt(tx, ty);
       // Any non-air tile is destructible — coins, decor, lava, hidden blocks,
       // all of it. Checking `rec.name` rather than `rec.solid` is what makes
       // this correct: most of those tiles have `solid: false` but are still
-      // real tiles, not air.
-      const wasSomething = rec.name !== 'air';
+      // real tiles, not air. `rec.unknown` catches tile characters `_makeRec`
+      // didn't recognise — those are also tagged `name: 'air'`, so without
+      // this they would read as air and survive every blast.
+      const wasSomething = rec.name !== 'air' || rec.unknown;
       // Record ONLY what was actually removed. `applyDamage` clears its keys
       // unconditionally, so a key recorded here but skipped below would vanish
       // on the next load — lava pools and hidden blocks disappearing on reload
@@ -1504,6 +1508,20 @@ export class World {
     if (changed.length) {
       this.sfx('break');
       this.shake(3, 10);
+      // Decor and the flagpole/castle landmarks are both compiled once from
+      // the tile map at load time, not read from it live like everything
+      // else in this class. A blast clears the map but leaves those snapshots
+      // untouched, so a bombed cloud kept drawing and a bombed flagpole stayed
+      // at its original height forever — until the level reloaded and rebuilt
+      // them fresh. Rebuilding here keeps a live blast and a reload agreeing,
+      // the same property `destroyTiles`/`applyDamage` already guarantee for
+      // the tile map itself.
+      this._buildDecor();
+      // Skip while the flag is mid-slide: `_findLandmarks` unconditionally
+      // resets `flagY` to the pole's resting top, which would yank the
+      // animation back up. The level is already ending at that point, so the
+      // pole's tiles no longer need to track a live blast.
+      if (!this.flagFalling) this._findLandmarks(this.level, this.rootLevel);
     }
     return changed;
   }

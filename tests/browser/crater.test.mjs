@@ -76,6 +76,35 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
     assert.ok(!r.survivedLiveBlast, 'the decor cloud survived the blast');
   });
 
+  await t.test('a bombed decor tile actually stops being drawn, not just cleared from the tile map', async () => {
+    // `w.tileAt(20, 2).decor` (the subtest above) only proves the tile RECORD
+    // changed. `drawBackground` never reads the tile map — it renders straight
+    // from `w.decor`, a display list snapshotted once at load by `_buildDecor()`.
+    // A blast that clears the map but never rebuilds that list leaves the
+    // cloud's sprite (and any partial shape it leaves behind) exactly as it
+    // was, forever, until the next reload. So rather than guess which pixel
+    // coordinates the cloud's decor entry lands at, compare the whole `w.decor`
+    // display list — live, right after the blast — against what a fresh load
+    // of the same level with the same damage produces. If the live list was
+    // never rebuilt, it will still match the UNDAMAGED list, not the damaged
+    // one.
+    const r = await page.evaluate(async () => {
+      const snapshot = (w) => w.decor.map((d) => `${d.x},${d.y}`).sort();
+      await window.__GAME.loadLevel('1-1');
+      const w = window.__GAME.world;
+      const cleanDecor = snapshot(w);
+      // Tile 20,2 is a decor cloud ('c') well above 1-1's ground rows.
+      const changed = window.__GAME.blast(20 * 16 + 8, 2 * 16 + 8, 1);
+      const liveDecor = snapshot(w);
+      await window.__GAME.loadLevel('1-1', null, changed);
+      const reloadedDecor = snapshot(window.__GAME.world);
+      return { changed, cleanDecor, liveDecor, reloadedDecor };
+    });
+    assert.ok(r.changed.length > 0, 'expected the blast to destroy at least one tile');
+    assert.notDeepEqual(r.liveDecor, r.cleanDecor, 'the blast did not change w.decor at all');
+    assert.deepEqual(r.liveDecor, r.reloadedDecor, 'a live blast and a reload of the same damage disagree on w.decor');
+  });
+
   await t.test('a free-standing coin is destroyed by a blast', async () => {
     const r = await page.evaluate(async () => {
       // 1-1's bonus room (1-1b) has a row of free-standing coins at y=5,
@@ -121,6 +150,56 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
       r.liveTiles.map((t) => t.name),
       'reload produced a different map than the live blast'
     );
+  });
+
+  await t.test('destroying an already-damaged key returns nothing and does not re-fire feedback', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      const w = window.__GAME.world;
+      // Destroy 20,13 for real first, so the second call below is a genuine
+      // repeat hit rather than relying on damage left over from earlier tests.
+      w.destroyTiles(['20,13']);
+      let sfxCalls = 0;
+      let shakeCalls = 0;
+      const origSfx = w.sfx.bind(w);
+      const origShake = w.shake.bind(w);
+      w.sfx = (...a) => {
+        sfxCalls++;
+        return origSfx(...a);
+      };
+      w.shake = (...a) => {
+        shakeCalls++;
+        return origShake(...a);
+      };
+      const changed = w.destroyTiles(['20,13']);
+      w.sfx = origSfx;
+      w.shake = origShake;
+      return { changed, sfxCalls, shakeCalls };
+    });
+    assert.deepEqual(r.changed, [], 'destroying an already-damaged key should destroy nothing');
+    assert.equal(r.sfxCalls, 0, 'a no-op destroyTiles should not play the break sound again');
+    assert.equal(r.shakeCalls, 0, 'a no-op destroyTiles should not shake the screen again');
+  });
+
+  await t.test('malformed and non-string keys are ignored by applyDamage, not thrown or destructive', async () => {
+    const r = await page.evaluate(async () => {
+      // Tile 3,13 is solid ground on row 13 of 1-1, same row as the very
+      // first subtest's tile 20,13 — it is the one well-formed key here.
+      const bogus = ['', '0', ' 3,13', 1, null, [1, 2], '3,13'];
+      await window.__GAME.loadLevel('1-1', null, bogus);
+      const w = window.__GAME.world;
+      return {
+        originTileSolid: w.tileAt(0, 0).solid,
+        realKeyApplied: !w.tileAt(3, 13).solid,
+        keys: window.__GAME.damageKeys(),
+      };
+    });
+    // Tile (0,0) of 1-1 is sky — this only proves nothing NEW got destroyed
+    // there, since air was already air. The real guard is that loadLevel
+    // completed at all: a non-string element used to throw mid-load.
+    assert.ok(!r.originTileSolid, 'tile (0,0) unexpectedly reported solid');
+    assert.ok(r.realKeyApplied, 'the one well-formed key in the batch was not applied');
+    assert.deepEqual(r.keys, ['3,13'], 'only the well-formed key should have been recorded');
   });
 
   await t.test('Mario falls into a crater blown out beneath him', async () => {

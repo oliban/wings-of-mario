@@ -34,6 +34,25 @@ imported in `world.js`) rather than building a template-string key.
 two-line damage block anchored immediately after the tile map is rebuilt and
 before anything reads it.
 
+**Decor and landmarks are snapshots, and `destroyTiles` must rebuild them:**
+`this.decor` (built by `_buildDecor()`) and `this.flag`/`this.castleX` (built
+by `_findLandmarks()`) are both compiled once from the tile map at load time
+and read from that snapshot thereafter — never from the live map. Once the
+destroy predicate covers decor and flagpole tiles (see below), a live blast
+that clears one of those tiles left the snapshot untouched: a bombed cloud
+kept drawing, and a bombed flagpole stayed at its pre-blast height, until the
+next `loadLevel` rebuilt both from scratch. `destroyTiles()` now calls
+`_buildDecor()` and `_findLandmarks(this.level, this.rootLevel)` whenever it
+actually destroys something, so a live blast and a reload agree. The
+landmark rebuild is skipped while `this.flagFalling` is true, since
+`_findLandmarks` unconditionally resets `flagY` to the pole's resting
+position and would yank an in-progress flag-slide animation back up; the
+level is already ending at that point, so the pole no longer needs to track
+further blasts. `this.climbables` was checked too and needs no such fix — it
+holds vine *entities* that self-register via `registerClimbable()`, not a
+tile-map snapshot, and tile-based climb checks (the flagpole itself) already
+read the live map through `recAt`/`tileAtPixel`.
+
 **`destroyTiles` vs. `applyDamage`, and `contents`:** `destroyTiles` only
 records a key in `this.damage` for a tile it actually cleared — any tile
 whose record's `name` isn't `'air'`, per the design spec's "no material is
@@ -47,6 +66,20 @@ regardless of damage, so a restored `contents` entry over a cleared tile is
 inert — every reader of `contents` (block bump, item spawn) requires the
 underlying tile to be non-air first, and damaged tiles stay air. Nothing
 needs to delete on load.
+
+**Known, deliberate gaps left for the networking plan:**
+- `applyDamage` silently drops a key whose tile falls outside `this.w`/`this.h`
+  instead of recording it in `this.damage` — correct for the tile map, but it
+  means a key the server holds and this client's map can't accommodate never
+  joins the damage set, which a wire-format hash comparator would read as
+  permanent desync. Plan 3 owns the decision of whether out-of-bounds keys
+  should still be recorded (unapplied) so the hash matches the server.
+- `DamageMap` (`src/wings/damage.js`) is not wired to `world.damage` — nothing
+  in `src/` imports it, and `world.js` keeps its own plain `Set`. There are
+  therefore two independent dedup mechanisms today (`DamageMap.add()` returns
+  newly-*added* keys; `World.destroyTiles()` returns actually-*destroyed*
+  keys — not the same predicate). Plan 3 owns picking which is authoritative
+  and writing the adapter between them.
 
 ## `src/main.js` — scripted destruction
 

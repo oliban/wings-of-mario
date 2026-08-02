@@ -34,3 +34,32 @@ test('a zero radius clears nothing but the centre tile is not assumed', () => {
   // Detonating exactly on a tile corner with zero radius touches no tile centre.
   assert.deepEqual(blastTiles(0, 0, 0), []);
 });
+
+test('an unbounded radius is clamped rather than left to hang the loop', () => {
+  // 1e4 tiles would be a ~400M-iteration loop. Anything past a full screen's
+  // worth of tiles is clamped to the same result.
+  const huge = blastTiles(0, 0, 1e4);
+  const clamped = blastTiles(0, 0, 32);
+  assert.deepEqual(huge, clamped);
+});
+
+test('parseTileKey rejects anything that is not a plain "<int>,<int>"', () => {
+  assert.equal(parseTileKey(''), null);
+  assert.equal(parseTileKey('0'), null);
+  assert.equal(parseTileKey(' 3,11'), null);
+  assert.equal(parseTileKey('3,11 '), null);
+  assert.equal(parseTileKey('1e1,2'), null);
+  assert.equal(parseTileKey('0x3,2'), null);
+  assert.equal(parseTileKey('3,'), null);
+  assert.equal(parseTileKey(',3'), null);
+  assert.equal(parseTileKey(null), null);
+  assert.equal(parseTileKey(undefined), null);
+  assert.equal(parseTileKey(1), null);
+  assert.equal(parseTileKey(['3', '11']), null);
+});
+
+test('parseTileKey still accepts a leading-zero alias of the same integer', () => {
+  // A leading zero doesn't change what integer it is, so this is a deliberate
+  // alias, not a rejection — unlike the garbage forms above.
+  assert.deepEqual(parseTileKey('03,11'), { tx: 3, ty: 11 });
+});

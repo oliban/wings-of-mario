@@ -34,6 +34,9 @@ export class DamageMap {
   add(islandId, keys) {
     const s = this._set(islandId);
     const fresh = [];
+    // Rejects non-arrays outright, a string included — `for...of` over a
+    // string silently iterates its characters instead of its tile keys.
+    if (!Array.isArray(keys)) return fresh;
     for (const key of keys) {
       if (s.has(key)) continue;
       s.add(key);
@@ -57,7 +60,10 @@ export class DamageMap {
   }
 
   toJSON() {
-    const out = {};
+    // Object.create(null), not {} — an island id of '__proto__' would
+    // otherwise set the prototype instead of adding a key, and the entry
+    // would vanish from the output with no error.
+    const out = Object.create(null);
     for (const id of [...this.islands.keys()].sort()) out[id] = this.keys(id);
     return out;
   }

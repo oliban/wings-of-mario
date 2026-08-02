@@ -59,3 +59,36 @@ test('the separator disambiguates element boundaries', () => {
   assert.notEqual(hashKeys(['1,2', '3']), hashKeys(['1,23']));
   assert.notEqual(hashKeys(['1', '2,3']), hashKeys(['12,3']));
 });
+
+test('hashKeys matches a pinned digest for a known input', () => {
+  // Every other hash assertion in this file compares two locally-computed
+  // hashes, so all of them would still pass if the FNV constants or the
+  // 0x1f separator changed underneath us — a silent wire-format break for
+  // the networking plan, which needs two independently-run copies of this
+  // file to agree. This one is computed once against the implementation
+  // and hardcoded, so it actually pins the algorithm.
+  assert.equal(hashKeys(['5,10', '6,10', '7,10']), '20aaf8f9');
+  assert.equal(hashKeys([]), '811c9dc5');
+});
+
+test('toJSON does not lose an island named __proto__', () => {
+  const d = new DamageMap();
+  d.add('__proto__', ['5,10']);
+  const out = d.toJSON();
+  assert.deepEqual(out.__proto__, ['5,10']);
+  assert.deepEqual(Object.keys(out), ['__proto__']);
+});
+
+test('add rejects a string instead of iterating its characters', () => {
+  const d = new DamageMap();
+  assert.deepEqual(d.add('1-1', '56'), []);
+  assert.deepEqual(d.keys('1-1'), []);
+});
+
+test('add rejects other non-array input without throwing', () => {
+  const d = new DamageMap();
+  assert.deepEqual(d.add('1-1', null), []);
+  assert.deepEqual(d.add('1-1', undefined), []);
+  assert.deepEqual(d.add('1-1', 5), []);
+  assert.deepEqual(d.keys('1-1'), []);
+});
