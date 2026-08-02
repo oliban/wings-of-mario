@@ -353,6 +353,6 @@ export function drawCrew(ctx, x, deckY, tick) {
 // says "carrier" this quickly.
 export function drawDeckPark(ctx, x, deckY) {
   const y = deckY - DECK_THICK + 2;
-  drawParkedPlane(ctx, x, y, 1);
-  drawParkedPlane(ctx, x + 30, y, 1);
+  drawParkedPlane(ctx, x, y);
+  drawParkedPlane(ctx, x + 40, y);
 }

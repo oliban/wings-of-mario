@@ -21,7 +21,7 @@ import { drawPanel, HUD_H } from './art/hud.js';
 // tenth of the play area — the proportion the original uses — without touching
 // the simulation's camera or its world bounds.
 export const ISLAND_X = DECK_X1 - 150;
-const PARK_X = DECK_X1 - 62;
+const PARK_X = DECK_X1 - 74;
 const CREW_X = DECK_X0 + 132;
 
 export class Scene {

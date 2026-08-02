@@ -109,7 +109,8 @@ test('sky, sea, ship and aircraft each own a hue nobody else uses', () => {
 test('the aircraft is drawn to the original\'s proportions', () => {
   assert.ok(Math.abs(PLANE_ASPECT - 2.7) < 0.01, 'anything squarer than 2.7:1 reads as a bird');
   assert.ok(Math.abs(PLANE_HEIGHT - PLANE_LEN / PLANE_ASPECT) < 1e-6);
-  assert.equal(LANDMARKS.nose - LANDMARKS.tail, PLANE_LEN, 'length must be nose to tail');
+  assert.equal(LANDMARKS.nose - LANDMARKS.tail, LANDMARKS.localLen,
+    'the authored frame must run nose to tail');
 });
 
 // The one finding from the reference comparison that no amount of rendering
@@ -118,25 +119,28 @@ test('the vertical fin is the tallest point of the aircraft, and it is at the ta
   const { nose, finTopY, finTopX, canopyPeakY, spineY, bellyY, wingLowY } = LANDMARKS;
   assert.ok(finTopY < canopyPeakY, 'the fin must rise above the canopy');
   assert.ok(finTopY < spineY, 'the fin must rise above the spine');
-  const aft = (nose - finTopX) / PLANE_LEN;
+  const aft = (nose - finTopX) / LANDMARKS.localLen;
   assert.ok(aft > 0.9 && aft <= 1.02, `the fin top is ${(aft * 100).toFixed(0)}% aft, wanted ~95%`);
   assert.ok(bellyY > 0 && wingLowY > bellyY, 'the wing must hang below the belly to be its own mass');
 });
 
 test('the canopy sits a little past halfway back, as it does on a Hellcat', () => {
-  const aft = (LANDMARKS.nose - LANDMARKS.canopyPeakX) / PLANE_LEN;
+  const aft = (LANDMARKS.nose - LANDMARKS.canopyPeakX) / LANDMARKS.localLen;
   assert.ok(aft > 0.5 && aft < 0.66, `the canopy is ${(aft * 100).toFixed(0)}% aft, wanted ~56%`);
 });
 
-// The original's aircraft is 15% of its screen width, but its screen IS the
-// carrier. Ours is a 320px ship in a 512px window, so the honest comparison is
-// aircraft against ship — and that is the ratio this asserts.
-test('the aircraft is scaled against the ship, not against the window', () => {
-  const deck = DECK_X1 - DECK_X0;
-  const ratio = PLANE_LEN / deck;
-  assert.ok(ratio > 0.13 && ratio < 0.2,
-    `the aircraft is ${(ratio * 100).toFixed(1)}% of the flight deck, wanted ~15%`);
-  assert.ok(PLANE_LEN / VIEW_W > 0.09, 'it still has to own the frame, not be a speck');
+// The original's aircraft is 15% of its screen width, and that is the fraction
+// the eye judges a screenshot on. Ours matches it. The consequence — that it is
+// a bigger share of our shorter flight deck than the original's is of its own —
+// is recorded here so it is a decision rather than a drift.
+test('the aircraft is about 15% of the screen, as in the original', () => {
+  const onScreen = PLANE_LEN / VIEW_W;
+  assert.ok(onScreen > 0.13 && onScreen < 0.17,
+    `the aircraft is ${(onScreen * 100).toFixed(1)}% of screen width, wanted ~15%`);
+  const onDeck = PLANE_LEN / (DECK_X1 - DECK_X0);
+  assert.ok(onDeck < 0.3,
+    `the aircraft is ${(onDeck * 100).toFixed(0)}% of the flight deck — past this it stops ` +
+    'being an aeroplane on a ship. Lengthen the deck in geo.js before going further.');
 });
 
 // ---------------------------------------------------------------------------

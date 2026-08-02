@@ -23,24 +23,35 @@ import { PLANE } from './palette.js';
 //     edges. The old version was a dark shape on a light sky, which is backwards
 //     and is why it vanished into the water.
 
-// Length in world pixels. The original's aircraft is 15% of its screen width,
-// but its screen *is* the carrier — the ship spans the full frame. Ours is a
-// 320px ship in a 512px window, so matching the aircraft to the screen would
-// make it a quarter of the flight deck and physically absurd. Matched to the
-// ship instead: 52 / 320 = 16%, against the original's 43 / 280 = 15%. On screen
-// that is 10% of the width, and 2.2x the sprite it replaces.
-export const PLANE_LEN = 52;
+// Length in world pixels: 15% of the 512px viewport, matching the original's
+// 43px on a 280px screen. That is the fraction the eye actually judges, and at
+// this size the silhouette below has room to be a silhouette.
+//
+// It does mean the aeroplane is 24% of our 320px flight deck where the
+// original's is 15% of its own — because the original's screen IS its carrier
+// and ours is not. The clean resolution is to lengthen DECK_X0/DECK_X1 so the
+// ship fills more of the window; that is a simulation change and lives in
+// geo.js. Until then the screen fraction wins, because that is what a
+// screenshot is compared on.
+export const PLANE_LEN = 77;
+
+// The body is drawn in a local frame 52 units nose-to-tail; changing PLANE_LEN
+// scales the whole aeroplane, gear, hook, prop and all, from this one constant.
+export const PLANE_SCALE = PLANE_LEN / 52;
 export const PLANE_ASPECT = 2.7;
 export const PLANE_HEIGHT = PLANE_LEN / PLANE_ASPECT;
 
-// Local frame: origin at the centre of mass, +x toward the nose, +y down.
+// Local frame: origin at the centre of mass, +x toward the nose, +y down. The
+// body is authored in a 52-unit frame and PLANE_SCALE stretches it to PLANE_LEN,
+// so every landmark below stays a fixed fraction of the aeroplane.
+const LOCAL_LEN = 52;
 const NOSE = 29;
 const TAIL = -23;
 
 // Quoted as fractions aft of the spinner so the proportions survive a change of
 // scale. The tests measure these.
 export const LANDMARKS = {
-  len: PLANE_LEN,
+  localLen: LOCAL_LEN,
   nose: NOSE,
   tail: TAIL,
   finTopX: -18.4,
@@ -395,6 +406,7 @@ export function drawPlane(ctx, cx, cy, angle, opts = {}) {
   } else {
     ctx.rotate(angle);
   }
+  if (PLANE_SCALE !== 1) ctx.scale(PLANE_SCALE, PLANE_SCALE);
   drawPlaneBody(ctx, opts);
   ctx.restore();
 }
@@ -402,7 +414,7 @@ export function drawPlane(ctx, cx, cy, angle, opts = {}) {
 // A folded-wing aircraft parked on the deck, wings hinged straight up into a V.
 // It is the single most carrier-looking object there is, and the original parks
 // two of them at the bow.
-export function drawParkedPlane(ctx, x, y, scale = 1) {
+export function drawParkedPlane(ctx, x, y, scale = PLANE_SCALE) {
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(scale, scale);
