@@ -431,11 +431,15 @@ Insert immediately after the existing `breakBlock(tx, ty, by)` method, keeping t
       if (this.damage.has(key)) continue;
       const rec = this.recAt(tx, ty);
       const wasSomething = !!(rec.solid || rec.platform || rec.climb);
-      this.damage.add(key);
+      // Record ONLY what was actually removed. `applyDamage` clears its keys
+      // unconditionally, so a key recorded here but skipped below would vanish
+      // on the next load — lava pools and hidden blocks disappearing on reload
+      // when the live blast left them alone.
       if (!wasSomething) continue;
+      this.damage.add(key);
       this.setTile(tx, ty, '.');
       this.contents.delete(`${tx},${ty}`);
-      this.fx('brickShatter', tx * TILE + TILE / 2, ty * TILE + TILE / 2);
+      this.fx('brickShatter', tx * TILE + TILE / 2, ty * TILE + TILE / 2, this.theme);
       changed.push(key);
     }
     if (changed.length) {
@@ -533,8 +537,12 @@ In the `window.__GAME = {` block in `src/main.js`, replace the existing `loadLev
 
 ```js
   async loadLevel(id, areaId = null, damage = []) {
-    const ok = await game.loadLevel(id, areaId);
-    if (damage && damage.length) game.world.applyDamage(damage);
+    // Pass damage THROUGH the options bag, not after the fact: game.loadLevel
+    // forwards opts to world.loadLevel, which subtracts the damage right after
+    // the tile map is rebuilt and before decor, landmarks, the player and the
+    // entities read it. Applying it after the load returns would place all of
+    // them on ground that only vanishes afterwards.
+    const ok = await game.loadLevel(id, areaId, damage && damage.length ? { damage } : {});
     screens.hide();
     game.started = true;
     game.world.state = 'playing';

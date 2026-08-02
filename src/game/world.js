@@ -1467,6 +1467,7 @@ export class World {
   applyDamage(keys) {
     for (const key of keys) {
       const { tx, ty } = parseTileKey(key);
+      if (!Number.isInteger(tx) || !Number.isInteger(ty)) continue;
       if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
       this.damage.add(key);
       this.setTile(tx, ty, '.');
@@ -1480,15 +1481,20 @@ export class World {
     const changed = [];
     for (const key of keys) {
       const { tx, ty } = parseTileKey(key);
+      if (!Number.isInteger(tx) || !Number.isInteger(ty)) continue;
       if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
       if (this.damage.has(key)) continue;
       const rec = this.recAt(tx, ty);
       const wasSomething = !!(rec.solid || rec.platform || rec.climb);
-      this.damage.add(key);
+      // Record ONLY what was actually removed. `applyDamage` clears its keys
+      // unconditionally, so a key recorded here but skipped below would vanish
+      // on the next load — lava pools and hidden blocks disappearing on reload
+      // when the live blast left them alone.
       if (!wasSomething) continue;
+      this.damage.add(key);
       this.setTile(tx, ty, '.');
       this.contents.delete(tileKey(tx, ty));
-      this.fx('brickShatter', tx * TILE + TILE / 2, ty * TILE + TILE / 2);
+      this.fx('brickShatter', tx * TILE + TILE / 2, ty * TILE + TILE / 2, this.theme);
       changed.push(key);
     }
     if (changed.length) {

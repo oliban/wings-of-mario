@@ -47,6 +47,38 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
     assert.ok(solid, 'damage leaked into an undamaged load');
   });
 
+  await t.test('a splash into open air destroys nothing and records nothing', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      const before = window.__GAME.damageKeys();
+      // Rows 0-1 of 1-1 are pure sky; tile 5,1 and its neighbours are all air.
+      const changed = window.__GAME.blast(5 * 16 + 8, 1 * 16 + 8, 1);
+      return { changed, before, after: window.__GAME.damageKeys() };
+    });
+    assert.deepEqual(r.changed, [], 'a blast into open air should destroy nothing');
+    assert.deepEqual(r.after, r.before, 'a blast into open air should record nothing');
+  });
+
+  await t.test('a tile the live blast left alone does not vanish on reload', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      const w = window.__GAME.world;
+      // Tile 20,2 is a decor cloud ('c') — not solid, not platform, not climb —
+      // sitting well above 1-1's ground rows, so a small blast centred on it
+      // never touches solid tile.
+      const before = w.tileAt(20, 2).decor;
+      window.__GAME.blast(20 * 16 + 8, 2 * 16 + 8, 1);
+      const survivedLiveBlast = w.tileAt(20, 2).decor;
+      const damage = window.__GAME.damageKeys();
+      await window.__GAME.loadLevel('1-1', null, damage);
+      const survivedReload = window.__GAME.world.tileAt(20, 2).decor;
+      return { before, survivedLiveBlast, survivedReload };
+    });
+    assert.ok(r.before, 'expected decor cloud at tile 20,2 of 1-1');
+    assert.ok(r.survivedLiveBlast, 'the live blast destroyed a tile it should have left alone');
+    assert.ok(r.survivedReload, 'the tile vanished on reload though the live blast left it alone');
+  });
+
   await t.test('Mario falls into a crater blown out beneath him', async () => {
     const r = await page.evaluate(async () => {
       await window.__GAME.loadLevel('1-1');

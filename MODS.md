@@ -34,14 +34,33 @@ imported in `world.js`) rather than building a template-string key.
 two-line damage block anchored immediately after the tile map is rebuilt and
 before anything reads it.
 
+**`destroyTiles` vs. `applyDamage`, and `contents`:** `destroyTiles` only
+records a key in `this.damage` for a tile it actually cleared (solid,
+platform or climb); a splash into open air, a free coin, a lava pool or a
+hidden block it left alone is never recorded. `applyDamage` then clears every
+recorded key unconditionally on load — safe only because the two agree on
+what "recorded" means. `destroyTiles` also calls
+`this.contents.delete(tileKey(tx, ty))`, but `applyDamage` does not: this
+looks like the same asymmetry and is not. `_buildContents` runs later in
+`loadLevel` and repopulates `this.contents` from the level's own data
+regardless of damage, so a restored `contents` entry over a cleared tile is
+inert — every reader of `contents` (block bump, item spawn) requires the
+underlying tile to be non-air first, and damaged tiles stay air. Nothing
+needs to delete on load.
+
 ## `src/main.js` — scripted destruction
 
 **Why:** Browser tests and the network layer detonate from outside the engine.
 
 **Changed:**
-- `window.__GAME.loadLevel(id, areaId)` gained an optional third parameter,
-  `damage`, an array of tile keys applied right after the level loads. The first
-  two parameters are unchanged, so `tools/shot.mjs` is unaffected.
+- `window.__GAME.loadLevel(id, areaId, damage)` keeps its outer shape — an
+  optional third parameter, `damage`, an array of tile keys — but now forwards
+  it to `game.loadLevel` as `opts.damage` instead of applying it after the load
+  returns. `world.loadLevel` subtracts the damage immediately after the tile
+  map is rebuilt, before decor, contents, landmarks, the player or the level's
+  entities are read, so all of them see the cratered map rather than the
+  original one. `tools/shot.mjs` is unaffected: it never passes a third
+  argument.
 - Added `blast()`, `destroyTiles()` and `damageKeys()` members.
 
 **On conflict:** upstream owns this block per ARCHITECTURE.md section 10. Keep
