@@ -33,3 +33,16 @@ imported in `world.js`) rather than building a template-string key.
 **On conflict:** if upstream reworks `_buildTiles` or `loadLevel`, keep the
 two-line damage block anchored immediately after the tile map is rebuilt and
 before anything reads it.
+
+## `src/main.js` — scripted destruction
+
+**Why:** Browser tests and the network layer detonate from outside the engine.
+
+**Changed:**
+- `window.__GAME.loadLevel(id, areaId)` gained an optional third parameter,
+  `damage`, an array of tile keys applied right after the level loads. The first
+  two parameters are unchanged, so `tools/shot.mjs` is unaffected.
+- Added `blast()`, `destroyTiles()` and `damageKeys()` members.
+
+**On conflict:** upstream owns this block per ARCHITECTURE.md section 10. Keep
+their version of every pre-existing member and re-add ours.

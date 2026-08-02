@@ -555,8 +555,9 @@ window.__GAME = {
   options,
   rng,
 
-  async loadLevel(id, areaId = null) {
+  async loadLevel(id, areaId = null, damage = []) {
     const ok = await game.loadLevel(id, areaId);
+    if (damage && damage.length) game.world.applyDamage(damage);
     screens.hide();
     game.started = true;
     game.world.state = 'playing';
@@ -579,6 +580,21 @@ window.__GAME = {
     game.world.rcam.x = cam.x;
     game.world.rcam.y = cam.y;
     return true;
+  },
+
+  blast(cx, cy, radiusTiles) {
+    const w = game.world;
+    return w ? w.blast(cx, cy, radiusTiles) : [];
+  },
+
+  destroyTiles(keys) {
+    const w = game.world;
+    return w ? w.destroyTiles(keys) : [];
+  },
+
+  damageKeys() {
+    const w = game.world;
+    return w ? [...w.damage].sort() : [];
   },
 
   setPower(power) {
