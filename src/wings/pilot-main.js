@@ -1,6 +1,5 @@
 import { bakeAll } from '../core/gfx.js';
 import { GameLoop } from '../core/loop.js';
-import { rampThrottle } from './flight.js';
 import { PilotRenderer } from './pilot-renderer.js';
 import { Scene } from './scene.js';
 import { WingsSim } from './sim.js';
@@ -23,21 +22,18 @@ const KEYMAP = {
 const keys = Object.create(null);
 let scripted = null;
 let gear = true;
-// The throttle lever's own position — it persists across ticks with no key
-// held, exactly like a real lever, and only Right/Left advance or retard it.
-let throttle = 0;
 
 function readKeys() {
   if (scripted) return scripted;
-  const dir = (keys.right ? 1 : 0) + (keys.left ? -1 : 0);
-  throttle = rampThrottle(throttle, dir);
   return {
-    // Down is pull-back (climbs when upright, dives when inverted), Up is
-    // push-forward — see flight.js's stepAir. Which screen arrow that makes
-    // "the one that climbs" therefore depends on the aeroplane's own
-    // upright/inverted state, not fixed to either key.
-    pitch: (keys.down ? 1 : 0) + (keys.up ? -1 : 0),
-    throttle,
+    // Pitch is body-relative — Up always noses up, Down always noses down —
+    // and unaffected by which way the aeroplane is facing.
+    pitch: (keys.up ? 1 : 0) + (keys.down ? -1 : 0),
+    // Thrust is a WORLD-frame direction, not a lever position: Right always
+    // means "thrust East", Left "thrust West". See flight.js's stepAir for
+    // how that becomes acceleration, deceleration, or a stall turn depending
+    // on which way the aeroplane is actually travelling.
+    thrust: (keys.right ? 1 : 0) + (keys.left ? -1 : 0),
     gear,
   };
 }
@@ -72,7 +68,6 @@ class Pilot {
     this.sim = new WingsSim({ squadron: opts.squadron });
     this.scene = new Scene();
     gear = true;
-    throttle = 0;
     scripted = null;
     return this.sim;
   }
@@ -85,7 +80,6 @@ class Pilot {
       if (name === 'gear') gear = !gear;
       if (name === 'respawn' && this.sim.plane.mode === 'down') {
         this.sim.respawn();
-        throttle = 0;
       }
     }
     keys[name] = down;
@@ -149,11 +143,11 @@ window.__WINGS = {
   },
 
   // Persists across ticks until release(). Unspecified fields default off, so
-  // hold({pitch: 1}) also cuts the throttle — say what you mean.
+  // hold({pitch: 1}) also cuts thrust — say what you mean.
   hold(map = {}) {
     scripted = {
       pitch: map.pitch || 0,
-      throttle: map.throttle == null ? 0 : map.throttle,
+      thrust: map.thrust == null ? 0 : map.thrust,
       drop: !!map.drop,
       fire: !!map.fire,
       gear: map.gear == null ? pilot.sim.plane.gear : !!map.gear,
@@ -186,7 +180,6 @@ window.__WINGS = {
 
   respawn() {
     const ok = pilot.sim.respawn();
-    if (ok) throttle = 0;
     pilot.render();
     return ok;
   },

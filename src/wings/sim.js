@@ -111,6 +111,14 @@ export class WingsSim {
       squadron: this.squadron,
       status: this.status,
       cam: { ...this.cam },
+      // The stall turn, for the renderer to drive its roll from directly
+      // rather than inferring a manoeuvre from angle changes on its own.
+      // turning: is one in progress. turnProgress: 0..1 through it (0 outside
+      // one). turnDir: +1/-1, the sign of the angle sweep (matches turnDelta
+      // in flight.js) while turning, 0 otherwise.
+      turning: p.turnTicks != null,
+      turnProgress: p.turnTicks != null ? p.turnTicks / FLIGHT.STALL_TURN_TICKS : 0,
+      turnDir: p.turnTicks != null ? Math.sign(p.turnDelta) : 0,
     };
   }
 }
@@ -120,9 +128,14 @@ export class WingsSim {
 // ---------------------------------------------------------------------------
 
 // Steer toward a world point. Pitch is +1 for nose UP, and angle DECREASES as
-// the nose comes up, so the sign flips on the way in.
+// the nose comes up, so the sign flips on the way in. thrust defaults to
+// whichever world direction currently accelerates the aeroplane (agreeing
+// with its own facing) rather than a fixed value, since thrust is now a
+// world-frame direction (flight.js's stepAir) and not a lever — a bot that
+// always asked for "thrust: 1" would decelerate and stall-turn itself as soon
+// as it ever faced west.
 export function seek(p, tx, ty, opts = {}) {
-  const throttle = opts.throttle == null ? 1 : opts.throttle;
+  const thrust = opts.thrust == null ? (Math.cos(p.angle) >= 0 ? 1 : -1) : opts.thrust;
   let want = Math.atan2(ty - (p.y + PLANE_H / 2), tx - (p.x + PLANE_W / 2));
   // Never fly the autopilot into the sea while chasing a low target.
   const floor = opts.floor == null ? SEA_Y - 96 : opts.floor;
@@ -131,7 +144,7 @@ export function seek(p, tx, ty, opts = {}) {
   const dead = opts.dead == null ? 0.03 : opts.dead;
   return {
     pitch: d > dead ? -1 : d < -dead ? 1 : 0,
-    throttle,
+    thrust,
     gear: opts.gear == null ? false : opts.gear,
   };
 }

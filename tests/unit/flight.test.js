@@ -2,18 +2,43 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CEILING_Y, DECK_X0, DECK_X1, DECK_Y, PLANE_H } from '../../src/wings/geo.js';
 import {
-  FLIGHT, MODE, createPlane, stepPlane, normalizeAngle, turnToward, nosePoint, rampThrottle,
+  FLIGHT, MODE, createPlane, stepPlane, normalizeAngle, turnToward, nosePoint,
 } from '../../src/wings/flight.js';
 
-const FULL = { throttle: 1, pitch: 0 };
+const FULL = { thrust: 1, pitch: 0 };
 
-// Hold full throttle, and pull back the moment there is flying speed.
+// Hold full thrust East (the plane starts facing East, so this accelerates),
+// and pull back the moment there is flying speed.
 function rotateOff(p) {
   let t = 0;
   while (p.mode !== MODE.AIR && t < 600) {
-    stepPlane(p, { throttle: 1, pitch: p.speed >= FLIGHT.TAKEOFF_SPEED ? 1 : 0 });
+    stepPlane(p, { thrust: 1, pitch: p.speed >= FLIGHT.TAKEOFF_SPEED ? 1 : 0 });
     t++;
   }
+  return t;
+}
+
+// Thrust against the current heading, until the stall turn arms. Capped, not
+// an unbounded while loop, so a regression that stops it triggering at all is
+// a clear assertion failure instead of a hung test.
+function brakeToTurn(p, thrust, maxTicks = 300) {
+  let t = 0;
+  while (p.turnTicks == null && t < maxTicks) {
+    stepPlane(p, { thrust, pitch: 0 });
+    t++;
+  }
+  assert.ok(p.turnTicks != null, `never triggered a stall turn within ${maxTicks} ticks`);
+  return t;
+}
+
+// Ride an already-armed turn out to completion. Capped for the same reason.
+function rideTurnOut(p, thrust, maxTicks = 200) {
+  let t = 0;
+  while (p.turnTicks != null && t < maxTicks) {
+    stepPlane(p, { thrust, pitch: 0 });
+    t++;
+  }
+  assert.equal(p.turnTicks, null, `the turn never finished within ${maxTicks} ticks`);
   return t;
 }
 
@@ -38,6 +63,7 @@ test('a fresh plane is spotted on the deck with the hook down', () => {
   assert.equal(p.y, DECK_Y - PLANE_H);
   assert.ok(p.x >= DECK_X0 && p.x < DECK_X1);
   assert.equal(p.fuel, FLIGHT.FUEL_MAX);
+  assert.equal(p.turnTicks, null, 'a fresh plane should not be mid-turn');
 });
 
 // Verified: rotation at tick 133, having used 180px of the 320px deck.
@@ -55,20 +81,26 @@ test('the takeoff roll builds speed and uses real deck', () => {
 
 test('pulling back below flying speed does not leave the deck', () => {
   const p = createPlane();
-  for (let i = 0; i < 40; i++) stepPlane(p, { throttle: 1, pitch: 1 });
+  for (let i = 0; i < 40; i++) stepPlane(p, { thrust: 1, pitch: 1 });
   assert.ok(p.speed < FLIGHT.TAKEOFF_SPEED, 'test premise: still below rotation speed');
   assert.notEqual(p.mode, MODE.AIR);
   assert.equal(p.y, DECK_Y - PLANE_H, 'the plane left the deck early');
 });
 
-// Verified: 105 ticks, back to level, net drift 36px.
-test('turning is a loop: held pitch comes all the way back round', () => {
+// Verified: 106 ticks, back to level, net drift 38px. Pitch alone can still
+// complete a full loop — reversing direction no longer NEEDS one, but nothing
+// stops a player from still flying one, so this must keep working. Thrust
+// tracks whichever way the nose currently points, the way a player actually
+// flying the loop would hold it, rather than fighting itself on the far side.
+test('a loop is still a loop: held pitch comes all the way back round', () => {
   const p = createPlane({ mode: MODE.AIR, x: 1000, y: 200, speed: 2.7, gear: false });
   let turned = 0;
   let prev = p.angle;
   let ticks = 0;
   while (Math.abs(turned) < Math.PI * 2 && ticks < 500) {
-    stepPlane(p, { throttle: 1, pitch: 1 });
+    const thrust = Math.cos(p.angle) >= 0 ? 1 : -1;
+    stepPlane(p, { thrust, pitch: 1 });
+    assert.equal(p.turnTicks, null, 'a powered loop must not trip the stall turn');
     turned += normalizeAngle(p.angle - prev);
     prev = p.angle;
     ticks++;
@@ -83,41 +115,58 @@ test('turn authority falls off with speed — you cannot loop when slow', () => 
   const fast = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 3.0, gear: false });
   const slow = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 0.9, gear: false });
   for (let i = 0; i < 10; i++) {
-    stepPlane(fast, { throttle: 1, pitch: 1 });
-    stepPlane(slow, { throttle: 1, pitch: 1 });
+    stepPlane(fast, { thrust: 1, pitch: 1 });
+    stepPlane(slow, { thrust: 1, pitch: 1 });
   }
   assert.ok(Math.abs(fast.angle) > Math.abs(slow.angle), 'speed must buy turn rate');
 });
 
 test('climbing bleeds speed and diving builds it', () => {
+  // No thrust either way, so this isolates GRAVITY's effect on airspeed —
+  // and neither plane is travelling against its own facing, so neither trips
+  // the stall turn.
   const up = createPlane({ mode: MODE.AIR, x: 0, y: 400, speed: 2.7, angle: -Math.PI / 2, gear: false });
   const down = createPlane({ mode: MODE.AIR, x: 0, y: 100, speed: 2.7, angle: Math.PI / 2, gear: false });
   for (let i = 0; i < 60; i++) {
-    stepPlane(up, FULL);
-    stepPlane(down, FULL);
+    stepPlane(up, { thrust: 0, pitch: 0 });
+    stepPlane(down, { thrust: 0, pitch: 0 });
   }
   assert.ok(up.speed < 2.7, 'a vertical climb must cost speed');
-  assert.ok(down.speed > 3.5, 'a vertical dive must build speed');
+  assert.ok(down.speed > 3.0, 'a vertical dive must build speed');
   assert.ok(down.speed <= FLIGHT.MAX_SPEED, 'speed must be capped');
 });
 
 test('a stall drops the nose whatever the stick says', () => {
   const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 0.1, angle: -Math.PI / 2, gear: false });
-  for (let i = 0; i < 120; i++) stepPlane(p, { throttle: 0, pitch: 1 });
+  for (let i = 0; i < 120; i++) stepPlane(p, { thrust: 0, pitch: 1 });
   assert.ok(p.angle > 0, `a stalled nose should fall, angle is ${p.angle}`);
   assert.ok(p.y > 200, 'a stall must cost altitude');
 });
 
+test('a deliberate brake toward a stall turn does not also trigger the accidental-stall nose-drop', () => {
+  // The two low-speed mechanics must not fight: braking toward zero on
+  // purpose should hold the aeroplane level right up to the turn itself, not
+  // have the stall-recovery pull already dragging the nose down first.
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 300, speed: 2.69, angle: 0, gear: false });
+  let t = 0;
+  while (p.turnTicks == null && t < 300) {
+    stepPlane(p, { thrust: -1, pitch: 0 });
+    assert.equal(p.angle, 0, 'the nose should stay level while deliberately braking, not fall early');
+    t++;
+  }
+  assert.ok(p.turnTicks != null, 'never triggered a stall turn within 300 ticks');
+});
+
 test('the ceiling caps the climb and levels the nose', () => {
   const p = createPlane({ mode: MODE.AIR, x: 0, y: CEILING_Y + 4, speed: 2.7, angle: -0.5, gear: false });
-  for (let i = 0; i < 200; i++) stepPlane(p, { throttle: 1, pitch: 1 });
+  for (let i = 0; i < 200; i++) stepPlane(p, { thrust: 1, pitch: 1 });
   assert.ok(p.y >= CEILING_Y, 'the plane climbed through the ceiling');
   const a = Math.abs(normalizeAngle(p.angle));
   assert.ok(a < 0.2 || Math.abs(a - Math.PI) < 0.2, 'the nose should be level at the ceiling');
 });
 
 // Verified: 7143 ticks, about 119 seconds.
-test('fuel burns down monotonically and cuts the throttle when dry', () => {
+test('fuel burns down monotonically and cuts the engine when dry', () => {
   const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, gear: false });
   let prev = p.fuel;
   let ticks = 0;
@@ -130,7 +179,7 @@ test('fuel burns down monotonically and cuts the throttle when dry', () => {
   assert.equal(p.fuel, 0);
   assert.ok(ticks > 60 * 60, `a ${(ticks / 60.0988).toFixed(0)}s sortie is too short`);
   for (let i = 0; i < 30; i++) stepPlane(p, FULL);
-  assert.equal(p.throttle, 0, 'a dry tank must ignore the throttle');
+  assert.equal(p.throttle, 0, 'a dry tank must ignore thrust');
 });
 
 test('the nose leads the hitbox', () => {
@@ -140,143 +189,164 @@ test('the nose leads the hitbox', () => {
   assert.ok(nosePoint(p).x < p.x + 12, 'nose should be behind when flying left');
 });
 
-test('the throttle lever advances and retards continuously, not as a switch', () => {
-  let t = 0;
-  for (let i = 0; i < 10; i++) t = rampThrottle(t, 1);
-  assert.ok(t > 0 && t < 1, `10 ticks of Right should be a partial advance, got ${t}`);
-  assert.ok(Math.abs(t - 10 * FLIGHT.THROTTLE_RAMP) < 1e-9, 'advance should be linear in ticks held');
+// ---------------------------------------------------------------------------
+// Thrust is a world-frame direction, not a lever: holding the arrow that
+// agrees with the current heading accelerates, holding the one that disagrees
+// decelerates, and idle just coasts down under drag. These replace the old
+// rampThrottle lever tests — there is no lever position left to test, thrust
+// is applied directly every tick.
+// ---------------------------------------------------------------------------
+
+test('thrust that agrees with the heading accelerates toward level cruise', () => {
+  // Level cruise (THRUST balancing DRAG, ~2.69 px/f) is the equilibrium in
+  // level flight — MAX_SPEED is a hard clamp a dive can reach (see "climbing
+  // bleeds speed and diving builds it"), not what level thrust alone settles
+  // at, so that is what this checks approach to.
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 1, angle: 0, gear: false });
+  const before = p.speed;
+  for (let i = 0; i < 30; i++) stepPlane(p, { thrust: 1, pitch: 0 });
+  assert.ok(p.speed > before, 'facing East, thrusting East should build speed');
+  for (let i = 0; i < 3000; i++) stepPlane(p, { thrust: 1, pitch: 0 });
+  assert.ok(Math.abs(p.speed - 2.69) < 0.05, `should settle near level cruise, got ${p.speed}`);
+  assert.ok(p.speed <= FLIGHT.MAX_SPEED, 'must not exceed MAX_SPEED');
 });
 
-test('the throttle lever retards symmetrically', () => {
-  let t = 0.5;
-  const before = t;
-  t = rampThrottle(t, -1);
-  assert.ok(t < before, 'Left should reduce throttle');
-  assert.ok(Math.abs((before - t) - FLIGHT.THROTTLE_RAMP) < 1e-9, 'one tick of Left is one ramp step');
+test('thrust that disagrees with the heading decelerates faster than idling does', () => {
+  const braking = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.69, angle: 0, gear: false });
+  const idling = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.69, angle: 0, gear: false });
+  const before = braking.speed;
+  for (let i = 0; i < 10; i++) {
+    stepPlane(braking, { thrust: -1, pitch: 0 });
+    stepPlane(idling, { thrust: 0, pitch: 0 });
+  }
+  assert.ok(braking.speed < before, 'facing East, thrusting West should bleed speed, not build it');
+  assert.ok(braking.speed < idling.speed, 'thrusting against the heading is a brake, not the same as letting off');
 });
 
-test('the throttle lever holds position with no key held — it is a lever, not a spring', () => {
-  let t = 0.37;
-  for (let i = 0; i < 50; i++) t = rampThrottle(t, 0);
-  assert.equal(t, 0.37, 'throttle drifted with no input');
+test('idle thrust just coasts under drag — it is neither a lever holding position nor a brake', () => {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 1, angle: 0, gear: false });
+  for (let i = 0; i < 100; i++) stepPlane(p, { thrust: 0, pitch: 0 });
+  assert.ok(p.speed < 1, 'unlike the old lever, releasing both arrows should not hold speed steady');
+  assert.ok(p.speed > 0, 'and unlike braking, idling alone at low speed should not run it to zero');
 });
 
-test('the throttle lever clamps at both ends', () => {
-  let t = 0;
-  for (let i = 0; i < 500; i++) t = rampThrottle(t, -1);
-  assert.equal(t, 0, 'throttle went below idle');
-  for (let i = 0; i < 500; i++) t = rampThrottle(t, 1);
-  assert.equal(t, 1, 'throttle went past full');
+// ---------------------------------------------------------------------------
+// The stall turn: the actual mechanic the user asked for. Hold the arrow
+// against your direction of travel; when speed reaches zero still holding it,
+// the aeroplane wings over onto the new heading, loses a bit of altitude, and
+// is already flying — under the same held key — the new way.
+// ---------------------------------------------------------------------------
+
+test('braking against the heading to zero triggers a stall turn, not a dead stop', () => {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 300, speed: 2.69, angle: 0, gear: false });
+  brakeToTurn(p, -1);
+  assert.equal(p.turnTicks, 0, 'the turn should arm the tick it reaches zero');
+  assert.equal(p.speed, 0, 'test premise: speed should be exactly zero at the trigger');
 });
 
-test('a sustained pitch reverses heading from due east to due west, at more than one starting speed', () => {
-  // Cruise (2.7, the level-flight equilibrium) and a slow approach speed
-  // (1.2, inside the carrier's landing envelope) both must come around.
-  for (const speed of [2.7, 1.2]) {
-    const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed, angle: 0, gear: false });
-    let ticks = 0;
-    let facedWest = -1;
-    while (ticks < 300 && facedWest < 0) {
-      stepPlane(p, { throttle: 1, pitch: 1 });
-      ticks++;
-      if (Math.cos(p.angle) < -0.99) facedWest = ticks;
+test('a stall turn ends level, facing the other way, and already accelerating under the same held key', () => {
+  for (const [startAngle, thrust] of [[0, 1], [Math.PI, -1]]) {
+    const p = createPlane({ mode: MODE.AIR, x: 500, y: 300, speed: 2.69, angle: startAngle, gear: false });
+    brakeToTurn(p, -thrust);
+    rideTurnOut(p, -thrust);
+    assert.ok(Math.abs(normalizeAngle(p.angle - (startAngle + Math.PI))) < 0.05,
+      `start ${startAngle}: should end facing the reverse heading, angle is ${p.angle}`);
+    assert.ok(p.speed > 0, `start ${startAngle}: should exit the turn already moving, not dead in the air`);
+
+    // Keep holding the SAME key: it should now be the accelerator.
+    const before = p.speed;
+    for (let i = 0; i < 30; i++) stepPlane(p, { thrust: -thrust, pitch: 0 });
+    assert.ok(p.speed > before, `start ${startAngle}: the same held key should now accelerate the new way`);
+  }
+});
+
+test('a stall turn costs a bit of altitude, felt but not fatal', () => {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 300, speed: 2.69, angle: 0, gear: false });
+  const y0 = p.y;
+  brakeToTurn(p, -1);
+  rideTurnOut(p, -1);
+  const sink = p.y - y0;
+  assert.ok(sink > 2, `a stall turn that costs nothing (${sink.toFixed(1)}px) is not felt`);
+  assert.ok(sink < 60, `a stall turn that costs ${sink.toFixed(1)}px is punishing, not a manoeuvre`);
+});
+
+test('a stall turn drifts forward rather than pivoting on the spot', () => {
+  // A half-turn that dips symmetrically through world-straight-down nets to
+  // almost no HORIZONTAL displacement by the time it is done — that is just
+  // the geometry of a wingover, real ones do it too — so "drifts, does not
+  // pivot" has to be checked mid-manoeuvre, not by the finishing x position.
+  const p = createPlane({ mode: MODE.AIR, x: 500, y: 300, speed: 2.69, angle: 0, gear: false });
+  brakeToTurn(p, -1);
+  const x0 = p.x;
+  let maxExcursion = 0;
+  while (p.turnTicks != null) {
+    stepPlane(p, { thrust: -1, pitch: 0 });
+    maxExcursion = Math.max(maxExcursion, Math.abs(p.x - x0));
+  }
+  assert.ok(maxExcursion > 5, `the aeroplane should carry real drift mid-manoeuvre (saw ${maxExcursion.toFixed(1)}px), not pivot in place`);
+});
+
+test('a stall turn reads as a manoeuvre, not a snap or a cutscene', () => {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 300, speed: 2.69, angle: 0, gear: false });
+  brakeToTurn(p, -1);
+  const ticks = rideTurnOut(p, -1);
+  assert.ok(ticks > 10, `a ${ticks}-tick turn is a snap, not a manoeuvre`);
+  assert.ok(ticks < 90, `a ${ticks}-tick turn is a cutscene, not something you can do constantly`);
+});
+
+test('a stall turn always dips through world-straight-down at its midpoint, whichever way it started', () => {
+  // This is what makes every reversal cost altitude consistently, rather than
+  // alternately diving or climbing depending on which way the player happened
+  // to be facing when they triggered it.
+  for (const [startAngle, thrust] of [[0, 1], [Math.PI, -1]]) {
+    const p = createPlane({ mode: MODE.AIR, x: 0, y: 300, speed: 2.69, angle: startAngle, gear: false });
+    brakeToTurn(p, -thrust);
+    let sawDive = false;
+    while (p.turnTicks != null) {
+      stepPlane(p, { thrust: -thrust, pitch: 0 });
+      if (Math.abs(normalizeAngle(p.angle - Math.PI / 2)) < 0.1) sawDive = true;
     }
-    assert.ok(facedWest > 0, `speed ${speed}: never turned to face due west within 300 ticks`);
-    assert.ok(facedWest < 100, `speed ${speed}: reversal at tick ${facedWest} is not a brisk loop`);
+    assert.ok(sawDive, `start ${startAngle}: never passed through straight down`);
   }
 });
 
-// Angle alone is not enough to say which key climbs: a plane facing west can
-// be upright (it turned around and its roll has landed) or still mid-loop
-// (it has crossed vertical but not yet rolled — still completing a loop, not
-// reversing it). `upright` is the extra state that tells those apart, and
-// pull-back (pitch:+1) is defined relative to it, not to the heading:
-// `upright: true` is the ORIGINAL, never-reversed convention (matches plain
-// angle:0 on the deck) and flips exactly once per landed reversal.
-function vyFor(angle, pitch, upright = true) {
-  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle, upright, gear: false });
-  stepPlane(p, { throttle: 1, pitch });
-  return p.vy;
-}
-
-test('pulling back climbs in level flight, both eastbound and westbound', () => {
-  // +Y is down, so climbing means vy < 0. Eastbound with the original
-  // convention (never reversed) is the ordinary case.
-  assert.ok(vyFor(0, 1, true) < 0, 'pull-back should climb heading east, upright true (never reversed)');
-  // Westbound only reads as a completed, settled reversal — not still mid-loop
-  // — once `upright` has flipped to false, which is exactly what a landed
-  // roll means here.
-  assert.ok(vyFor(Math.PI, 1, false) < 0, 'pull-back should climb heading west once the reversal has landed (upright: false)');
-  // The contrast that proves `upright` is doing the work, not the heading: the
-  // same pull-back, same heading, dives instead while still mid-loop (the
-  // roll has not landed yet, so the original convention is still in force).
-  assert.ok(vyFor(Math.PI, 1, true) > 0, 'pull-back should dive heading west mid-loop (upright: true, unreversed) — it is completing the loop, not reversing it');
-});
-
-test('a real reversal lands, and a fresh pull-back afterward climbs', () => {
-  // The end-to-end version of the test above: drive an actual half-loop with
-  // stepPlane (not a hand-set `upright`), let the background roll settle, and
-  // confirm a FRESH pull-back press then climbs facing west — exactly the
-  // manoeuvre the user described ("turn around, down still lifts").
-  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle: 0, gear: false });
+test('the manoeuvre commits once triggered — releasing or fighting the stick mid-turn changes nothing', () => {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 300, speed: 2.69, angle: 0, gear: false });
+  brakeToTurn(p, -1);
   let ticks = 0;
-  while (Math.cos(p.angle) > -0.99 && ticks < 200) {
-    stepPlane(p, { throttle: 1, pitch: 1 }); // one continuous pull-back through the reversal
+  // Let go of thrust entirely and lean on pitch, as a player bailing out of
+  // the manoeuvre halfway through might.
+  while (p.turnTicks != null && ticks < 200) {
+    stepPlane(p, { thrust: 0, pitch: 1 });
     ticks++;
   }
-  assert.ok(ticks < 200, 'never turned to face west');
-  for (let i = 0; i < 10; i++) stepPlane(p, { throttle: 1, pitch: 0 }); // let go of the stick, let the roll settle
-  // One landed reversal flips the convention away from the original — see the
-  // test above: `upright: false` is what makes pull-back climb facing west.
-  assert.equal(p.upright, false, 'a single completed reversal should flip the upright flag exactly once');
-
-  const before = p.y;
-  stepPlane(p, { throttle: 1, pitch: 1 }); // a FRESH pull-back press
-  assert.ok(p.y < before, 'a fresh pull-back should climb facing west after turning around');
+  assert.ok(ticks < 200, 'the turn never completed despite the interference');
+  assert.ok(Math.abs(normalizeAngle(p.angle - Math.PI)) < 0.05, 'should still land exactly on the reverse heading');
 });
 
-test('a held pull-back still completes a full loop and comes back upright', () => {
-  // Requirement 1: reversing direction is a single sustained input. If
-  // `upright` flipping in the background fought a continuous hold, this would
-  // stall or reverse direction mid-loop instead of completing it.
-  const p = createPlane({ mode: MODE.AIR, x: 1000, y: 200, speed: 2.7, gear: false });
-  let turned = 0;
-  let prev = p.angle;
+test('a stall turn is exposed for the renderer to drive its roll from', () => {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 300, speed: 2.69, angle: 0, gear: false });
+  assert.equal(p.turnTicks, null, 'not turning yet');
+  brakeToTurn(p, -1);
+  assert.equal(p.turnTicks, 0, 'should be at the very start of the turn');
+  assert.equal(p.turnStartAngle, 0);
+  assert.ok(Math.abs(p.turnDelta) === Math.PI, 'the sweep is always a half turn');
+  let last = -1;
   let ticks = 0;
-  let sawReversal = false;
-  while (Math.abs(turned) < Math.PI * 2 && ticks < 300) {
-    stepPlane(p, { throttle: 1, pitch: 1 });
-    const step = normalizeAngle(p.angle - prev);
-    // The rotation must never reverse sign mid-hold, loop-wide, background
-    // upright flips or not — that reversal is exactly the stall-at-vertical
-    // bug a naive per-tick heading check would reproduce.
-    assert.ok(step <= 1e-9, `rotation reversed direction at tick ${ticks} — the hold was fought mid-loop`);
-    if (!p.upright) sawReversal = true;
-    turned += step;
-    prev = p.angle;
+  while (p.turnTicks != null && ticks < 200) {
+    stepPlane(p, { thrust: -1, pitch: 0 });
+    if (p.turnTicks != null) {
+      assert.ok(p.turnTicks > last, 'turnTicks should count up monotonically');
+      last = p.turnTicks;
+    }
     ticks++;
   }
-  assert.ok(Math.abs(turned) >= Math.PI * 2, 'never completed a loop');
-  assert.ok(ticks > 40 && ticks < 300, `a loop taking ${ticks} ticks is not Wings of Fury`);
-  assert.ok(sawReversal, 'test premise: the plane should have read as inverted partway through its own loop');
-  assert.equal(p.upright, true, 'a completed full loop should come back upright');
-});
-
-test('upright flips exactly once per reversal, not once per tick near vertical', () => {
-  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle: 0, gear: false });
-  let flips = 0;
-  let prevUpright = p.upright;
-  for (let i = 0; i < 60; i++) {
-    stepPlane(p, { throttle: 1, pitch: 1 });
-    if (p.upright !== prevUpright) flips++;
-    prevUpright = p.upright;
-  }
-  assert.equal(flips, 1, `expected exactly one upright flip crossing into a half-loop, saw ${flips}`);
+  assert.equal(p.turnTicks, null, 'should clear once the manoeuvre ends');
 });
 
 test('the model is deterministic', () => {
   const tape = [];
-  for (let i = 0; i < 400; i++) tape.push({ throttle: i % 7 ? 1 : 0, pitch: ((i >> 4) % 3) - 1 });
+  for (let i = 0; i < 400; i++) tape.push({ thrust: (i % 7 ? 1 : 0) * ((i >> 5) % 2 ? -1 : 1), pitch: ((i >> 4) % 3) - 1 });
   const run = () => {
     const p = createPlane();
     for (const step of tape) stepPlane(p, step);

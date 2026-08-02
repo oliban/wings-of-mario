@@ -12,6 +12,12 @@ import { CEILING_Y, DECK_X0, DECK_X1, DECK_Y, PLANE_W, PLANE_H, clamp } from './
 export const FLIGHT = {
   MAX_SPEED: 4.5,
   THRUST: 0.045,
+  // Deceleration from holding the arrow AGAINST the direction of travel —
+  // real thrust the other way, not a lever released. Matched to THRUST: the
+  // same engine, run backwards, decelerates a cruising aeroplane (2.69 px/f)
+  // to zero in about 60 ticks (~1s) — "for a while" to build speed up,
+  // roughly the same "for a while" to bring it back down.
+  BRAKE: 0.045,
   DRAG: 0.006,
   GRAVITY: 0.06,
   TURN_RATE: 0.06,
@@ -24,28 +30,21 @@ export const FLIGHT = {
   FUEL_MAX: 100,
   FUEL_IDLE: 0.004,
   FUEL_THROTTLE: 0.01,
-  // A full 0..1 sweep of the lever takes 90 ticks (~1.5s): fast enough that a
-  // cruise-to-idle deceleration reaches the landing envelope (carrier.js
-  // LANDING, 0.6-1.8) well inside the length of the deck, slow enough that
-  // there is no on/off snap — the pilot has to commit to a setting.
-  THROTTLE_RAMP: 1 / 90,
-  // How long after the nose sweeps through vertical the aeroplane reads as
-  // rolled upright/inverted for CONTROL purposes — see the "upright" block
-  // below stepAir. Chosen to land at or after the half-roll scene.js animates
-  // for the same crossing: a damped spring, and driving it with the same
-  // reversal a player flies (a brief pull past the crossing, then level)
-  // measured its bank settling within 0.05 rad of its target about 17 ticks
-  // after the crossing. This is deliberately a plain sim-owned number rather
-  // than a re-derivation of scene.js's spring constants — the sim must not
-  // depend on the renderer — so if that spring is retuned, this should be
-  // retuned with it.
-  ROLL_SETTLE_TICKS: 20,
-  // A same-tick angle jump bigger than any one tick of TURN_RATE can produce
-  // is a snap (the ceiling levelling the nose, a respawn), not a swept
-  // crossing — mirrors scene.js's own ROLL.TELEPORT cutoff for the identical
-  // reason: a snap has no meaningful "direction the nose is sweeping" to
-  // roll through, so upright snaps to match instead of queueing a roll.
-  ROLL_TELEPORT: 0.5,
+  // The stall turn: reaching zero airspeed with the stick still held against
+  // you wings the aeroplane over onto the new heading rather than leaving it
+  // dead in the air. 26 ticks (~0.43s) reads as a manoeuvre without feeling
+  // like a cutscene — this happens every time a player reverses, so it errs
+  // short. The sweep always passes through PI/2 (straight down in world
+  // terms) at its midpoint regardless of which way it started, which is what
+  // makes every reversal cost a bit of altitude rather than alternating
+  // between diving and climbing depending on which way the player happened
+  // to be facing.
+  STALL_TURN_TICKS: 26,
+  // A little airspeed is kept through the whole manoeuvre — a real wingover
+  // carries forward drift, it does not pivot on the spot — and this is also
+  // what the aeroplane exits the turn already flying at, so accelerating
+  // away afterward is a continuation, not a second standing start.
+  STALL_TURN_DRIFT: 0.9,
 };
 
 export const MODE = { DECK: 'deck', ROLL: 'roll', AIR: 'air', DOWN: 'down' };
@@ -66,21 +65,6 @@ export function turnToward(a, target, step) {
   return normalizeAngle(a + Math.sign(d) * step);
 }
 
-// The throttle lever. dir is +1 (advancing), -1 (retarding) or 0 (hand off
-// the lever — it stays wherever it was, this is not a spring). One tick's
-// worth of movement at a time, so the ramp is exact and frame-rate independent.
-export function rampThrottle(current, dir, rate = FLIGHT.THROTTLE_RAMP) {
-  if (!dir) return clamp(current, 0, 1);
-  const next = current + Math.sign(dir) * rate;
-  // Snap within an epsilon rather than clamp the float sum: 90 additions of
-  // 1/90 land a few ulps short of 1 (or 0), and a lever that can never quite
-  // reach full throttle — or never quite let go of it — is a bug the player
-  // would eventually feel even if no test ever printed the exact float.
-  if (next >= 1 - 1e-9) return 1;
-  if (next <= 1e-9) return 0;
-  return next;
-}
-
 export function createPlane(opts = {}) {
   return {
     mode: opts.mode || MODE.DECK,
@@ -94,39 +78,38 @@ export function createPlane(opts = {}) {
     gear: opts.gear != null ? !!opts.gear : true,
     fuel: opts.fuel != null ? opts.fuel : FLIGHT.FUEL_MAX,
     ticks: 0,
-    // Upright/inverted, for CONTROL purposes: which way "pull back" needs to
-    // rotate the nose to read as a climb to the pilot. Flips once per crossing
-    // of the vertical, delayed to land with the visual roll — see stepAir.
-    upright: opts.upright != null ? !!opts.upright : true,
-    // Queued upright flips: sim ticks (p.ticks) at which a crossing that
-    // already happened takes effect. A queue, not a single slot, because nothing
-    // stops two crossings (a tight double reversal) from being in flight together.
-    rollFlipQueue: [],
-    // The sign actually applied to the current pull-back/push-forward hold,
-    // latched the instant the stick leaves centre and held fixed until it
-    // returns to centre. This is what lets a single held key ride out a
-    // background upright flip without the loop it is mid-way through reversing
-    // underneath it.
-    controlSign: 1,
-    pulling: false,
+    // The stall turn in progress, or null. See stepTurn. turnTicks counts up
+    // from 0; turnStartAngle and turnDelta fix the arc for its whole
+    // duration, decided once at the moment the turn is triggered.
+    turnTicks: opts.turnTicks != null ? opts.turnTicks : null,
+    turnStartAngle: opts.turnStartAngle != null ? opts.turnStartAngle : null,
+    turnDelta: opts.turnDelta != null ? opts.turnDelta : null,
   };
 }
 
-// input: { pitch: -1..1 (+1 is pull-back — climbs when upright, dives when
-// inverted; -1 is push-forward, the opposite), throttle: 0..1, gear: bool }
+// input: { pitch: -1..1 (+1 pulls the nose UP, -1 noses it DOWN — always
+// body-relative, unaffected by which way the aeroplane is facing), thrust:
+// -1..1 (+1 is "thrust East", -1 is "thrust West" — a world-frame direction,
+// not a lever position: whether that accelerates or decelerates the
+// aeroplane depends on which way it is currently travelling, see stepAir),
+// gear: bool }
 export function stepPlane(p, input = {}) {
   if (p.mode === MODE.DOWN) return p;
 
   const pitch = clamp(input.pitch || 0, -1, 1);
-  let throttle = clamp(input.throttle == null ? 0 : input.throttle, 0, 1);
-  if (p.fuel <= 0) throttle = 0;
-  p.throttle = throttle;
+  const thrust = clamp(input.thrust || 0, -1, 1);
+  // Fuel burns whenever the engine is doing work, in either direction — a
+  // real prop makes just as much noise decelerating as accelerating.
+  let power = Math.abs(thrust);
+  if (p.fuel <= 0) power = 0;
+  p.throttle = power;
   if (input.gear != null) p.gear = !!input.gear;
 
-  if (p.mode === MODE.DECK || p.mode === MODE.ROLL) stepRoll(p, pitch, throttle);
-  else stepAir(p, pitch, throttle);
+  if (p.mode === MODE.DECK || p.mode === MODE.ROLL) stepRoll(p, pitch, power);
+  else if (p.turnTicks != null) stepTurn(p);
+  else stepAir(p, pitch, thrust);
 
-  p.fuel = Math.max(0, p.fuel - (FLIGHT.FUEL_IDLE + FLIGHT.FUEL_THROTTLE * throttle));
+  p.fuel = Math.max(0, p.fuel - (FLIGHT.FUEL_IDLE + FLIGHT.FUEL_THROTTLE * power));
   p.ticks++;
   return p;
 }
@@ -135,14 +118,11 @@ export function stepPlane(p, input = {}) {
 // rolling friction, and only rotates once there is air over the wings.
 function stepRoll(p, pitch, throttle) {
   p.angle = 0;
-  // On the deck the aeroplane is upright, facing right, by definition — the
-  // same rule scene.js uses for its own roll spring — which is also what
-  // puts a respawn or a fresh landing back the right way up with no special
-  // case beyond just being here every tick while grounded.
-  p.upright = true;
-  p.rollFlipQueue.length = 0;
-  p.controlSign = 1;
-  p.pulling = false;
+  // On the deck the aeroplane is upright, facing right, by definition — no
+  // stall turn survives a landing or a respawn either.
+  p.turnTicks = null;
+  p.turnStartAngle = null;
+  p.turnDelta = null;
   p.y = DECK_Y - PLANE_H;
   p.speed += FLIGHT.ROLL_THRUST * throttle - FLIGHT.ROLL_DRAG * p.speed;
   if (p.speed < 0) p.speed = 0;
@@ -164,50 +144,9 @@ function stepRoll(p, pitch, throttle) {
   }
 }
 
-function stepAir(p, pitch, throttle) {
-  const authority = Math.min(1, p.speed / FLIGHT.TURN_SPEED_REF);
-  const prevAngle = p.angle;
-
-  // Pull-back is pilot-relative, not screen-relative. `p.upright` already IS
-  // the correctly-signed answer to "which raw rotation direction is pull-back
-  // right now" — it starts at the old convention (+1, matching plain angle:0
-  // takeoff) and flips once per crossing of vertical, lagged so it only takes
-  // effect once the visual roll (scene.js) has had time to complete it. So the
-  // mapping is just that flag, read once: latched the instant the stick
-  // leaves centre and held for the whole time it stays away from centre —
-  // never re-read while pitch stays nonzero — so a single continuous hold
-  // rides out any upright flip that happens in the background mid-manoeuvre
-  // instead of having its own rotation reverse direction under it (which is
-  // exactly how the pre-existing full-loop behaviour keeps working: one hold,
-  // one constant sign, start to finish). Letting the stick return to centre
-  // and pulling again is what picks up a roll that has since completed.
-  if (pitch !== 0) {
-    if (!p.pulling) p.controlSign = p.upright ? 1 : -1;
-    p.pulling = true;
-  } else {
-    p.pulling = false;
-  }
-  const rawPitch = pitch * p.controlSign;
-  p.angle = normalizeAngle(p.angle - rawPitch * FLIGHT.TURN_RATE * authority);
-
-  // Below flying speed the nose falls toward straight down whatever the stick
-  // is doing. This is what makes a botched climb cost altitude.
-  if (p.speed < FLIGHT.STALL_SPEED) {
-    p.angle = turnToward(p.angle, Math.PI / 2, FLIGHT.STALL_PULL);
-  }
-
-  p.speed += FLIGHT.THRUST * throttle;
-  p.speed += FLIGHT.GRAVITY * Math.sin(p.angle);
-  p.speed -= FLIGHT.DRAG * p.speed * p.speed;
-  p.speed = clamp(p.speed, 0, FLIGHT.MAX_SPEED);
-
-  p.vx = Math.cos(p.angle) * p.speed;
-  p.vy = Math.sin(p.angle) * p.speed;
-  p.x += p.vx;
-  p.y += p.vy;
-
-  // The ceiling. Climbing into it levels the nose rather than stopping the
-  // plane dead, so it reads as a service ceiling and not as a wall.
+// The ceiling. Climbing into it levels the nose rather than stopping the
+// plane dead, so it reads as a service ceiling and not as a wall.
+function stepCeiling(p) {
   if (p.y < CEILING_Y) {
     p.y = CEILING_Y;
     if (p.vy < 0) {
@@ -216,32 +155,89 @@ function stepAir(p, pitch, throttle) {
       p.vx = Math.cos(p.angle) * p.speed;
     }
   }
+}
 
-  // The upright/inverted flip itself: queued the instant the nose sweeps
-  // through vertical, same trigger as scene.js's rollTarget, but not READ
-  // into the pull-back mapping above until FLIGHT.ROLL_SETTLE_TICKS later —
-  // the time the visual half-roll takes to read as complete. A crossing that
-  // lands mid-loop (still held through the reversal) sits in the queue and
-  // does nothing until it is due; nothing here depends on whether pitch is
-  // held. Compared against the FINAL angle for the tick (after the ceiling
-  // above), so a ceiling level-off is judged as one whole move, not two.
-  const swept = normalizeAngle(p.angle - prevAngle);
-  const crossedVertical = (Math.cos(prevAngle) >= 0) !== (Math.cos(p.angle) >= 0);
-  if (crossedVertical) {
-    if (Math.abs(swept) > FLIGHT.ROLL_TELEPORT) {
-      // A jump this big (the ceiling levelling the nose, a snap-back) is not a
-      // manoeuvre with a direction to roll through — mirrors scene.js's own
-      // TELEPORT handling: snap upright to match the landed heading instead of
-      // queuing a roll that was never really flown.
-      p.rollFlipQueue.length = 0;
-      p.upright = Math.cos(p.angle) >= 0;
-    } else {
-      p.rollFlipQueue.push(p.ticks + FLIGHT.ROLL_SETTLE_TICKS);
-    }
+// input: pitch is body-relative (+1 nose up, -1 nose down, unaffected by
+// which way the aeroplane is facing — a real elevator does not care). thrust
+// is a WORLD-frame direction: +1 always means "thrust East", -1 "thrust
+// West". Whether that is the accelerator or the brake depends on which way
+// the nose is currently pointing — `facing` below — which is the whole
+// mechanic: holding the arrow that agrees with your heading builds speed
+// toward MAX_SPEED, holding the one that disagrees bleeds it off, and running
+// it to zero while still disagreeing is what triggers stepTurn.
+function stepAir(p, pitch, thrust) {
+  const authority = Math.min(1, p.speed / FLIGHT.TURN_SPEED_REF);
+  p.angle = normalizeAngle(p.angle - pitch * FLIGHT.TURN_RATE * authority);
+
+  const facing = Math.cos(p.angle) >= 0 ? 1 : -1;
+  const braking = thrust === -facing;
+
+  // Below flying speed the nose falls toward straight down whatever the
+  // stick is doing — UNLESS the low speed is a deliberate brake toward a
+  // stall turn rather than an accidental one (an overcooked climb bleeding
+  // off airspeed nobody meant to lose). A turn already commits its own
+  // attitude in stepTurn; this stall-recovery drop would otherwise leave the
+  // reversal starting, and so ending, a good 20-30 degrees off level.
+  if (p.speed < FLIGHT.STALL_SPEED && !braking) {
+    p.angle = turnToward(p.angle, Math.PI / 2, FLIGHT.STALL_PULL);
   }
-  while (p.rollFlipQueue.length && p.rollFlipQueue[0] <= p.ticks) {
-    p.rollFlipQueue.shift();
-    p.upright = !p.upright;
+
+  if (thrust === facing) p.speed += FLIGHT.THRUST;
+  else if (braking) p.speed -= FLIGHT.BRAKE;
+  p.speed += FLIGHT.GRAVITY * Math.sin(p.angle);
+  p.speed -= FLIGHT.DRAG * p.speed * p.speed;
+  p.speed = clamp(p.speed, 0, FLIGHT.MAX_SPEED);
+
+  // Ran the airspeed to zero fighting it the whole way: arm the stall turn.
+  // Speed is already 0 this tick (nothing left to move it with), so the
+  // ordinary tail below is a no-op; stepPlane routes to stepTurn from the
+  // next tick on. See stepTurn for why the arc always dips through PI/2
+  // rather than always adding the same sign.
+  if (p.speed <= 0 && braking) {
+    p.turnTicks = 0;
+    p.turnStartAngle = p.angle;
+    p.turnDelta = facing >= 0 ? Math.PI : -Math.PI;
+  }
+
+  p.vx = Math.cos(p.angle) * p.speed;
+  p.vy = Math.sin(p.angle) * p.speed;
+  p.x += p.vx;
+  p.y += p.vy;
+  stepCeiling(p);
+}
+
+// The stall turn: a wingover, not a pivot. `turnDelta` is always +/-PI —
+// chosen once, in stepAir, so that a linear (then eased) sweep from
+// turnStartAngle to turnStartAngle + turnDelta passes through PI/2 (straight
+// down in world terms) exactly at its midpoint, whichever way the aeroplane
+// was originally facing. That is what makes every reversal cost a bit of
+// altitude and a bit of forward drift — not alternately a climb or a dive
+// depending on which heading it started from — since the sink is not a
+// separate constant, it falls straight out of integrating
+// sin(angle) * STALL_TURN_DRIFT through that dip.
+//
+// The manoeuvre commits once triggered: pitch and thrust input are ignored
+// for its whole duration, exactly like a real stall turn — a player already
+// mid-manoeuvre cannot un-commit from it by letting go.
+function stepTurn(p) {
+  // Incremented before use, so the LAST tick of the manoeuvre lands at u=1
+  // exactly (angle === turnStartAngle + turnDelta, precisely the reversed
+  // heading) rather than one tick short of it.
+  p.turnTicks++;
+  const u = clamp(p.turnTicks / FLIGHT.STALL_TURN_TICKS, 0, 1);
+  const eased = u * u * (3 - 2 * u); // smoothstep: symmetric, so the PI/2 dip still lands at u=0.5
+  p.angle = normalizeAngle(p.turnStartAngle + p.turnDelta * eased);
+  p.speed = FLIGHT.STALL_TURN_DRIFT;
+  p.vx = Math.cos(p.angle) * p.speed;
+  p.vy = Math.sin(p.angle) * p.speed;
+  p.x += p.vx;
+  p.y += p.vy;
+  stepCeiling(p);
+
+  if (p.turnTicks >= FLIGHT.STALL_TURN_TICKS) {
+    p.turnTicks = null;
+    p.turnStartAngle = null;
+    p.turnDelta = null;
   }
 }
 
