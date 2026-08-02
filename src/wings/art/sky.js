@@ -53,9 +53,9 @@ for (let i = 0; i < 90; i++) {
   const h = (i * 2654435761) >>> 0;
   STARS.push({
     x: (h % 6000) - 400,
-    y: ((h >> 12) % 190),
-    m: 0.25 + ((h >> 24) % 40) / 100,
-    b: 0.25 + ((h >> 8) % 60) / 100,
+    y: ((h >>> 12) % 190),
+    m: 0.25 + ((h >>> 24) % 40) / 100,
+    b: 0.25 + ((h >>> 8) % 60) / 100,
   });
 }
 
@@ -93,35 +93,57 @@ const DECKS = [
   { x: 5340, y: 80, m: 0.15, w: 188, h: 16 },
 ];
 
-// One bank. Each lobe is a soft radial falloff rather than a filled circle, so
-// the bank has no edge at all — against a near-black sky a hard-edged cloud
-// reads as a bubble, which is exactly what the first attempt looked like. The
-// lobe layout is a fixed function of the bank's own x, so it never changes
-// between runs and no two banks are the same shape.
-function drawBank(ctx, x, y, w, h, seed) {
-  for (let i = 0; i < 9; i++) {
-    // A fixed integer hash off the bank's own x and the lobe index: no two banks
-    // are the same shape, and every bank is the same shape on every run.
-    const k = ((seed * 2654435761) >>> 0) + i * 0x9e3779b1;
-    const t = i / 8;
-    const lx = x + (t - 0.5) * w + (((k >> 3) % 24) - 12);
-    const ly = y - (((k >> 9) % 100) / 100) * h * 1.15;
-    const rx = h * (1.1 + ((k >> 15) % 130) / 100);
-    const ry = rx * (0.34 + ((k >> 21) % 26) / 100);
-    // Lobes on the sunward (left) side and near the crown are brighter, which is
-    // the only thing giving a flat bank any form at all.
-    const lit = (1 - t * 0.5) * (0.6 + (y - ly) / (h * 1.4));
-    const g = ctx.createRadialGradient(lx, ly - ry * 0.4, ry * 0.05, lx, ly, rx);
-    g.addColorStop(0, lit > 0.85 ? CLOUD.crown : CLOUD.lit);
-    g.addColorStop(0.4, CLOUD.core);
-    g.addColorStop(0.75, CLOUD.base);
-    g.addColorStop(1, 'rgba(11,18,41,0)');
-    ctx.globalAlpha = 0.3 + Math.min(0.38, lit * 0.36);
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.ellipse(lx, ly, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fill();
+// One bank. A cumulus has a defined, lumpy TOP and a flat BASE where it meets
+// its condensation level — soft radial falloff in every direction is a smudge,
+// which is what the first two attempts looked like. So the lobes are unioned
+// into a single path with a rectangle across the base, filled with a vertical
+// ramp, and only the top edge gets a crisp lighter stroke. The lobe layout is a
+// fixed function of the bank's own x, so no two banks are alike and every bank
+// is the same on every run.
+function bankPath(ctx, x, y, w, h) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const k = ((x * 2654435761) >>> 0) + i * 0x9e3779b1;
+    const t = i / 5;
+    const lx = x + (t - 0.5) * (w - h) + (((k >>> 5) % 12) - 6);
+    // Clamped: a hash that ever produced a negative radius would throw and take
+    // the whole frame with it.
+    const r = Math.max(1, h * (0.62 + ((k >>> 13) % 70) / 100));
+    const ly = y - r * (0.45 + ((k >>> 19) % 45) / 100);
+    ctx.moveTo(lx + r, ly);
+    ctx.arc(lx, ly, r, 0, Math.PI * 2);
   }
+  // The flat base, inset so it never sticks out past the lobes and reads as a
+  // ruled bar.
+  ctx.rect(x - w * 0.4, y - h * 0.5, w * 0.8, h * 0.5);
+}
+
+function drawBank(ctx, x, y, w, h) {
+  // The base stop is fully transparent: a cumulus has a defined base, but a hard
+  // opaque edge there reads as a bar of paint rather than as cloud.
+  const g = ctx.createLinearGradient(0, y - h * 1.9, 0, y + 1);
+  g.addColorStop(0, CLOUD.crown);
+  g.addColorStop(0.3, CLOUD.lit);
+  g.addColorStop(0.66, CLOUD.core);
+  g.addColorStop(0.9, CLOUD.base);
+  g.addColorStop(1, 'rgba(11,18,41,0)');
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = g;
+  bankPath(ctx, x, y, w, h);
+  ctx.fill();
+
+  // A crisp crown, clipped so it never appears along the flat base.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x - w, y - h * 4, w * 2, h * 3.35);
+  ctx.clip();
+  ctx.globalAlpha = 0.55;
+  ctx.strokeStyle = CLOUD.crown;
+  ctx.lineWidth = 0.8;
+  bankPath(ctx, x, y, w, h);
+  ctx.stroke();
+  ctx.restore();
+  ctx.globalAlpha = 1;
 }
 
 export function drawClouds(ctx, viewW, viewH, cam, tick) {
@@ -131,7 +153,7 @@ export function drawClouds(ctx, viewW, viewH, cam, tick) {
     const sy = d.y - cam.y * d.m * 0.75;
     if (sy - d.h * 2.4 > viewH || sy - d.h * 2.4 < -60) continue;
     if (sx + d.w / 2 < -20 || sx - d.w / 2 > viewW + 20) continue;
-    drawBank(ctx, sx, sy, d.w, d.h, d.x);
+    drawBank(ctx, sx, sy, d.w, d.h);
   }
   ctx.restore();
 }

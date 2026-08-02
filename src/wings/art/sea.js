@@ -20,6 +20,23 @@ const TRAINS = [
   [23, 0.7, 0.95],
 ];
 
+// A second, slower, shallower swell drawn a few pixels higher up — which is
+// where more distant water sits on screen. Two layers running at different
+// speeds is what gives the sea depth; one layer, however well drawn, is a
+// ribbon. Deliberately not a multiple of the near periods, so the two beat.
+const FAR_TRAINS = [
+  [149, 1.4, 0.14],
+  [71, 0.8, 0.26],
+];
+
+export function farSurfaceAt(x, tick) {
+  let h = 0;
+  for (const [len, amp, spd] of FAR_TRAINS) {
+    h += amp * Math.sin(((x - tick * spd) / len) * Math.PI * 2);
+  }
+  return h;
+}
+
 // Surface height at world x, in pixels above mean sea level.
 export function surfaceAt(x, tick) {
   let h = 0;
@@ -77,7 +94,35 @@ export function drawSea(ctx, viewW, viewH, cam, seaY, tick) {
   const top = seaY - cam.y;
   if (top > viewH) return;
 
-  // The body of the water, clipped to the live surface so the horizon is a
+  // The far swell first: duller, flatter, and sitting a few pixels higher,
+  // because water further away is higher on screen. Everything the near surface
+  // then covers reads as distance.
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(-2, top - 6 + farSurfaceAt(cam.x - 2, tick));
+  for (let sx = 0; sx <= viewW + 2; sx += 3) {
+    ctx.lineTo(sx, top - 6 + farSurfaceAt(cam.x + sx, tick));
+  }
+  ctx.lineTo(viewW + 2, top + 12);
+  ctx.lineTo(-2, top + 12);
+  ctx.closePath();
+  const far = ctx.createLinearGradient(0, top - 8, 0, top + 6);
+  far.addColorStop(0, '#2b7fa4');
+  far.addColorStop(1, SEA.shallow);
+  ctx.fillStyle = far;
+  ctx.fill();
+  // A pale line right on the far horizon, which is the cue that says "distance".
+  ctx.strokeStyle = 'rgba(140,226,255,0.55)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-2, top - 6 + farSurfaceAt(cam.x - 2, tick));
+  for (let sx = 0; sx <= viewW + 2; sx += 3) {
+    ctx.lineTo(sx, top - 6 + farSurfaceAt(cam.x + sx, tick));
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // The body of the near water, clipped to the live surface so the horizon is a
   // moving line rather than a ruled edge.
   ctx.save();
   surfacePath(ctx, cam, viewW, top, tick, true, viewH + 2);
@@ -218,11 +263,11 @@ export function drawSplash(ctx, x, y, t) {
   for (let i = 0; i < 30; i++) {
     const k = (i * 2654435761) >>> 0;
     const a = -Math.PI / 2 + ((i / 29) - 0.5) * 2.5 + ((k % 20) - 10) / 90;
-    const speed = 30 + (k >> 5) % 44;
+    const speed = 30 + (k >>> 5) % 44;
     const px = x + Math.cos(a) * speed * t;
     const py = y + Math.sin(a) * speed * t + 78 * t * t;
     if (py > y + 1) continue;
-    const r = (2.4 - 1.5 * t) * (0.55 + ((k >> 11) % 9) / 10);
+    const r = (2.4 - 1.5 * t) * (0.55 + ((k >>> 11) % 9) / 10);
     ctx.globalAlpha = 0.95 * (1 - t);
     ctx.beginPath();
     ctx.arc(px, py, Math.max(0.4, r), 0, Math.PI * 2);

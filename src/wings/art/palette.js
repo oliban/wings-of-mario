@@ -95,20 +95,27 @@ export const ENSIGN = {
 // ---------------------------------------------------------------------------
 // Aircraft — the brightest object in frame, and the only neutral one.
 // ---------------------------------------------------------------------------
+// The aircraft carries the brightest values in the frame, but it is a WARPLANE,
+// not a trainer: US Navy 1944 scheme, dark sea blue over light gull grey with a
+// hard demarcation between them. The dark upper surface is still three times the
+// luminance of the sky, and putting the light grey underneath is what gives the
+// rim light something to sit on — a uniformly pale aeroplane had nothing for the
+// highlight to be brighter *than*.
 export const PLANE = {
-  spec: '#ffffff',
-  light: '#e2eaf3',
-  skin: '#b6c4d3',
-  mid: '#8496a9',
-  shade: '#4d5f74',
-  dark: '#2a3746',
-  contact: '#0a0f16',
-  canopy: '#8fdcff',
-  canopyDark: '#1f4e68',
-  canopyFrame: '#243447',
+  spec: '#ffffff',      // rim light, spinner, cowl lip, canopy glint
+  light: '#dfe7ee',     // gull grey underside
+  skin: '#9fb0c0',      // the transition band at the demarcation
+  mid: '#3d6183',       // upper sides, catching sky
+  shade: '#2a4562',     // sea blue
+  dark: '#1a2c40',      // deep sea blue, shadowed upper surfaces
+  contact: '#070d14',   // shadow and contact edges only
+  canopy: '#cfe9f7',    // glazing, near-white, not a bubble
+  canopyDark: '#31536e',
+  canopyFrame: '#12202e',
   pilot: '#e8c9a0',
-  flash: '#e2542c',
-  flashDark: '#8f2d14',
+  flash: '#d4442c',     // the one warm accent: an aft fuselage band
+  flashDark: '#8a2415',
+  insignia: '#f4f8fc',  // the star and bar
   prop: '#dce9f7',
 };
 

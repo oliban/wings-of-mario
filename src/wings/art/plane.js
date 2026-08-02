@@ -1,195 +1,225 @@
 import { PLANE } from './palette.js';
 
-// The aircraft. It is the subject of every frame, so it is drawn rather than
-// stamped: live Canvas2D paths, rotated by the real flight angle, which means no
-// resampling at any attitude and no per-angle sprite sheet to keep consistent.
+// The aircraft. Drawn as live Canvas2D paths and rotated by the real flight
+// angle, so there is no per-angle sheet and no resampling at any attitude.
 //
-// The silhouette is the whole job, and it is drawn to proportions measured off
-// the 1987 original because those are aircraft draughtsmanship, not technique:
+// What makes this read as a WWII carrier fighter rather than as a trainer is not
+// detail — it is four structural decisions, in this order of importance:
 //
-//   * 2.7 : 1 overall. Anything squarer reads as a bird.
-//   * THE VERTICAL FIN IS THE TALLEST POINT OF THE SPRITE, at ~95% of the length
-//     aft of the spinner. Mass belongs at the back. A shape whose highest point
-//     is a hump a third of the way from the nose, tapering to a spike at the
-//     tail, is a seagull — which is exactly what the previous version was.
-//   * The canopy bubble sits at ~56% aft.
-//   * AN UNBROKEN BRIGHT LINE RUNS THE FULL LENGTH OF THE UNDERSIDE, spinner to
-//     tailwheel. In the original this was a one-pixel hardware trick; it is also
-//     real rim-lighting craft, and it is what stops the aircraft merging into
-//     whatever is behind it. Here it is a soft rim light, drawn last so nothing
-//     can interrupt it.
-//   * The wing is separated from the fuselage BY VALUE, not by an outline.
-//   * Light airframe on a dark sky. Dark is reserved for shadow and contact
-//     edges. The old version was a dark shape on a light sky, which is backwards
-//     and is why it vanished into the water.
+//   MASS FORWARD, TAPER HARD AFT. A Hellcat in profile is brutally front-heavy:
+//   a barrel of radial engine, a deep fuselage behind it, and then a hard taper
+//   to a slim tail boom. Here the cowl is 12.6 units deep and the tail is 3.6 —
+//   a 3.5:1 taper. An even-diameter tube, which is what this used to be, reads
+//   as a light aircraft no matter what is painted on it.
+//
+//   THE FIN IS THE TALLEST POINT, at 94% of the length aft. It only *reads* as
+//   the tallest once the fuselage under it has tapered away; the previous
+//   version had the fin geometrically highest and it still did not show, because
+//   the tail boom was as deep as the nose.
+//
+//   THE COWLING IS A CYLINDER. Blunt, flat-fronted, no taper, deeper than the
+//   fuselage behind it, shaded across its height so it turns like a barrel, and
+//   finished with a hard bright lip at the front rim.
+//
+//   PANELLED METAL, NOT AIRBRUSH. A hard demarcation between the sea blue upper
+//   surface and the gull grey underside, a hard specular band along the spine,
+//   crisp panel lines, and a hard shadow where the wing meets the fuselage. Soft
+//   pastel gradients read as plastic.
+//
+// Colour is the 1944 US Navy scheme: dark sea blue over light gull grey, with a
+// national star-and-bar on the aft fuselage. The dark upper surface is still
+// about three times the luminance of the sky, and the light underside is what
+// gives the rim light something to be brighter than.
 
-// Length in world pixels: 15% of the 512px viewport, matching the original's
-// 43px on a 280px screen. That is the fraction the eye actually judges, and at
-// this size the silhouette below has room to be a silhouette.
-//
-// It does mean the aeroplane is 24% of our 320px flight deck where the
-// original's is 15% of its own — because the original's screen IS its carrier
-// and ours is not. The clean resolution is to lengthen DECK_X0/DECK_X1 so the
-// ship fills more of the window; that is a simulation change and lives in
-// geo.js. Until then the screen fraction wins, because that is what a
-// screenshot is compared on.
-export const PLANE_LEN = 77;
+// Length in world pixels. Settled by eye against both the carrier and the frame
+// rather than against an arithmetic target: big enough that the silhouette can
+// be a silhouette, small enough that it is still an aeroplane standing on a ship.
+export const PLANE_LEN = 70;
 
-// The body is drawn in a local frame 52 units nose-to-tail; changing PLANE_LEN
-// scales the whole aeroplane, gear, hook, prop and all, from this one constant.
-export const PLANE_SCALE = PLANE_LEN / 52;
-export const PLANE_ASPECT = 2.7;
+// The body is authored in a 52-unit frame; PLANE_SCALE stretches the whole
+// aeroplane — gear, hook, propeller, parked aircraft — from that one constant.
+const LOCAL_LEN = 52;
+export const PLANE_SCALE = PLANE_LEN / LOCAL_LEN;
+export const PLANE_ASPECT = 2.64;
 export const PLANE_HEIGHT = PLANE_LEN / PLANE_ASPECT;
 
-// Local frame: origin at the centre of mass, +x toward the nose, +y down. The
-// body is authored in a 52-unit frame and PLANE_SCALE stretches it to PLANE_LEN,
-// so every landmark below stays a fixed fraction of the aeroplane.
-const LOCAL_LEN = 52;
+// Local frame: origin at the centre of mass, +x toward the nose, +y down.
 const NOSE = 29;
 const TAIL = -23;
 
-// Quoted as fractions aft of the spinner so the proportions survive a change of
-// scale. The tests measure these.
+// Quoted so the proportions survive a change of scale. The tests measure these.
 export const LANDMARKS = {
   localLen: LOCAL_LEN,
   nose: NOSE,
   tail: TAIL,
-  finTopX: -18.4,
-  finTopY: -13.4,
-  canopyPeakX: 0,
-  canopyPeakY: -9.2,
-  bellyY: 5.2,
-  wingLowY: 6.9,
-  spineY: -4.4,
+  finTopX: -20,
+  finTopY: -13.2,
+  canopyPeakX: -1,
+  canopyPeakY: -10.4,
+  spineY: -5.6,
+  bellyY: 6.2,
+  wingLowY: 7.2,
+  cowlDepth: 12.6,
+  tailDepth: 3.6,
 };
 
-// The outline of the fuselage, nose first, over the top, down the back and home
-// along the belly. Quadratics rather than segments: the cowling of a radial
-// engine is a barrel and the spine of a Hellcat is a curve.
+// ---------------------------------------------------------------------------
+// Outlines
+// ---------------------------------------------------------------------------
+
+// Deep at the firewall, slim at the tail. The taper is the whole point.
 function fuselagePath(ctx) {
   ctx.beginPath();
-  ctx.moveTo(NOSE, -4.8);
-  ctx.quadraticCurveTo(NOSE + 2, -3, NOSE + 2, 0);
-  ctx.quadraticCurveTo(NOSE + 2, 3, NOSE, 4.9);
-  ctx.lineTo(23, 5.2);
-  ctx.lineTo(-9, 3.0);
-  ctx.lineTo(TAIL + 1, 2.2);
-  ctx.lineTo(TAIL, 1.0);
-  ctx.lineTo(TAIL, -3.2);
-  ctx.lineTo(-9, -4.2);
-  ctx.lineTo(6, -4.4);
-  ctx.quadraticCurveTo(14, -4.9, 17, -4.9);
-  ctx.quadraticCurveTo(24, -5.1, NOSE, -4.8);
+  ctx.moveTo(20, -6.4);
+  ctx.lineTo(13, -6.2);
+  ctx.lineTo(6, -5.6);
+  ctx.lineTo(-8, -4.6);
+  ctx.lineTo(TAIL, -3.0);
+  ctx.lineTo(TAIL, 0.6);
+  ctx.lineTo(TAIL + 1, 1.8);
+  ctx.lineTo(-8, 3.0);
+  ctx.lineTo(13, 5.8);
+  ctx.lineTo(20, 6.2);
   ctx.closePath();
 }
 
-// The wing, seen almost edge-on and slightly foreshortened: a swept blade whose
-// leading edge catches the light and whose underside falls into shadow. Its
-// lower edge meets the belly line, which keeps the rim light one unbroken run.
-function wingPath(ctx) {
+// A blunt cylinder. No taper along its length, a flat rounded face, and it is
+// deeper than the fuselage it is bolted to.
+function cowlPath(ctx) {
   ctx.beginPath();
-  ctx.moveTo(17.5, 1.8);
-  ctx.lineTo(8, 5.6);
-  ctx.lineTo(-14.5, 6.9);
-  ctx.lineTo(-11, 2.6);
-  ctx.lineTo(2, 0.6);
+  ctx.moveTo(13, -6.2);
+  ctx.lineTo(27.4, -6.5);
+  ctx.quadraticCurveTo(NOSE + 1.6, -6.2, NOSE + 1.8, -4.2);
+  ctx.lineTo(NOSE + 1.8, 4.4);
+  ctx.quadraticCurveTo(NOSE + 1.6, 6.2, 27.4, 6.4);
+  ctx.lineTo(13, 5.8);
   ctx.closePath();
 }
 
 function finPath(ctx) {
   ctx.beginPath();
-  ctx.moveTo(-10, -4.2);
-  ctx.quadraticCurveTo(-13, -9.4, -15.4, -13.1);
-  ctx.lineTo(-21.4, -13.4);
-  ctx.quadraticCurveTo(TAIL - 0.6, -13.2, TAIL - 0.6, -11.4);
-  ctx.lineTo(TAIL - 0.2, -2.8);
-  ctx.lineTo(-12, -4.2);
+  ctx.moveTo(-7, -4.5);
+  ctx.quadraticCurveTo(-12, -9, -17.5, -13.2);
+  ctx.lineTo(-22.4, -13.2);
+  ctx.quadraticCurveTo(TAIL - 0.8, -13.0, TAIL - 0.8, -11.4);
+  ctx.lineTo(TAIL - 0.4, -2.8);
+  ctx.lineTo(-9, -4.5);
   ctx.closePath();
 }
 
 function tailplanePath(ctx) {
   ctx.beginPath();
-  ctx.moveTo(-13, 0.2);
-  ctx.lineTo(TAIL - 2.6, -0.9);
-  ctx.lineTo(TAIL - 2.6, 1.0);
-  ctx.lineTo(-13, 2.0);
+  ctx.moveTo(-12, -0.2);
+  ctx.lineTo(TAIL - 3.5, -1.7);
+  ctx.lineTo(TAIL - 3.5, 0.1);
+  ctx.lineTo(-12, 1.7);
+  ctx.closePath();
+}
+
+function wingPath(ctx) {
+  ctx.beginPath();
+  ctx.moveTo(16.5, 2.6);
+  ctx.lineTo(5, 7.2);
+  ctx.lineTo(-13, 6.4);
+  ctx.lineTo(-9, 1.8);
+  ctx.lineTo(2, 0.8);
   ctx.closePath();
 }
 
 function canopyPath(ctx) {
   ctx.beginPath();
-  ctx.moveTo(8.5, -4.5);
-  ctx.quadraticCurveTo(5.5, -9.0, 0, -9.2);
-  ctx.quadraticCurveTo(-5.5, -9.2, -8.5, -4.3);
+  ctx.moveTo(7.5, -5.7);
+  ctx.quadraticCurveTo(4.5, -10.2, -1, -10.4);
+  ctx.quadraticCurveTo(-6, -10.4, -8.5, -4.6);
   ctx.closePath();
 }
 
-// Gradients are built against the local frame and cached: they are the same
-// every frame, and rebuilding five of them sixty times a second is waste.
+// ---------------------------------------------------------------------------
+// Shading
+// ---------------------------------------------------------------------------
+
+// Built once against the local frame. The demarcation stops sit four hundredths
+// apart on purpose: that near-step is the camouflage line, and softening it is
+// what made the old version look like a toy.
 let grads = null;
 function gradients(ctx) {
   if (grads) return grads;
-  const body = ctx.createLinearGradient(0, -5, 0, 5.2);
-  body.addColorStop(0, PLANE.light);
-  body.addColorStop(0.34, PLANE.skin);
-  body.addColorStop(0.72, PLANE.mid);
-  body.addColorStop(1, PLANE.shade);
 
-  const wing = ctx.createLinearGradient(0, 0.6, 0, 6.9);
-  wing.addColorStop(0, PLANE.skin);
-  wing.addColorStop(0.45, PLANE.mid);
-  wing.addColorStop(1, PLANE.shade);
+  const body = ctx.createLinearGradient(0, -6.4, 0, 6.2);
+  body.addColorStop(0, PLANE.dark);
+  body.addColorStop(0.3, PLANE.shade);
+  body.addColorStop(0.46, PLANE.mid);
+  body.addColorStop(0.5, PLANE.skin);
+  body.addColorStop(0.56, PLANE.light);
+  body.addColorStop(1, PLANE.light);
 
-  const fin = ctx.createLinearGradient(-19, -13.2, -13, -4);
-  fin.addColorStop(0, PLANE.light);
-  fin.addColorStop(1, PLANE.mid);
+  // A cylinder turns: dark at the top, a hard bright band across the middle,
+  // dark again underneath. This one gradient is most of what says "radial".
+  const cowl = ctx.createLinearGradient(0, -6.5, 0, 6.4);
+  cowl.addColorStop(0, '#16253a');
+  cowl.addColorStop(0.24, PLANE.shade);
+  cowl.addColorStop(0.42, PLANE.mid);
+  cowl.addColorStop(0.5, PLANE.skin);
+  cowl.addColorStop(0.6, PLANE.light);
+  cowl.addColorStop(0.78, PLANE.mid);
+  cowl.addColorStop(1, PLANE.dark);
 
-  const cowl = ctx.createLinearGradient(20, -5.2, 31, 5.2);
-  cowl.addColorStop(0, PLANE.light);
-  cowl.addColorStop(0.4, PLANE.skin);
-  cowl.addColorStop(1, PLANE.shade);
+  const wing = ctx.createLinearGradient(0, 0.8, 0, 7.2);
+  wing.addColorStop(0, '#16283c');
+  wing.addColorStop(0.42, PLANE.shade);
+  wing.addColorStop(0.62, PLANE.mid);
+  wing.addColorStop(0.78, PLANE.skin);
+  wing.addColorStop(1, PLANE.light);
 
-  const glass = ctx.createLinearGradient(0, -9.2, 0, -4.3);
+  const fin = ctx.createLinearGradient(0, -13.2, 0, -3);
+  fin.addColorStop(0, PLANE.shade);
+  fin.addColorStop(0.6, PLANE.dark);
+  fin.addColorStop(1, PLANE.shade);
+
+  const glass = ctx.createLinearGradient(0, -10.4, 0, -4.6);
   glass.addColorStop(0, PLANE.spec);
-  glass.addColorStop(0.3, PLANE.canopy);
-  glass.addColorStop(1, PLANE.canopyDark);
+  glass.addColorStop(0.28, PLANE.canopy);
+  glass.addColorStop(0.62, PLANE.canopyDark);
+  glass.addColorStop(1, PLANE.canopyFrame);
 
-  grads = { body, wing, fin, cowl, glass };
+  grads = { body, cowl, wing, fin, glass };
   return grads;
 }
 
-// The propeller, as a translucent disc with a brighter blade arc sweeping round
-// it. Driven off the simulation tick, never off wall-clock time.
+// ---------------------------------------------------------------------------
+// Parts
+// ---------------------------------------------------------------------------
+
 function drawProp(ctx, tick, throttle) {
-  const cx = NOSE + 1.8;
+  const cx = NOSE + 2.6;
   if (throttle <= 0) {
-    ctx.strokeStyle = PLANE.mid;
-    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = PLANE.skin;
+    ctx.lineWidth = 1.3;
     ctx.beginPath();
-    ctx.moveTo(cx, -12.5);
-    ctx.lineTo(cx, 12.5);
+    ctx.moveTo(cx, -13);
+    ctx.lineTo(cx, 13);
     ctx.stroke();
     return;
   }
   ctx.save();
   ctx.translate(cx, 0);
   ctx.scale(0.2, 1);
-  const disc = ctx.createRadialGradient(0, 0, 1, 0, 0, 13);
-  disc.addColorStop(0, 'rgba(226,238,252,0.55)');
-  disc.addColorStop(0.55, 'rgba(210,228,248,0.30)');
+  const disc = ctx.createRadialGradient(0, 0, 1, 0, 0, 13.5);
+  disc.addColorStop(0, 'rgba(226,238,252,0.5)');
+  disc.addColorStop(0.55, 'rgba(210,228,248,0.28)');
   disc.addColorStop(1, 'rgba(190,214,240,0)');
   ctx.fillStyle = disc;
   ctx.beginPath();
-  ctx.arc(0, 0, 13, 0, Math.PI * 2);
+  ctx.arc(0, 0, 13.5, 0, Math.PI * 2);
   ctx.fill();
-  // The bright half of the arc walks round the disc, four turns a second.
+  // The bright half of the blade arc walks round the disc, four turns a second.
   const a0 = ((tick % 15) / 15) * Math.PI * 2;
   ctx.globalAlpha = 0.5;
   ctx.fillStyle = PLANE.spec;
   for (const off of [0, Math.PI]) {
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.arc(0, 0, 13, a0 + off, a0 + off + 0.9);
+    ctx.arc(0, 0, 13.5, a0 + off, a0 + off + 0.9);
     ctx.closePath();
     ctx.fill();
   }
@@ -197,44 +227,65 @@ function drawProp(ctx, tick, throttle) {
 }
 
 function drawGear(ctx) {
-  ctx.strokeStyle = PLANE.shade;
-  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = PLANE.dark;
+  ctx.lineWidth = 1.8;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(12, 4.4);
-  ctx.lineTo(10.2, 9.6);
-  ctx.moveTo(5, 5.2);
-  ctx.lineTo(8.4, 9.6);
+  ctx.moveTo(11.5, 5.4);
+  ctx.lineTo(9.6, 10.4);
+  ctx.moveTo(5, 6);
+  ctx.lineTo(8, 10.4);
   ctx.stroke();
-  ctx.fillStyle = PLANE.dark;
+  ctx.fillStyle = PLANE.contact;
   ctx.beginPath();
-  ctx.ellipse(9.4, 10.4, 2.6, 2.6, 0, 0, Math.PI * 2);
+  ctx.ellipse(9, 11.2, 2.8, 2.8, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.strokeStyle = PLANE.skin;
-  ctx.lineWidth = 0.8;
+  ctx.lineWidth = 0.9;
   ctx.beginPath();
-  ctx.ellipse(9.4, 10.4, 1.2, 1.2, 0, 0, Math.PI * 2);
+  ctx.ellipse(9, 11.2, 1.2, 1.2, 0, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.fillStyle = PLANE.dark;
+  ctx.fillStyle = PLANE.contact;
   ctx.beginPath();
-  ctx.ellipse(TAIL + 2.5, 5.4, 1.6, 1.6, 0, 0, Math.PI * 2);
+  ctx.ellipse(TAIL + 2.5, 3.4, 1.7, 1.7, 0, 0, Math.PI * 2);
   ctx.fill();
 }
 
 function drawHook(ctx) {
   ctx.strokeStyle = PLANE.dark;
-  ctx.lineWidth = 1.4;
+  ctx.lineWidth = 1.5;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(TAIL + 3, 2.4);
-  ctx.lineTo(TAIL - 6, 7.4);
+  ctx.moveTo(TAIL + 3, 1.2);
+  ctx.lineTo(TAIL - 6, 6.6);
   ctx.stroke();
   ctx.strokeStyle = PLANE.contact;
-  ctx.lineWidth = 1.7;
+  ctx.lineWidth = 1.8;
   ctx.beginPath();
-  ctx.arc(TAIL - 6.6, 6.4, 1.7, 0.2, 2.6);
+  ctx.arc(TAIL - 6.6, 5.6, 1.8, 0.2, 2.6);
   ctx.stroke();
 }
+
+// The national star-and-bar. Nothing else says "1944 US Navy" this quickly, and
+// at this scale it is three white shapes.
+function drawInsignia(ctx, cx, cy, r) {
+  ctx.fillStyle = PLANE.insignia;
+  ctx.fillRect(cx - r * 2.6, cy - r * 0.52, r * 1.5, r * 1.05);
+  ctx.fillRect(cx + r * 1.1, cy - r * 0.52, r * 1.5, r * 1.05);
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + (i * Math.PI) / 5;
+    const rr = i % 2 ? r * 0.42 : r;
+    const x = cx + Math.cos(a) * rr;
+    const y = cy + Math.sin(a) * rr;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+}
+
+// ---------------------------------------------------------------------------
 
 // Draw the aircraft in the local frame. The caller has already translated to the
 // centre of mass and rotated; nothing in here knows about the world.
@@ -246,43 +297,51 @@ export function drawPlaneBody(ctx, opts = {}) {
   if (gear) drawGear(ctx);
   if (hook) drawHook(ctx);
 
-  // Tailplane first: it sits behind the fin and below the spine.
+  // Tailplane, behind the fin and below the spine.
   tailplanePath(ctx);
-  ctx.fillStyle = PLANE.mid;
+  ctx.fillStyle = PLANE.shade;
   ctx.fill();
-  ctx.strokeStyle = PLANE.spec;
-  ctx.lineWidth = 0.7;
+  ctx.strokeStyle = PLANE.skin;
+  ctx.lineWidth = 0.8;
   ctx.beginPath();
-  ctx.moveTo(-13, 0.2);
-  ctx.lineTo(TAIL - 2.6, -0.9);
+  ctx.moveTo(-12, -0.2);
+  ctx.lineTo(TAIL - 3.5, -1.7);
   ctx.stroke();
 
-  // Fin. The tallest thing on the aeroplane, and the reason the silhouette reads
-  // as an aircraft rather than a fish.
+  // Fin. Ten units of it stand above a tail boom three and a half deep, which
+  // is what makes the tail the tallest thing on the aeroplane.
   finPath(ctx);
   ctx.fillStyle = g.fin;
   ctx.fill();
-  ctx.strokeStyle = PLANE.spec;
-  ctx.lineWidth = 0.9;
+  ctx.strokeStyle = PLANE.skin;
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(-10, -4.2);
-  ctx.quadraticCurveTo(-13, -9.4, -15.4, -13.1);
-  ctx.lineTo(-21.4, -13.4);
+  ctx.moveTo(-7, -4.5);
+  ctx.quadraticCurveTo(-12, -9, -17.5, -13.2);
+  ctx.lineTo(-22.4, -13.2);
   ctx.stroke();
+  // Rudder hinge line.
+  ctx.strokeStyle = PLANE.contact;
+  ctx.lineWidth = 0.7;
+  ctx.globalAlpha = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(-19.6, -13.1);
+  ctx.lineTo(-20.6, -3.6);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
 
-  // Wing. Separated from the fuselage by value only — a darker plane below a
-  // lighter one, with a lit leading edge.
+  // Wing, passing behind the fuselage.
   wingPath(ctx);
   ctx.fillStyle = g.wing;
   ctx.fill();
   ctx.strokeStyle = PLANE.spec;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = 1.1;
   ctx.beginPath();
-  ctx.moveTo(17.5, 1.8);
-  ctx.lineTo(8, 5.6);
+  ctx.moveTo(16.5, 2.6);
+  ctx.lineTo(5, 7.2);
   ctx.stroke();
 
-  // Fuselage over the wing root, so the wing reads as passing behind it.
+  // Fuselage.
   fuselagePath(ctx);
   ctx.fillStyle = g.body;
   ctx.fill();
@@ -291,104 +350,169 @@ export function drawPlaneBody(ctx, opts = {}) {
   fuselagePath(ctx);
   ctx.clip();
 
-  // Cowling: a barrel of brighter metal, cut from the fuselage by a firewall
-  // line rather than by an outline.
-  ctx.beginPath();
-  ctx.rect(17, -6, NOSE - 17 + 3, 12);
-  ctx.fillStyle = g.cowl;
-  ctx.fill();
-  ctx.strokeStyle = PLANE.shade;
-  ctx.lineWidth = 0.6;
-  ctx.beginPath();
-  ctx.moveTo(17.2, -6);
-  ctx.lineTo(17.2, 6);
-  ctx.stroke();
-  ctx.fillStyle = PLANE.dark;
-  for (let i = 0; i < 3; i++) ctx.fillRect(18.6 + i * 2.4, 2.6, 1.2, 1.5);
-
-  // Squadron flash: the one warm colour on the aeroplane, and what tells you
-  // which way up it is at a glance when it is small.
-  ctx.fillStyle = PLANE.flash;
-  ctx.fillRect(-12.4, -5, 3.4, 9);
-  ctx.fillStyle = PLANE.flashDark;
-  ctx.fillRect(-12.4, 1.2, 3.4, 2.8);
-
-  // The wing root's cast shadow on the fuselage side, which is what makes the
-  // two read as separate surfaces without drawing a line between them.
-  ctx.globalAlpha = 0.68;
+  // The hard shadow the wing root casts on the fuselage side. This is what
+  // separates wing from fuselage without an outline between them.
   ctx.fillStyle = PLANE.contact;
+  ctx.globalAlpha = 0.72;
   ctx.beginPath();
-  ctx.moveTo(17.5, 1.8);
-  ctx.lineTo(2, 0.6);
-  ctx.lineTo(-11, 2.6);
-  ctx.lineTo(-11, 4.2);
-  ctx.lineTo(2, 2.1);
-  ctx.lineTo(17.5, 3.0);
+  ctx.moveTo(16.5, 2.6);
+  ctx.lineTo(2, 0.8);
+  ctx.lineTo(-9, 1.8);
+  ctx.lineTo(-9, 3.4);
+  ctx.lineTo(2, 2.2);
+  ctx.lineTo(16.5, 4.2);
   ctx.closePath();
   ctx.fill();
   ctx.globalAlpha = 1;
 
-  // Spine specular: sun from above and ahead.
-  ctx.globalAlpha = 0.8;
-  ctx.strokeStyle = PLANE.spec;
-  ctx.lineWidth = 1;
+  // Panel lines: crisp, dark, and following the section rather than ruled
+  // straight, because the fuselage is a body of revolution.
+  ctx.strokeStyle = PLANE.contact;
+  ctx.globalAlpha = 0.3;
+  ctx.lineWidth = 0.5;
   ctx.beginPath();
-  ctx.moveTo(-10.5, -4.1);
-  ctx.lineTo(-8.2, -4.2);
-  ctx.moveTo(9, -4.4);
-  ctx.quadraticCurveTo(14, -4.8, 18, -4.7);
+  for (const x of [8, -10, -17]) {
+    ctx.moveTo(x, -5.4);
+    ctx.lineTo(x - 0.6, 4.4);
+  }
   ctx.stroke();
+  // The demarcation between sea blue and gull grey, hard-edged.
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(20, 0.2);
+  ctx.lineTo(-8, -0.5);
+  ctx.lineTo(TAIL, -1.1);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // The specular band along the spine: a hard line, not an airbrushed bloom.
+  ctx.strokeStyle = PLANE.mid;
+  ctx.lineWidth = 0.7;
+  ctx.beginPath();
+  ctx.moveTo(12, -5.7);
+  ctx.lineTo(7, -5.3);
+  ctx.moveTo(-9.5, -4.3);
+  ctx.lineTo(TAIL + 3, -3.1);
+  ctx.stroke();
+
+  drawInsignia(ctx, -5.5, 0.2, 2.1);
+
+  // The one warm accent on the aeroplane: a squadron band round the aft
+  // fuselage, which is also what tells you which way up it is at a distance.
+  ctx.fillStyle = PLANE.flash;
+  ctx.fillRect(-15, -5.6, 2.2, 11);
+  ctx.fillStyle = PLANE.flashDark;
+  ctx.fillRect(-15, -0.4, 2.2, 6);
   ctx.restore();
 
-  // Canopy and the pilot inside it.
+  // Cowling, over the fuselage: blunt, cylindrical, deeper than what it is
+  // bolted to.
+  cowlPath(ctx);
+  ctx.fillStyle = g.cowl;
+  ctx.fill();
+  ctx.save();
+  cowlPath(ctx);
+  ctx.clip();
+  ctx.strokeStyle = PLANE.contact;
+  ctx.globalAlpha = 0.55;
+  ctx.lineWidth = 0.8;
+  ctx.beginPath();
+  ctx.moveTo(13.4, -7);
+  ctx.lineTo(13.4, 7);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+  // Exhaust stubs along the bottom of the cowl.
+  ctx.fillStyle = PLANE.contact;
+  for (let i = 0; i < 4; i++) ctx.fillRect(15.5 + i * 2.6, 4.4, 1.4, 1.8);
+  ctx.restore();
+
+  // The cowl lip: a hard bright rim round the front of the cylinder, and the
+  // dark intake shadow just inside it.
+  ctx.strokeStyle = PLANE.spec;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(27.2, -6.4);
+  ctx.quadraticCurveTo(NOSE + 1.4, -6.1, NOSE + 1.6, -4.2);
+  ctx.lineTo(NOSE + 1.6, 4.4);
+  ctx.quadraticCurveTo(NOSE + 1.4, 6.1, 27.2, 6.3);
+  ctx.stroke();
+  ctx.strokeStyle = PLANE.contact;
+  ctx.globalAlpha = 0.5;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(26.6, -4.9);
+  ctx.lineTo(NOSE + 0.2, -3.8);
+  ctx.lineTo(NOSE + 0.2, 4.0);
+  ctx.lineTo(26.6, 4.9);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+
+  // Spinner.
+  ctx.fillStyle = PLANE.spec;
+  ctx.beginPath();
+  ctx.ellipse(NOSE + 1.8, -0.4, 1.7, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = PLANE.mid;
+  ctx.beginPath();
+  ctx.ellipse(NOSE + 2.4, 0.8, 1, 1.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Canopy: framed glazing, not a bubble. A hard frame, a horizon reflection
+  // and a bright top edge.
   canopyPath(ctx);
   ctx.fillStyle = g.glass;
   ctx.fill();
   ctx.fillStyle = PLANE.pilot;
   ctx.beginPath();
-  ctx.ellipse(-2.2, -6.4, 1.9, 1.7, 0, 0, Math.PI * 2);
+  ctx.ellipse(-2.6, -7.2, 1.9, 1.7, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.strokeStyle = PLANE.canopyFrame;
-  ctx.lineWidth = 0.7;
+  ctx.lineWidth = 0.9;
   ctx.beginPath();
-  ctx.moveTo(8.5, -4.5);
-  ctx.quadraticCurveTo(5.5, -9.0, 0, -9.2);
-  ctx.quadraticCurveTo(-5.5, -9.2, -8.5, -4.3);
-  ctx.moveTo(2.6, -8.9);
-  ctx.lineTo(2.6, -4.4);
+  ctx.moveTo(7.5, -5.7);
+  ctx.quadraticCurveTo(4.5, -10.2, -1, -10.4);
+  ctx.quadraticCurveTo(-6, -10.4, -8.5, -4.6);
+  ctx.moveTo(2.4, -9.2);
+  ctx.lineTo(2.4, -5.4);
+  ctx.moveTo(-4.6, -10.3);
+  ctx.lineTo(-4.6, -5.0);
+  ctx.stroke();
+  ctx.strokeStyle = PLANE.spec;
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.moveTo(3.6, -8.4);
+  ctx.quadraticCurveTo(0, -10.1, -3.6, -9.7);
   ctx.stroke();
 
-  // Spinner boss: the brightest single point on the aeroplane, right at the hub,
-  // which is what makes the nose read as blunt and forward-facing.
-  ctx.fillStyle = PLANE.spec;
-  ctx.beginPath();
-  ctx.ellipse(NOSE + 1.4, -0.3, 1.5, 2.4, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // THE RIM LIGHT. Last, over everything, unbroken from the spinner to the
+  // THE RIM LIGHT. Last, over everything, unbroken from the cowl lip to the
   // tailwheel. Nothing is allowed to interrupt this stroke.
   ctx.strokeStyle = PLANE.spec;
-  ctx.lineWidth = 1.3;
+  ctx.lineWidth = 0.9;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
+  // The path is the true bottom of the silhouette: cowl lip, belly, across to
+  // the wing where its leading edge crosses the belly line, along the wing, and
+  // up to the tailwheel. One polyline, no gaps.
   ctx.beginPath();
-  ctx.moveTo(NOSE + 1.8, 1.0);
-  ctx.quadraticCurveTo(NOSE + 1.4, 4.8, 23, 5.3);
-  ctx.lineTo(8, 5.7);
-  ctx.lineTo(-14.5, 7.0);
-  ctx.lineTo(TAIL + 0.6, 2.4);
+  ctx.moveTo(NOSE + 1.5, 4.6);
+  ctx.lineTo(27.4, 6.4);
+  ctx.lineTo(13, 5.9);
+  ctx.lineTo(9.6, 5.4);
+  ctx.lineTo(5, 7.3);
+  ctx.lineTo(-13, 6.5);
+  ctx.lineTo(TAIL + 1, 1.9);
   ctx.stroke();
 
-  // A dark contact edge along the top, so a light airframe still has a
-  // silhouette when it crosses a cloud.
-  ctx.globalAlpha = 0.55;
+  // A dark contact edge along the top, so a lit airframe still has a silhouette
+  // when it crosses a cloud.
+  ctx.globalAlpha = 0.6;
   ctx.strokeStyle = PLANE.contact;
-  ctx.lineWidth = 0.7;
+  ctx.lineWidth = 0.8;
   ctx.beginPath();
-  ctx.moveTo(17, -5.0);
-  ctx.lineTo(8.6, -4.5);
-  ctx.moveTo(-8.6, -4.3);
-  ctx.lineTo(-10.5, -4.2);
+  ctx.moveTo(13, -6.4);
+  ctx.lineTo(7.5, -5.8);
+  ctx.moveTo(-8.5, -4.7);
+  ctx.lineTo(-9.5, -4.5);
   ctx.stroke();
   ctx.globalAlpha = 1;
 }
@@ -411,49 +535,59 @@ export function drawPlane(ctx, cx, cy, angle, opts = {}) {
   ctx.restore();
 }
 
-// A folded-wing aircraft parked on the deck, wings hinged straight up into a V.
-// It is the single most carrier-looking object there is, and the original parks
-// two of them at the bow.
+// An aircraft parked on deck with its wings folded straight up into a V —
+// the single most carrier-looking object there is.
 export function drawParkedPlane(ctx, x, y, scale = PLANE_SCALE) {
   ctx.save();
   ctx.translate(x, y);
   ctx.scale(scale, scale);
-  ctx.fillStyle = PLANE.skin;
+  const g = ctx.createLinearGradient(0, -5, 0, 0.4);
+  g.addColorStop(0, PLANE.dark);
+  g.addColorStop(0.55, PLANE.shade);
+  g.addColorStop(0.62, PLANE.skin);
+  g.addColorStop(1, PLANE.light);
+  ctx.fillStyle = g;
   ctx.beginPath();
-  ctx.moveTo(11, -3);
-  ctx.quadraticCurveTo(13, -1.6, 13, 0);
+  ctx.moveTo(10, -3.4);
+  ctx.quadraticCurveTo(12.6, -1.8, 12.6, 0);
   ctx.lineTo(-9, 0.4);
-  ctx.lineTo(-11, -4.6);
-  ctx.lineTo(-8, -4);
-  ctx.lineTo(-2, -4.6);
-  ctx.quadraticCurveTo(6, -5, 11, -3);
+  ctx.lineTo(-11, -4.8);
+  ctx.lineTo(-8, -4.2);
+  ctx.lineTo(-2, -4.8);
+  ctx.quadraticCurveTo(5, -5.2, 10, -3.4);
   ctx.closePath();
   ctx.fill();
-  ctx.strokeStyle = PLANE.light;
-  ctx.lineWidth = 2.3;
+  ctx.strokeStyle = PLANE.shade;
+  ctx.lineWidth = 2.4;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(3, -3.6);
+  ctx.moveTo(3, -3.8);
   ctx.lineTo(-2.5, -12.5);
-  ctx.moveTo(4.4, -3.6);
+  ctx.moveTo(4.4, -3.8);
   ctx.lineTo(10, -12);
+  ctx.stroke();
+  ctx.strokeStyle = PLANE.skin;
+  ctx.lineWidth = 0.9;
+  ctx.beginPath();
+  ctx.moveTo(3.4, -4.4);
+  ctx.lineTo(-2.1, -12.4);
   ctx.stroke();
   ctx.fillStyle = PLANE.canopy;
   ctx.beginPath();
-  ctx.ellipse(-1, -4.6, 2.6, 1.7, 0, Math.PI, 0);
+  ctx.ellipse(-1, -4.8, 2.6, 1.7, 0, Math.PI, 0);
   ctx.fill();
-  ctx.strokeStyle = PLANE.dark;
-  ctx.lineWidth = 1.1;
+  ctx.strokeStyle = PLANE.contact;
+  ctx.lineWidth = 1.2;
   ctx.beginPath();
   ctx.moveTo(6, 0);
-  ctx.lineTo(6, 2.6);
+  ctx.lineTo(6, 2.8);
   ctx.moveTo(-6, 0.2);
-  ctx.lineTo(-6, 2.2);
+  ctx.lineTo(-6, 2.4);
   ctx.stroke();
   ctx.strokeStyle = PLANE.spec;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(12.6, 0);
+  ctx.moveTo(12.2, 0);
   ctx.lineTo(-8.8, 0.4);
   ctx.stroke();
   ctx.restore();

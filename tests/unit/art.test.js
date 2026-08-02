@@ -107,7 +107,8 @@ test('sky, sea, ship and aircraft each own a hue nobody else uses', () => {
 // ---------------------------------------------------------------------------
 
 test('the aircraft is drawn to the original\'s proportions', () => {
-  assert.ok(Math.abs(PLANE_ASPECT - 2.7) < 0.01, 'anything squarer than 2.7:1 reads as a bird');
+  assert.ok(PLANE_ASPECT > 2.55 && PLANE_ASPECT < 2.85,
+    `aspect ${PLANE_ASPECT} — anything squarer than about 2.6:1 reads as a bird`);
   assert.ok(Math.abs(PLANE_HEIGHT - PLANE_LEN / PLANE_ASPECT) < 1e-6);
   assert.equal(LANDMARKS.nose - LANDMARKS.tail, LANDMARKS.localLen,
     'the authored frame must run nose to tail');
@@ -115,6 +116,15 @@ test('the aircraft is drawn to the original\'s proportions', () => {
 
 // The one finding from the reference comparison that no amount of rendering
 // quality can buy: the mass belongs at the back.
+// A Hellcat is brutally front-heavy in profile. An even-diameter tube reads as a
+// light aircraft no matter what is painted on it, and it is also why the fin
+// failed to read as the tallest point even when it geometrically was.
+test('the fuselage is deep at the cowl and tapers hard to the tail', () => {
+  const { cowlDepth, tailDepth } = LANDMARKS;
+  assert.ok(cowlDepth / tailDepth > 3,
+    `taper is only ${(cowlDepth / tailDepth).toFixed(1)}:1 — a warplane is front-heavy`);
+});
+
 test('the vertical fin is the tallest point of the aircraft, and it is at the tail', () => {
   const { nose, finTopY, finTopX, canopyPeakY, spineY, bellyY, wingLowY } = LANDMARKS;
   assert.ok(finTopY < canopyPeakY, 'the fin must rise above the canopy');

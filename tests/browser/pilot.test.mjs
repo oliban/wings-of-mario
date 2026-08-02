@@ -145,4 +145,26 @@ test('the pilot page', async (t) => {
   await t.test('reports no page errors', () => {
     assert.deepEqual(errors, []);
   });
+
+  // The renderer catches exceptions thrown inside a layer callback so one bad
+  // frame cannot kill the page — which also means a broken draw is SILENT. This
+  // flies a full circuit and then asks. A negative cloud radius shipped once
+  // because nothing checked.
+  await t.test('nothing in the scene throws across a whole sortie', async () => {
+    await page.evaluate(() => {
+      const W = window.__WINGS;
+      W.reset();
+      W.hold({ pitch: 0, throttle: 1 });
+      W.tick(60);
+      W.hold({ pitch: 1, throttle: 1 });
+      W.tick(240);
+      W.hold({ pitch: -1, throttle: 1 });
+      W.tick(240);
+      W.hold({ pitch: 0, throttle: 0 });
+      W.tick(400);
+      W.release();
+    });
+    assert.equal(await page.evaluate(() => window.__WINGS.fatal()), null);
+    assert.deepEqual(errors, []);
+  });
 });
