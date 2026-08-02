@@ -52,3 +52,10 @@ test('an empty island hashes consistently', () => {
   const d = new DamageMap();
   assert.equal(d.hash('nowhere'), hashKeys([]));
 });
+
+test('the separator disambiguates element boundaries', () => {
+  // Without a separator byte both of these feed FNV the identical character
+  // stream "1,23", so the hash could not tell one destroyed tile from two.
+  assert.notEqual(hashKeys(['1,2', '3']), hashKeys(['1,23']));
+  assert.notEqual(hashKeys(['1', '2,3']), hashKeys(['12,3']));
+});
