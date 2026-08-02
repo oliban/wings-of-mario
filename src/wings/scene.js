@@ -9,7 +9,8 @@ import {
   drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark, ISLAND_W, ISLAND_H, DECK_THICK,
 } from './art/carrier.js';
 import { drawPlane } from './art/plane.js';
-import { drawFireball } from './art/ordnance.js';
+import { drawLandmass } from './art/land.js';
+import { drawBomb, drawTracer, drawRocket, drawFireball } from './art/ordnance.js';
 import { drawPanel, HUD_H } from './art/hud.js';
 
 // Composition only. Every mark on screen is made by a function in art/; this
@@ -43,6 +44,21 @@ export const PLAY_H = VIEW_H - HUD_H;
 // horizon, and the original keeps the water to a thin strip, so the vertical
 // framing is clamped here rather than by widening the simulation's world box.
 const SEA_BAND = 13;
+
+// LOOKING DOWN OVER LAND. The framing above centres the aeroplane in the play
+// area, which is right over open water — there is nothing below it worth
+// giving screen to. Over an island there is: the terrain surface is the last
+// three rows before the sea, and centred framing puts them behind the
+// instrument panel, so the pilot would be bombing ground he cannot see. So the
+// frame drops by LAND_BIAS as the aeroplane comes over an island, which brings
+// the whole shoreline into the play area and costs nothing but sky.
+//
+// It is a pure function of the aeroplane's POSITION, not an animation: no
+// state, no clock, and a screenshot at tick N frames identically however many
+// frames were drawn getting there. The fade is what stops it snapping at the
+// shoreline.
+const LAND_BIAS = 40;
+const LAND_FADE = 200;
 
 export const ISLAND_X = DECK_X1 - 150;
 const PARK_X = DECK_X1 - 74;
@@ -85,6 +101,39 @@ const ROLL = {
   MAX_STEPS: 8,
 };
 
+// How far the frame has dropped to show land: full over an island, nothing
+// out in open water, smooth across the LAND_FADE either side of the shore.
+function landBias(sim) {
+  const px = sim.plane.x + PLANE_W / 2;
+  let gap = Infinity;
+  for (const isle of sim.islands) {
+    gap = Math.min(gap, Math.max(0, isle.x0 - px, px - isle.x1));
+  }
+  if (!Number.isFinite(gap)) return 0;
+  const t = clamp(1 - gap / LAND_FADE, 0, 1);
+  return LAND_BIAS * t * t * (3 - 2 * t);
+}
+
+// A plane that is not mid-manoeuvre, in the shape state() publishes.
+const NOT_TURNING = { turning: false, turnProgress: 0, turnDir: 0 };
+
+// A detonation, as an effect. Size comes off the blast radius in TILES, so a
+// bomb's crater and its fireball are the same event at the same scale, and a
+// gun round (radius 0) is a spark rather than an explosion.
+function detonationFx(e) {
+  if (e.water) {
+    return { kind: 'splash', x: e.x, y: SEA_Y, t: 0, life: e.radius > 0 ? 40 : 16, size: e.radius };
+  }
+  return {
+    kind: 'fire',
+    x: e.x,
+    y: e.y,
+    t: 0,
+    life: e.radius > 0 ? 40 : 12,
+    size: e.radius > 0 ? 10 + e.radius * 7 : 7,
+  };
+}
+
 export class Scene {
   constructor() {
     this.fx = [];
@@ -97,6 +146,9 @@ export class Scene {
     this.roll = 0;
     this.rollVel = 0;
     this.rollTarget = 0;
+    this.rollBase = 0;
+    this.rollDir = 1;
+    this.wasTurning = false;
     this.prevAngle = 0;
   }
 
@@ -105,27 +157,48 @@ export class Scene {
   // the bank angle in radians the aeroplane is heading for — so replacing this
   // method replaces the manoeuvre without touching the animation.
   //
-  // Today it is inferred: the nose crossing the vertical is what reverses the
-  // heading, so each crossing adds a half turn, signed by the direction the
-  // nose is already sweeping. That makes a whole loop a whole barrel roll
-  // rather than a roll and an unroll.
+  // It used to be inferred from the nose crossing the vertical, which was the
+  // loop. Players change ends with the STALL TURN now, and the simulation owns
+  // that manoeuvre and publishes it (`turning`, `turnProgress`, `turnDir`), so
+  // this reads it instead of guessing: half a turn of bank, laid over the
+  // manoeuvre, from whatever bank the aeroplane was already settled at.
   //
-  // When the simulation owns the manoeuvre and publishes its progress, this
-  // whole body becomes the one line that reads it. For a progress in 0..1 that
-  // is `this.rollTarget = this.rollBase + Math.PI * progress * dir`, with
-  // `rollBase` latched to the settled bank when the manoeuvre begins; for a
-  // discrete began/ended pair it is the same `+= PI` this does now, just fired
-  // by the event instead of by the angle. Neither needs the spring changed.
-  reversalTarget(p, d) {
-    if ((Math.cos(this.prevAngle) >= 0) !== (Math.cos(p.angle) >= 0)) {
-      this.rollTarget += d < 0 ? -Math.PI : Math.PI;
+  // EASED, NOT LINEAR. `turnProgress` is linear in ticks but flight.js sweeps
+  // the heading through a smoothstep, so a roll driven off the raw progress
+  // leads the aeroplane at the ends of the turn and lags it in the middle —
+  // visibly, since the whole point of the animation is that the bank and the
+  // heading are the same manoeuvre. The same smoothstep is applied here. The
+  // alternative — deriving progress from `angle` itself, which is in sync by
+  // construction — was rejected because the sweep ends at exactly +/-PI, where
+  // angle wrapping makes the last tick of a westward turn indistinguishable
+  // from the first of an eastward one. `rollTracksTheNose` in the browser
+  // tests is what keeps this honest if flight.js ever changes its easing.
+  reversalTarget(turn) {
+    if (turn.turning) {
+      // Latch the bank the manoeuvre starts from, so a turn entered already
+      // banked (the lead below, or an unsettled previous turn) rolls a clean
+      // half turn from there rather than snapping to level first.
+      if (!this.wasTurning) this.rollBase = this.rollTarget;
+      this.rollDir = turn.turnDir;
+      const u = clamp(turn.turnProgress, 0, 1);
+      const eased = u * u * (3 - 2 * u);
+      this.rollTarget = this.rollBase + Math.PI * eased * turn.turnDir;
+    } else if (this.wasTurning) {
+      // The manoeuvre clears itself on the tick it completes, so the last
+      // progress the scene ever sees is one tick short of 1. Land the half
+      // turn exactly rather than a fraction of a degree short of it, or every
+      // reversal leaves a slowly accumulating error in which way up it is.
+      this.rollTarget = this.rollBase + Math.PI * this.rollDir;
+      this.rollBase = this.rollTarget;
     }
+    this.wasTurning = turn.turning;
   }
 
   // One tick of the roll. Called once per elapsed SIMULATION tick — never once
   // per rendered frame and never against a clock — so the attitude at sim tick
   // N is the same attitude however many frames the browser managed to draw.
-  stepRoll(p) {
+  // `turn` is the manoeuvre as the simulation published it in state().
+  stepRoll(p, turn = NOT_TURNING) {
     const a = p.angle;
     // On the deck the aeroplane is upright, facing right, by definition. This
     // is also what puts a respawn back the right way up without a special case.
@@ -133,19 +206,28 @@ export class Scene {
       this.roll = 0;
       this.rollVel = 0;
       this.rollTarget = 0;
+      this.rollBase = 0;
+      this.wasTurning = false;
       this.prevAngle = a;
       return;
     }
     const d = normalizeAngle(a - this.prevAngle);
-    if (Math.abs(d) > ROLL.TELEPORT) {
+    // A big jump in heading is a respawn or a teleport — UNLESS the simulation
+    // says a stall turn is in progress, in which case it is simply the
+    // manoeuvre, seen across dropped frames. Snapping there would abandon the
+    // half turn half way through it and then complete it again on the falling
+    // edge, so a stuttering frame rate would leave the aeroplane inverted.
+    if (!turn.turning && Math.abs(d) > ROLL.TELEPORT) {
       this.rollTarget = Math.cos(a) < 0 ? Math.PI : 0;
       this.roll = this.rollTarget;
+      this.rollBase = this.rollTarget;
       this.rollVel = 0;
+      this.wasTurning = !!turn.turning;
       this.prevAngle = a;
       // The jump is not a pitch rate, so it must not lead the bank either.
       return;
     }
-    this.reversalTarget(p, d);
+    this.reversalTarget(turn);
     this.prevAngle = a;
 
     // Anticipation, and the only other thing the bank reads: the rate the nose
@@ -162,19 +244,23 @@ export class Scene {
   consume(sim) {
     for (let i = this.consumed; i < sim.events.length; i++) {
       const e = sim.events[i];
-      if (e.type !== 'planeLost') continue;
-      const x = e.x + PLANE_W / 2;
-      const y = e.y + PLANE_H / 2;
-      this.fx.push(e.reason === 'sea'
-        ? { kind: 'splash', x, y: SEA_Y, t: 0, life: 42 }
-        : { kind: 'fire', x, y, t: 0, life: 46 });
+      if (e.type === 'planeLost') {
+        const x = e.x + PLANE_W / 2;
+        const y = e.y + PLANE_H / 2;
+        this.fx.push(e.reason === 'sea'
+          ? { kind: 'splash', x, y: SEA_Y, t: 0, life: 42 }
+          : { kind: 'fire', x, y, t: 0, life: 46 });
+        continue;
+      }
+      if (e.type === 'detonation') this.fx.push(detonationFx(e));
     }
     this.consumed = sim.events.length;
     // Catch up the roll one simulation tick at a time. A dropped frame costs
     // the intermediate headings, not the tick count, so a long stall settles to
     // the same attitude instead of leaving the aeroplane banked.
+    const turn = sim.turnState();
     const steps = Math.min(Math.max(sim.tick - this.tick, 0), ROLL.MAX_STEPS);
-    for (let i = 0; i < steps; i++) this.stepRoll(sim.plane);
+    for (let i = 0; i < steps; i++) this.stepRoll(sim.plane, turn);
     this.tick = sim.tick;
     for (const f of this.fx) f.t++;
     this.fx = this.fx.filter((f) => f.t < f.life);
@@ -191,7 +277,7 @@ export class Scene {
     // window, but the bottom of that window is under the panel, so the world is
     // centred on the middle of the PLAY area instead.
     const x = sim.cam.x + VIEW_W / 2 - vw / 2;
-    let y = sim.cam.y + VIEW_H / 2 - PLAY_H / 2 / WORLD_SCALE;
+    let y = sim.cam.y + VIEW_H / 2 - PLAY_H / 2 / WORLD_SCALE + landBias(sim);
     // Keep the sea a thin strip at the bottom however low the aeroplane goes.
     y = Math.min(y, SEA_Y - (PLAY_H - SEA_BAND) / WORLD_SCALE);
     return { vw, vh, cam: { x, y } };
@@ -211,6 +297,8 @@ export class Scene {
     r.draw(LAYER.SKY, world((ctx) => drawSky(ctx, f.vw, f.vh, cam.y, CEILING_Y, SEA_Y)));
     r.draw(LAYER.PARALLAX_FAR, world((ctx) => drawClouds(ctx, f.vw, f.vh, cam, this.tick)));
     r.draw(LAYER.BG_TILES, world((ctx) => this.drawShip(ctx, cam, f)));
+    r.draw(LAYER.TILES, world((ctx) => this.drawIslands(ctx, sim, cam, f)));
+    r.draw(LAYER.ENTITIES, world((ctx) => this.drawShots(ctx, sim, cam)));
     r.draw(LAYER.PLAYER, world((ctx) => this.drawAircraft(ctx, sim, cam)));
     r.draw(LAYER.OVERLAY, world((ctx) => {
       drawSea(ctx, f.vw, f.vh, cam, SEA_Y, this.tick);
@@ -242,6 +330,27 @@ export class Scene {
     drawBowWave(ctx, cam, DECK_X1 + 8, SEA_Y, this.tick);
   }
 
+  drawIslands(ctx, sim, cam, f) {
+    for (const isle of sim.islands) drawLandmass(ctx, isle, cam, f.vw, f.vh, this.tick, SEA_Y);
+  }
+
+  // Ordnance in the air, each round pointed along its own velocity — which is
+  // what makes a bomb visibly tip over onto its nose as it falls, and is the
+  // pilot's only cue about where it is actually going.
+  drawShots(ctx, sim, cam) {
+    for (const s of sim.shots) {
+      const x = s.x - cam.x;
+      const y = s.y - cam.y;
+      if (x < -24 || x > VIEW_W + 24) continue;
+      const a = Math.atan2(s.vy, s.vx);
+      if (s.kind === 'gun') drawTracer(ctx, x, y, a);
+      else if (s.kind === 'rocket') drawRocket(ctx, x, y, a, this.tick);
+      // The bomb art stands on its tail at angle 0, so it is rotated a quarter
+      // turn on top of the heading to point where it is going.
+      else drawBomb(ctx, x, y, a + Math.PI / 2);
+    }
+  }
+
   drawAircraft(ctx, sim, cam) {
     const p = sim.plane;
     if (p.mode === MODE.DOWN) return;
@@ -261,7 +370,7 @@ export class Scene {
       if (f.kind === 'splash') {
         drawSplash(ctx, x, f.y - cam.y + surfaceAt(f.x, this.tick), t);
       } else {
-        drawFireball(ctx, x, f.y - cam.y, t, 22);
+        drawFireball(ctx, x, f.y - cam.y, t, f.size == null ? 22 : f.size);
       }
     }
   }
@@ -275,7 +384,10 @@ export class Scene {
       deckX0: DECK_X0,
       deckX1: DECK_X1,
       seaY: SEA_Y,
-      islands: sim.islands,
+      // The radar plots islands as {x, x1} spans; Island calls its left edge
+      // x0, so the shape it wants is made here rather than teaching the
+      // instrument about a class it should not know.
+      islands: sim.islands.map((i) => ({ x: i.x0, x1: i.x1 })),
       fuel: clamp(p.fuel / FLIGHT.FUEL_MAX, 0, 1),
       verdict: v && v.inBox ? String(v.reason).toUpperCase() : '',
     }, this.tick);

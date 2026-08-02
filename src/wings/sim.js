@@ -1,8 +1,16 @@
-import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
-import { MODE, FLIGHT, createPlane, stepPlane, normalizeAngle } from './flight.js';
+import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds, layoutIslands } from './geo.js';
+import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import { landingVerdict, hitsHull, arrest, spotOnDeck } from './carrier.js';
+import { createLoadout, release, stepShot, detonate } from './ordnance.js';
+import { Island } from './island.js';
+import { getLevel } from '../data/levels/index.js';
 
 export const SQUADRON = 5;
+
+// The archipelago, as far as this plan takes it: two real levels dropped into
+// the ocean to fly over and bomb. The seeded, full-length chain is a later
+// plan — these two exist so the mechanics have somewhere to happen.
+export const ISLAND_LEVELS = ['1-1', '2-1'];
 
 // The whole flight sim, with no canvas anywhere in it: the renderer reads
 // this, never the other way round. That keeps every rule in here reachable
@@ -11,7 +19,8 @@ export const SQUADRON = 5;
 // Tasks 2 and 3 add islands and ordnance to this class. Nothing else changes.
 export class WingsSim {
   constructor(opts = {}) {
-    this.islands = [];
+    const ids = opts.islands || ISLAND_LEVELS;
+    this.islands = layoutIslands(ids.map(getLevel)).map((slot) => new Island(slot.level, slot.x));
     this.bounds = worldBounds(this.islands);
     this.squadron = opts.squadron != null ? opts.squadron : SQUADRON;
     this.plane = spotOnDeck(createPlane());
@@ -20,33 +29,138 @@ export class WingsSim {
     this.status = 'ready';
     this.lastVerdict = null;
     this.hookArmed = false;
+    // Ordnance in the air. The AMMUNITION is `loadout` and lives in
+    // ordnance.js's own object — there is deliberately no second counter here
+    // for the HUD to read, only the getters below onto that one object.
+    this.shots = [];
+    this.dropHeld = false;
+    this.fireHeld = false;
     this.cam = cameraFor(this.plane.x, this.plane.y, this.bounds);
     this.rearm();
   }
 
   rearm() {
     this.plane.fuel = FLIGHT.FUEL_MAX;
+    this.loadout = createLoadout();
+  }
+
+  // The HUD's ordnance counters, as views onto the one loadout.
+  get bombs() {
+    return this.loadout.bomb;
+  }
+
+  get rockets() {
+    return this.loadout.rocket;
   }
 
   emit(type, data) {
     this.events.push({ tick: this.tick, type, ...data });
   }
 
-  // One fixed 60.0988Hz step. input: { pitch, throttle, gear }
+  // One fixed 60.0988Hz step. input: { pitch, thrust, gear, drop, fire }
   step(input = {}) {
     if (this.status === 'over') return this;
     const p = this.plane;
     if (p.mode !== MODE.DOWN) stepPlane(p, input);
+    this.triggers(input);
+    this.stepShots();
     if (p.mode !== MODE.DOWN) this.checkPlane();
     this.cam = cameraFor(p.x + PLANE_W / 2, p.y + PLANE_H / 2, this.bounds);
     this.tick++;
     return this;
   }
 
+  // -------------------------------------------------------------------------
+  // Ordnance
+  // -------------------------------------------------------------------------
+
+  // Edge-triggered, on the rising edge of each input flag: holding the key
+  // down drops ONE bomb, not one per tick. The keyboard latch in
+  // pilot-main.js means a press and release that both land between two ticks
+  // still arrives here as one tick of `drop`, so a quick tap is never eaten.
+  triggers(input) {
+    const drop = !!input.drop;
+    const fire = !!input.fire;
+    const armed = this.plane.mode === MODE.AIR;
+    if (armed && drop && !this.dropHeld) this.launch('bomb');
+    if (armed && fire && !this.fireHeld) this.launch('gun');
+    this.dropHeld = drop;
+    this.fireHeld = fire;
+  }
+
+  // Spend one round and put it in the air. Running dry is normal, not a bug:
+  // release() returns null and spends nothing, and the pilot hears a click.
+  launch(kind) {
+    const shot = release(kind, this.plane, this.loadout);
+    if (!shot) {
+      this.emit('dryFire', { kind });
+      return null;
+    }
+    this.shots.push(shot);
+    this.emit('released', { kind, x: shot.x, y: shot.y, left: this.loadout[kind] });
+    return shot;
+  }
+
+  stepShots() {
+    if (!this.shots.length) return;
+    for (const s of this.shots) {
+      if (s.dead) continue;
+      stepShot(s);
+      // Old age, out over open water somewhere: no bang, it just stops being
+      // simulated. Only a shot that reached SOMETHING detonates.
+      if (s.dead) continue;
+      this.impact(s);
+    }
+    this.shots = this.shots.filter((s) => !s.dead);
+  }
+
+  // ordnance.js deliberately knows nothing about terrain, so the decision that
+  // a shot has hit something is made here. Land first, then the sea: a bomb
+  // dropped on a beach is on the beach.
+  impact(s) {
+    const isle = this.islandAt(s.x, s.y);
+    if (isle && isle.blocksAt(s.x, s.y)) return this.burst(s, isle, false);
+    if (s.y >= SEA_Y) return this.burst(s, null, true);
+    return null;
+  }
+
+  // The pilot never constructs a World: terrain damage is the island's own
+  // destroyed-set, and killing whatever was standing on it is Mario's client's
+  // job in a later plan. That split is why this calls island.blast() and not
+  // world.blast().
+  burst(s, isle, water) {
+    const hit = detonate(s);
+    const keys = isle && hit.terrain && hit.radius > 0 ? isle.blast(hit.x, hit.y, hit.radius) : [];
+    this.emit('detonation', {
+      kind: hit.kind,
+      x: hit.x,
+      y: water ? SEA_Y : hit.y,
+      radius: hit.radius,
+      water: !!water,
+      island: isle ? isle.id : null,
+      keys,
+    });
+    return keys;
+  }
+
+  islandAt(px, py) {
+    for (const isle of this.islands) if (isle.contains(px, py)) return isle;
+    return null;
+  }
+
+  // -------------------------------------------------------------------------
+
   checkPlane() {
     const p = this.plane;
     if (p.mode !== MODE.AIR) return;
     if (p.y + PLANE_H >= SEA_Y) return this.lose('sea');
+
+    // Flown into a hillside. The nose is the point that decides it, and
+    // blocksTile — solid or platform — is the predicate: a coin, a bush or a
+    // cloud is scenery an aeroplane passes straight through.
+    const nose = nosePoint(p);
+    const isle = this.islandAt(nose.x, nose.y);
+    if (isle && isle.blocksAt(nose.x, nose.y)) return this.lose('island');
 
     const verdict = landingVerdict(p);
     this.lastVerdict = verdict;
@@ -94,6 +208,26 @@ export class WingsSim {
     return true;
   }
 
+  // The stall turn, for the renderer to drive its roll from directly rather
+  // than inferring a manoeuvre from angle changes on its own. state() embeds
+  // this; the scene calls it once a frame instead of building a whole state
+  // object to read three numbers out of it.
+  //
+  // turning: is one in progress. turnProgress: 0..1 through it, LINEAR IN
+  // TICKS — the heading itself is eased, so anything animating alongside the
+  // manoeuvre has to ease this to match (see Scene.reversalTarget). turnDir:
+  // +1/-1, the sign of the angle sweep (matches turnDelta in flight.js) while
+  // turning, 0 otherwise.
+  turnState() {
+    const p = this.plane;
+    const turning = p.turnTicks != null;
+    return {
+      turning,
+      turnProgress: turning ? p.turnTicks / FLIGHT.STALL_TURN_TICKS : 0,
+      turnDir: turning ? Math.sign(p.turnDelta) : 0,
+    };
+  }
+
   state() {
     const p = this.plane;
     return {
@@ -111,14 +245,11 @@ export class WingsSim {
       squadron: this.squadron,
       status: this.status,
       cam: { ...this.cam },
-      // The stall turn, for the renderer to drive its roll from directly
-      // rather than inferring a manoeuvre from angle changes on its own.
-      // turning: is one in progress. turnProgress: 0..1 through it (0 outside
-      // one). turnDir: +1/-1, the sign of the angle sweep (matches turnDelta
-      // in flight.js) while turning, 0 otherwise.
-      turning: p.turnTicks != null,
-      turnProgress: p.turnTicks != null ? p.turnTicks / FLIGHT.STALL_TURN_TICKS : 0,
-      turnDir: p.turnTicks != null ? Math.sign(p.turnDelta) : 0,
+      // Stores and what is in the air. `loadout` is a copy of the one counter
+      // in ordnance.js, never a second one.
+      loadout: { ...this.loadout },
+      shots: this.shots.map((s) => ({ kind: s.kind, x: s.x, y: s.y, vx: s.vx, vy: s.vy, age: s.age })),
+      ...this.turnState(),
     };
   }
 }

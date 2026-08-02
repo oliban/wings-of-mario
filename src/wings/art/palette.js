@@ -150,6 +150,38 @@ export const PANEL = {
   danger: '#e0452a',
 };
 
+// ---------------------------------------------------------------------------
+// Islands — the only WARM large area in the scene, which is the whole job.
+// From two hundred pixels up an island has to read as land in one glance,
+// against a cyan sea and a blue sky, so it is separated by hue before it is
+// separated by value: earth, sand and vegetation, none of which appear
+// anywhere else. Every tone here sits below the sky's luma of 143 so the
+// aeroplane still owns the top of the value hierarchy.
+// ---------------------------------------------------------------------------
+export const LAND = {
+  earth: '#8a5a2b',
+  earthLit: '#a9733c',
+  earthDark: '#5b3717',
+  grass: '#3f8f2e',
+  grassLit: '#68bb45',
+  sand: '#c8a05a',
+  sandLit: '#e0c088',
+  rock: '#7f858e',
+  rockLit: '#a2a8b1',
+  rockDark: '#4b5058',
+  brick: '#a4522a',
+  brickLit: '#c2703c',
+  gold: '#d9a327',
+  goldLit: '#f4d268',
+  pipe: '#2e9e46',
+  pipeLit: '#57c86a',
+  timber: '#a46a2e',
+  scrub: '#2f7a2a',
+  scrubLit: '#4d9c3d',
+  surf: '#dff0ff',
+  shadow: 'rgba(6,26,48,0.35)',
+};
+
 export const ORD = {
   steel: '#aab6c4',
   steelLit: '#eef4fb',

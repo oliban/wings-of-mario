@@ -17,11 +17,25 @@ const KEYMAP = {
   ArrowRight: 'right',
   KeyG: 'gear',
   KeyR: 'respawn',
+  // Ordnance. Space/K drops a bomb, X/J fires the gun — the right hand on the
+  // arrows, the left on the weapons, and Space for the one you use most.
+  Space: 'drop',
+  KeyK: 'drop',
+  KeyX: 'fire',
+  KeyJ: 'fire',
 };
 
 const keys = Object.create(null);
 let scripted = null;
 let gear = true;
+
+// Weapon releases are edge-triggered, and a press-and-release can easily land
+// entirely between two simulation ticks (or several, on a dropped frame).
+// So a keydown LATCHES here and the latch is cleared once the tick that saw
+// it has run: a tap is never eaten, and holding the key still spends exactly
+// one round, because the browser's auto-repeat keydowns are filtered out
+// before they ever reach the latch.
+const pending = { drop: false, fire: false };
 
 function readKeys() {
   if (scripted) return scripted;
@@ -34,6 +48,8 @@ function readKeys() {
     // how that becomes acceleration, deceleration, or a stall turn depending
     // on which way the aeroplane is actually travelling.
     thrust: (keys.right ? 1 : 0) + (keys.left ? -1 : 0),
+    drop: pending.drop,
+    fire: pending.fire,
     gear,
   };
 }
@@ -56,6 +72,8 @@ class Pilot {
     window.addEventListener('keyup', (e) => this.key(e, false));
     window.addEventListener('blur', () => {
       for (const k of Object.keys(keys)) keys[k] = false;
+      pending.drop = false;
+      pending.fire = false;
     });
 
     this.loop = new GameLoop(() => this.update(), () => this.render());
@@ -69,6 +87,8 @@ class Pilot {
     this.scene = new Scene();
     gear = true;
     scripted = null;
+    pending.drop = false;
+    pending.fire = false;
     return this.sim;
   }
 
@@ -78,6 +98,8 @@ class Pilot {
     e.preventDefault();
     if (down && !keys[name]) {
       if (name === 'gear') gear = !gear;
+      if (name === 'drop') pending.drop = true;
+      if (name === 'fire') pending.fire = true;
       if (name === 'respawn' && this.sim.plane.mode === 'down') {
         this.sim.respawn();
       }
@@ -89,6 +111,10 @@ class Pilot {
     if (this.fatal) return;
     try {
       this.sim.step(readKeys());
+      // The tick has seen the latch; a second tick must not fire the same
+      // press again.
+      pending.drop = false;
+      pending.fire = false;
       // The model raises the hook on rotation and lowers it again on the wire.
       // Without mirroring that back, the next tick's input would re-assert the
       // player's stale toggle and the hook would never actually come up.
