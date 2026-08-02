@@ -6,7 +6,12 @@ export const BASE = `http://localhost:${PORT}`;
 
 // One static server and one browser shared by a whole test file. The game has
 // no build step, so `http-server` over the repo root is the entire deployment.
-export async function boot() {
+// `opts.path` and `opts.global` pick the entry point. The defaults are Mario's
+// index.html and window.__GAME; the pilot boots pilot.html and window.__WINGS.
+// One harness, because two would drift apart.
+export async function boot(opts = {}) {
+  const path = opts.path || '/';
+  const global = opts.global || '__GAME';
   const server = spawn(
     'npx',
     ['http-server', '-p', String(PORT), '-c-1', '--silent', '.'],
@@ -21,13 +26,14 @@ export async function boot() {
     const errors = [];
     page.on('pageerror', (e) => errors.push(e.message));
 
-    await page.goto(BASE + '/');
-    // goto resolves before the ES module graph has run, so __GAME does not
-    // exist yet. Wait for it before touching it, or every test races the loader.
-    await page.waitForFunction(() => window.__GAME && window.__GAME.ready, null, {
+    await page.goto(BASE + path);
+    // goto resolves before the ES module graph has run, so the control API does
+    // not exist yet. Wait for it before touching it, or every test races the
+    // loader.
+    await page.waitForFunction((g) => window[g] && window[g].ready, global, {
       timeout: 30000,
     });
-    await page.evaluate(() => window.__GAME.ready);
+    await page.evaluate((g) => window[g].ready, global);
 
     return { server, browser, page, errors };
   } catch (err) {
