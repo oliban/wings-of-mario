@@ -281,6 +281,46 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
     assert.equal(r.livesAfter, r.livesBefore - 1, 'blast death did not cost a life');
   });
 
+  // A bomb is lethal at ANY power level. Unlike a Goomba's touch, a blast
+  // must not merely demote big/fire Mario to small — it has to kill him
+  // outright, the same as falling in a pit does regardless of power.
+  for (const power of ['big', 'fire']) {
+    await t.test(`a blast kills ${power} Mario outright, not just a power-down`, async () => {
+      const r = await page.evaluate(async (pwr) => {
+        await window.__GAME.loadLevel('1-1');
+        window.__GAME.teleport(20, 11);
+        window.__GAME.tick(10);
+        const w = window.__GAME.world;
+        const p = w.player;
+        window.__GAME.setPower(pwr);
+        const powerBefore = p.power;
+        window.__GAME.blast(p.x + p.w / 2, p.y + p.h / 2, 2);
+        return { powerBefore, dead: !!p.dead, state: p.state, powerAfter: p.power };
+      }, power);
+      assert.notEqual(r.powerBefore, 'small', `setPower('${power}') did not actually power Mario up`);
+      assert.ok(
+        r.dead && r.state === 'dying',
+        `blast demoted ${power} Mario (power ${r.powerBefore} -> ${r.powerAfter}) instead of killing him`
+      );
+    });
+  }
+
+  await t.test('star power is the one deliberate exception — a starred Mario survives a direct blast', async () => {
+    const r = await page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      window.__GAME.teleport(20, 11);
+      window.__GAME.tick(10);
+      const w = window.__GAME.world;
+      const p = w.player;
+      window.__GAME.setPower('star');
+      const starBefore = p.starFrames > 0;
+      window.__GAME.blast(p.x + p.w / 2, p.y + p.h / 2, 2);
+      return { starBefore, dead: !!p.dead, state: p.state };
+    });
+    assert.ok(r.starBefore, "setPower('star') did not actually grant star power");
+    assert.ok(!r.dead && r.state === 'normal', 'a starred Mario died to a blast — star is supposed to survive it');
+  });
+
   await t.test('destroyTiles does not kill — only a live blast does', async () => {
     const r = await page.evaluate(async () => {
       await window.__GAME.loadLevel('1-1');

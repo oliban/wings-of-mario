@@ -18,7 +18,7 @@ import { SCREEN_W, SCREEN_H, TILE, LAYER } from '../core/constants.js';
 import { Camera } from './camera.js';
 import { BlockSystem, tileKey } from './blocks.js';
 import { blastTiles, parseTileKey } from '../wings/blast.js';
-import { enemyDie } from './entities/index.js';
+import { enemyDie, isStarPlayer } from './entities/index.js';
 
 // ---------------------------------------------------------------------------
 // Cross-agent modules. Every one of these is authored in parallel, so each is
@@ -1557,11 +1557,25 @@ export class World {
       if (!inBlast(e)) continue;
       enemyDie(e, 'fireball', null, 0);
     }
+    // A blast on Mario is lethal at any power — small, big or fire alike — not
+    // a power-down, so this calls die() directly rather than routing through
+    // hurtPlayer()/hurt() (which would only demote a big or fire Mario, the
+    // same as a Goomba's touch). die() has no gate of its own (that's how a
+    // pit fall or the level timeout already kill through any power state and
+    // any mercy-invulnerability window), so the only check made here is for
+    // star: star stays a deliberate exception, not an oversight — it is a
+    // core contract of the game we're homaging, the design spec (§5) means
+    // for a star Mario to threaten the plane, and it gives Mario earned,
+    // temporary counterplay against an otherwise one-sided weapon. The
+    // post-hit mercy window (invulnFrames) is NOT checked, so it does not
+    // accidentally make Mario bomb-proof for a second after every hit.
     const roster = this.players && this.players.length ? this.players : [this.player];
     for (const p of roster) {
       if (!p || p.dead) continue;
       if (!inBlast(p)) continue;
-      this.hurtPlayer(p);
+      if (isStarPlayer(p)) continue;
+      if (typeof p.die === 'function') p.die('bomb');
+      else this.hurtPlayer(p);
     }
   }
 

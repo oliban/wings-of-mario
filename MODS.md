@@ -77,16 +77,27 @@ client without re-killing entities locally, so the two had to stay separate.
 Enemies die through the engine's own `enemyDie()` helper (imported from
 `./entities/index.js`), the same one every fire/shell/star kill already uses,
 so they get the normal corpse animation, poof and sound; a bomb kill is
-scored like a fire kill but with `score: 0` — no enemy-specific point value
-is knowable from a blast radius alone, so none is awarded. The player goes
-through the existing `hurtPlayer()` → `hurt()` → `die()` chain used by every
-enemy touch, which is why star power and the post-hit invulnerability window
-both protect against a blast exactly as they do against a Goomba: that
-protection is a property of `canBeHurt()`/`starFrames`, not of the kill site,
-and duplicating it in `_blastKill` would just be a second copy to keep in
-sync. Only active (already-activated) entities are checked, since a dormant
-enemy the camera hasn't reached yet isn't really "there".
-- Added `import { enemyDie } from './entities/index.js';`
+scored like a fire kill but with `score: 0` — the pilot, not Mario, is the
+one killing them, and Mario has no score in this design, so awarding him
+points for enemies the bomber killed would be rewarding him for being
+bombed.
+
+A blast on Mario is **lethal at any power** — small, big or fire — so this
+calls his `die()` directly rather than routing through `hurtPlayer()`/
+`hurt()` (the standard enemy-touch path, which only demotes a big/fire
+Mario, same as a Goomba's touch; a first pass here used that path and it was
+wrong — see git history). `die()` has no gate of its own, which is how a pit
+fall or the level timeout already kill through any power state and any
+mercy-invulnerability window (`invulnFrames`) — a blast's mercy exposure is
+the same: none. **Star power is the one deliberate exception** and survives
+a blast untouched, checked via the same `isStarPlayer()` every enemy's
+`starTouch()` already uses: invincibility is a core contract of the game
+being homaged, the design spec (§5) means a star Mario to be a real threat
+to the plane, and it gives Mario earned, temporary counterplay against an
+otherwise one-sided weapon. Only active (already-activated) entities are
+checked for the enemy side, since a dormant enemy the camera hasn't reached
+yet isn't really "there".
+- Added `import { enemyDie, isStarPlayer } from './entities/index.js';`
 - Added `_blastKill()` and the two lines in `blast()` that call it.
 
 **Known, deliberate gaps left for the networking plan:**
