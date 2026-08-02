@@ -186,6 +186,63 @@ test('a sustained pitch reverses heading from due east to due west, at more than
   }
 });
 
+// Angle is the plane's ONLY heading state (this is a vertical-plane sim, no
+// yaw): reversing direction means passing through vertical, and arrival
+// heading west looks identical whether you got there over the top of a loop
+// or under the bottom of one. There is no separate "inverted" flag to consult.
+// So "pulling back climbs" cannot mean "pitch:+1 always climbs" — held through
+// a full loop that would have to reverse the turn rate exactly at vertical,
+// which is the discontinuity the user actually feels. It means: whichever
+// arrow is, at the plane's CURRENT attitude, the one that raises the nose
+// toward the top of the loop it is presently flying. Flying east that is Up
+// (pitch:+1); flying west — arrived at via looping — that is Down (pitch:-1).
+function vyFor(angle, pitch) {
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle, gear: false });
+  stepPlane(p, { throttle: 1, pitch });
+  return p.vy;
+}
+
+test('pulling back climbs when heading east', () => {
+  // +Y is down, so climbing means vy < 0.
+  assert.ok(vyFor(0, 1) < 0, 'pitch:+1 (Up) should climb when facing east');
+});
+
+test('pulling back climbs when heading west', () => {
+  // Reached by looping (the only way to reverse in a vertical-plane sim), so
+  // this is genuinely the "back stick" input at that attitude, not Up.
+  assert.ok(vyFor(Math.PI, -1) < 0, 'pitch:-1 (Down) should climb when facing west');
+  assert.ok(vyFor(Math.PI, 1) > 0, 'pitch:+1 (Up) dives when facing west — completing the loop, not reversing it');
+});
+
+test('the pitch response does not discontinuously flip sign through vertical', () => {
+  // A naive `if (facing west) invert pitch` flips which arrow climbs at a hard
+  // cos(angle)==0 cutoff. That does not just move the crossing point around —
+  // it makes vertical an unstable equilibrium: a plane exactly at the boundary
+  // gets rotated back toward the boundary every tick from either side, so
+  // holding a key never carries it through vertical at all. Prove that a
+  // single held pitch instead sweeps the angle straight through, tick over
+  // tick, in one rotational direction the whole way.
+  const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 2.7, angle: -Math.PI / 2 + 0.3, gear: false });
+  let prev = p.angle;
+  let crossedVertical = false;
+  for (let i = 0; i < 20; i++) {
+    stepPlane(p, { throttle: 1, pitch: 1 });
+    const step = normalizeAngle(p.angle - prev);
+    assert.ok(step < -1e-6, `angle stalled or reversed at tick ${i} (angle ${p.angle.toFixed(4)}, prev ${prev.toFixed(4)}) — got stuck at the vertical boundary`);
+    if (Math.sign(Math.cos(prev)) !== Math.sign(Math.cos(p.angle))) crossedVertical = true;
+    prev = p.angle;
+  }
+  assert.ok(crossedVertical, 'test premise: the plane should have swept through vertical (cos(angle) sign change) in this window');
+
+  // Also check the instantaneous response is proportional to how far off
+  // vertical the plane is — near zero right at vertical, not near its peak —
+  // which is the other signature of a smooth crossing rather than a snap.
+  const response = (angle) => vyFor(angle, 1) - vyFor(angle, -1);
+  const atVertical = Math.abs(response(-Math.PI / 2));
+  const peak = Math.abs(response(0));
+  assert.ok(atVertical < peak * 0.05, `response at vertical (${atVertical.toFixed(4)}) should be near zero, not near the peak (${peak.toFixed(4)})`);
+});
+
 test('the model is deterministic', () => {
   const tape = [];
   for (let i = 0; i < 400; i++) tape.push({ throttle: i % 7 ? 1 : 0, pitch: ((i >> 4) % 3) - 1 });

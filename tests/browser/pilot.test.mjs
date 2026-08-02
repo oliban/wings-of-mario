@@ -142,6 +142,77 @@ test('the pilot page', async (t) => {
     assert.ok(worst < 512, `the plane reached screen x ${worst.toFixed(0)} and left the view`);
   });
 
+  // Real keydown/keyup, not W.hold() — this is the one test that proves the
+  // physical arrow the player presses, not just the pitch value, is the one
+  // that lifts the nose. Angle is the plane's only heading state (no separate
+  // "inverted" flag), so heading west only ever happens after looping, and
+  // that is genuinely the situation the user described: turn around, and Down
+  // — not Up — is now the one that climbs.
+  await t.test('the arrow that lifts the plane reverses with heading', async () => {
+    await page.evaluate(() => window.__WINGS.reset());
+
+    // Take off and climb to a safe altitude, level and facing east, entirely
+    // under autopilot — mirrors "holding Up turns the plane by looping it
+    // round" above, which established this same climb-out. ArrowRight stays
+    // physically held throughout so the throttle lever is already open once
+    // control is handed to the real keyboard below.
+    await page.keyboard.down('ArrowRight');
+    await page.evaluate(() => {
+      const W = window.__WINGS;
+      const norm = (a) => {
+        const t = Math.PI * 2;
+        let v = a % t;
+        if (v > Math.PI) v -= t;
+        if (v <= -Math.PI) v += t;
+        return v;
+      };
+      const toward = (tgt) => {
+        const d = norm(W.state().angle - tgt);
+        W.hold({ pitch: d > 0.02 ? 1 : d < -0.02 ? -1 : 0, throttle: 1, gear: false });
+        W.tick(1);
+      };
+      W.hold({ throttle: 1, pitch: 0 });
+      while (W.state().mode !== 'air') W.tick(1);
+      while (W.state().y > 260) toward(-0.55);
+      for (let i = 0; i < 150; i++) toward(0);
+      W.release();
+    });
+
+    // Facing east: the real Up arrow should climb.
+    await page.keyboard.down('ArrowUp');
+    let before = await page.evaluate(() => window.__WINGS.state());
+    await page.evaluate(() => window.__WINGS.tick(15));
+    let after = await page.evaluate(() => window.__WINGS.state());
+    assert.ok(Math.cos(before.angle) > 0.9, 'test premise: should be level and facing east');
+    assert.ok(after.y < before.y, 'the real Up arrow did not climb while facing east');
+    await page.keyboard.up('ArrowUp');
+
+    // Loop round to face west, the only way this sim can reverse heading.
+    await page.evaluate(() => {
+      const W = window.__WINGS;
+      W.hold({ pitch: 1, throttle: 1, gear: false });
+      let ticks = 0;
+      while (Math.cos(W.state().angle) > -0.99 && ticks < 200) {
+        W.tick(1);
+        ticks++;
+      }
+      W.hold({ pitch: 0, throttle: 1, gear: false });
+      for (let i = 0; i < 20; i++) W.tick(1);
+      W.release();
+    });
+
+    // Facing west: the real Down arrow — not Up — should now be the one that
+    // climbs.
+    await page.keyboard.down('ArrowDown');
+    before = await page.evaluate(() => window.__WINGS.state());
+    await page.evaluate(() => window.__WINGS.tick(15));
+    after = await page.evaluate(() => window.__WINGS.state());
+    assert.ok(Math.cos(before.angle) < -0.9, 'test premise: should be facing west');
+    assert.ok(after.y < before.y, 'the real Down arrow did not climb while facing west, after turning around');
+    await page.keyboard.up('ArrowDown');
+    await page.keyboard.up('ArrowRight');
+  });
+
   await t.test('reports no page errors', () => {
     assert.deepEqual(errors, []);
   });
