@@ -1,192 +1,245 @@
-import { makeSprite, Anim } from '../../core/gfx.js';
+import { SEA } from './palette.js';
 
-// The sea. Three things have to be true at once: it has to be obviously below
-// the aircraft, it has to be obviously moving, and it has to be darker the
-// further down you look, so a dive reads as a dive. So it is built the same way
-// as the sky — discrete bands with dithered seams — with two swell layers and
-// breaking crests laid on top of the surface itself.
-export const SEA_BANDS = [
-  '#2f8fbe', // 0 the lit strip right at the horizon
-  '#1f76a8',
-  '#155f91',
-  '#0e4a78',
-  '#09375e',
-  '#052644', // 5 deep
+// The sea. In the original it is one flat cyan bar 11% of the play area tall —
+// the proportion is a design decision and we keep it, the flatness is a hardware
+// limitation and we do not. It sits in the middle of the value hierarchy: darker
+// than the aircraft, far brighter than the sky.
+//
+// The old version's waterline was a repeating square-wave glyph that read as a
+// mechanical zigzag border. This one is three superimposed sine trains at
+// different periods, amplitudes and speeds, so the surface never repeats over
+// any distance the player can see and the crest pattern beats against itself.
+// All of it is a pure function of world x and the simulation tick, so a
+// screenshot at tick N is reproducible.
+
+// Wave trains: [wavelength, amplitude, speed]. Coprime-ish wavelengths so the
+// combined profile has a period of several thousand pixels.
+const TRAINS = [
+  [97, 2.1, 0.30],
+  [53, 1.3, 0.55],
+  [23, 0.7, 0.95],
 ];
 
-const SEAM_ROWS = [
-  '0001000100010001',
-  '0101010101010101',
-  '1010101010101010',
-  '1110111011101110',
-];
-
-export const SEA_SEAMS = [];
-for (let i = 0; i < SEA_BANDS.length - 1; i++) {
-  SEA_SEAMS.push(
-    makeSprite(SEAM_ROWS, [SEA_BANDS[i], SEA_BANDS[i + 1]], { name: `wings.sea.seam${i}` })
-  );
+// Surface height at world x, in pixels above mean sea level.
+export function surfaceAt(x, tick) {
+  let h = 0;
+  for (const [len, amp, spd] of TRAINS) {
+    h += amp * Math.sin(((x - tick * spd) / len) * Math.PI * 2);
+  }
+  return h;
 }
 
-export const SEA_SEAM_H = SEAM_ROWS.length;
+// Slope, used to decide which faces are lit and where crests break.
+function slopeAt(x, tick) {
+  let d = 0;
+  for (const [len, amp, spd] of TRAINS) {
+    d += ((amp * Math.PI * 2) / len) * Math.cos(((x - tick * spd) / len) * Math.PI * 2);
+  }
+  return d;
+}
 
-// Light from the upper left again: the western face of every swell is the lit
-// one (slot 4), the eastern face falls away into slot 1, and only the very top
-// of a breaking crest gets foam.
-export const SEA_PAL = [
-  '#04182f', // 0 trough
-  '#0a3560', // 1 shaded face
-  '#12558a', // 2 body
-  '#1c74b0', // 3 lit body
-  '#3ea3d8', // 4 sunlit face
-  '#a8dcf5', // 5 foam shadow
-  '#eafaff', // 6 foam
-];
+let bodyGrad = null;
+let bodyKey = '';
 
-// The near swell: a 24px-period wave train drawn at the surface, two periods
-// wide so it tiles seamlessly. It is one sprite scrolled by tick rather than a
-// flipbook, because a swell travels — it does not stand still and change shape.
-export const SWELL_NEAR = makeSprite(
-  [
-    '.........4444444.................4444444........',
-    '.......342222222333............342222222333.....',
-    '....33423222222222233.......33423222222222233...',
-    '333422322222222222222333333422322222222222222333',
-    '222322222111111122222222222322222111111122222222',
-    '222222211111111111122222222222211111111111122222',
-    '222211111000000011111222222211111000000011111222',
-    '111111100000000000011111111111100000000000011111',
-    '111100000000000000000111111100000000000000000111',
-  ],
-  SEA_PAL,
-  { name: 'wings.swell.near' }
-);
+// The water below the surface: a bright saturated band at the top falling away
+// fast into near-black. The fast fall is what keeps the *bright* part of the sea
+// to about a tenth of the play area even when the camera is low.
+function seaGradient(ctx, top, bottom) {
+  const key = `${top}|${bottom}`;
+  if (key === bodyKey) return bodyGrad;
+  const g = ctx.createLinearGradient(0, top, 0, bottom);
+  g.addColorStop(0, SEA.surface);
+  g.addColorStop(0.16, SEA.shallow);
+  g.addColorStop(0.38, SEA.mid);
+  g.addColorStop(0.68, SEA.deep);
+  g.addColorStop(1, SEA.abyss);
+  bodyGrad = g;
+  bodyKey = key;
+  return g;
+}
 
-// The far swell runs behind the near one at a lower amplitude and a slower
-// speed, which is what gives the surface depth instead of one stamped ribbon.
-export const SWELL_FAR = makeSprite(
-  [
-    '..............3333333333333.............',
-    '.......333333322222222222223333333......',
-    '3333333222222322222222222222222222333333',
-    '2222223222222222222222222222222222222222',
-    '2222222222222211111111111112222222222222',
-    '2222222111111111111111111111111111222222',
-  ],
-  SEA_PAL,
-  { name: 'wings.swell.far' }
-);
+// Trace the surface across the viewport, one sample every two pixels. Two is
+// enough at this amplitude and halves the path cost.
+function surfacePath(ctx, cam, viewW, top, tick, close, bottom) {
+  ctx.beginPath();
+  ctx.moveTo(-2, top + surfaceAt(cam.x - 2, tick));
+  for (let sx = 0; sx <= viewW + 2; sx += 2) {
+    ctx.lineTo(sx, top + surfaceAt(cam.x + sx, tick));
+  }
+  if (close) {
+    ctx.lineTo(viewW + 2, bottom);
+    ctx.lineTo(-2, bottom);
+    ctx.closePath();
+  }
+}
 
-// A crest breaking. Three frames, held long enough to read: the cap builds,
-// tips over, and washes out into a patch of foam.
-export const CREST = new Anim(
-  [
-    makeSprite(
-      ['........', '...66...', '..6556..', '.455444.', '44444444'],
-      SEA_PAL, { name: 'wings.crest.a' }
-    ),
-    makeSprite(
-      ['...66...', '..6666..', '.655556.', '4554444.', '44444444'],
-      SEA_PAL, { name: 'wings.crest.b' }
-    ),
-    makeSprite(
-      ['..6..6..', '.666666.', '6555555.', '45544444', '44444444'],
-      SEA_PAL, { name: 'wings.crest.c' }
-    ),
-  ],
-  14
-);
+export function drawSea(ctx, viewW, viewH, cam, seaY, tick) {
+  const top = seaY - cam.y;
+  if (top > viewH) return;
 
-// Spray thrown by something hitting the water. Four frames, no loop: it goes up
-// hard, spreads, and falls back.
-export const SPRAY_PAL = [
-  '#0a3560', // 0 water shadow
-  '#3ea3d8', // 1 water
-  '#a8dcf5', // 2 foam shadow
-  '#eafaff', // 3 foam
-];
+  // The body of the water, clipped to the live surface so the horizon is a
+  // moving line rather than a ruled edge.
+  ctx.save();
+  surfacePath(ctx, cam, viewW, top, tick, true, viewH + 2);
+  ctx.fillStyle = seaGradient(ctx, top, top + 70);
+  ctx.fill();
 
-export const SPRAY = new Anim(
-  [
-    makeSprite(
-      [
-        '..............',
-        '..............',
-        '..............',
-        '.....3223.....',
-        '....332233....',
-        '...33222233...',
-        '..0322112230..',
-        '..0011111100..',
-      ],
-      SPRAY_PAL, { name: 'wings.spray.a' }
-    ),
-    makeSprite(
-      [
-        '.....3..3.....',
-        '....3.32.3....',
-        '...33.223.33..',
-        '..3322112233..',
-        '.33221111223..',
-        '.32211111122..',
-        '0322111111230.',
-        '0011111111100.',
-      ],
-      SPRAY_PAL, { name: 'wings.spray.b' }
-    ),
-    makeSprite(
-      [
-        '..3........3..',
-        '.3..3....3..3.',
-        '3..32......23.',
-        '..3221....1223',
-        '.322111..11223',
-        '32211111111122',
-        '02211111111120',
-        '00111111111100',
-      ],
-      SPRAY_PAL, { name: 'wings.spray.c' }
-    ),
-    makeSprite(
-      [
-        '..............',
-        '.3..........3.',
-        '..2........2..',
-        '...2......2...',
-        '..22.1..1..22.',
-        '.22111111112..',
-        '.02111111120..',
-        '..0011111100..',
-      ],
-      SPRAY_PAL, { name: 'wings.spray.d' }
-    ),
-  ],
-  6,
-  false
-);
+  // A brighter sheet just under the surface, so the top of the water catches the
+  // light the way a real sea does.
+  ctx.clip();
+  ctx.globalAlpha = 0.55;
+  const sheen = ctx.createLinearGradient(0, top - 2, 0, top + 9);
+  sheen.addColorStop(0, SEA.crest);
+  sheen.addColorStop(1, 'rgba(95,220,255,0)');
+  ctx.fillStyle = sheen;
+  ctx.fillRect(0, top - 4, viewW, 14);
+  ctx.restore();
 
-// The wake a hull drags behind it: a churned, foaming band that scrolls under
-// the ship. Two frames, so the froth boils.
-export const WAKE = new Anim(
-  [
-    makeSprite(
-      [
-        '..66....66...6..66......66..6...',
-        '.6556..6556.655.6556...6556.65..',
-        '55445545544554455445555544554455',
-        '44444444444444444444444444444444',
-      ],
-      SEA_PAL, { name: 'wings.wake.a' }
-    ),
-    makeSprite(
-      [
-        '.6..66...66..66...6..66...66..6.',
-        '655.6556.6556.6556.65.6556.6556.',
-        '45544554455445544554455445544554',
-        '44444444444444444444444444444444',
-      ],
-      SEA_PAL, { name: 'wings.wake.b' }
-    ),
-  ],
-  8
-);
+  // Sunlit faces: every stretch of surface whose slope is rising to the left
+  // catches the sun and gets a bright edge. This is what gives the swell form
+  // rather than being a wobbly line.
+  ctx.save();
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = SEA.crest;
+  ctx.globalAlpha = 0.85;
+  ctx.beginPath();
+  let drawing = false;
+  for (let sx = -2; sx <= viewW + 2; sx += 2) {
+    const wx = cam.x + sx;
+    const lit = slopeAt(wx, tick) > 0.05;
+    const y = top + surfaceAt(wx, tick);
+    if (lit && !drawing) {
+      ctx.moveTo(sx, y);
+      drawing = true;
+    } else if (lit) {
+      ctx.lineTo(sx, y);
+    } else {
+      drawing = false;
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
+
+  // Breaking crests. A crest breaks where the surface is near its maximum and
+  // the slope is turning over; the test is on world x and tick alone, so the
+  // same crest breaks at the same place on every run.
+  ctx.save();
+  ctx.fillStyle = SEA.foam;
+  for (let sx = -8; sx <= viewW + 8; sx += 3) {
+    const wx = cam.x + sx;
+    const h = surfaceAt(wx, tick);
+    if (h < 3.0) continue;
+    const d = slopeAt(wx, tick);
+    if (d > -0.02 || d < -0.42) continue;
+    const y = top + h;
+    const w = 1.6 + (h - 3.0) * 2.2;
+    ctx.globalAlpha = Math.min(0.95, (h - 3.0) * 1.5);
+    ctx.beginPath();
+    ctx.ellipse(sx, y - 0.5, w, 1.0, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha *= 0.45;
+    ctx.fillStyle = SEA.foamShade;
+    ctx.fillRect(sx - w, y + 0.4, w * 2, 0.7);
+    ctx.fillStyle = SEA.foam;
+  }
+  ctx.restore();
+}
+
+// The churn a hull drags behind it: a band of foam that scrolls aft and fades
+// out with distance from the stern.
+export function drawWake(ctx, cam, sternX, seaY, tick, len = 150) {
+  const top = seaY - cam.y;
+  ctx.save();
+  for (let i = 0; i < 46; i++) {
+    const t = i / 45;
+    const wx = sternX - t * len - ((tick * 0.9) % 8);
+    const sx = wx - cam.x;
+    const y = top + surfaceAt(wx, tick);
+    const fade = (1 - t) ** 1.5;
+    ctx.globalAlpha = 0.7 * fade;
+    ctx.fillStyle = SEA.foam;
+    const w = 2.2 + fade * 3.4;
+    ctx.beginPath();
+    ctx.ellipse(sx, y - 0.4, w, 1.1 + fade, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.35 * fade;
+    ctx.fillStyle = SEA.foamShade;
+    ctx.fillRect(sx - w, y + 1, w * 2, 1.4 + fade * 1.6);
+  }
+  ctx.restore();
+}
+
+// The wave a hull pushes ahead of itself.
+export function drawBowWave(ctx, cam, bowX, seaY, tick) {
+  const top = seaY - cam.y + surfaceAt(bowX, tick);
+  const sx = bowX - cam.x;
+  const pulse = 0.75 + 0.25 * Math.sin(tick * 0.11);
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  ctx.fillStyle = SEA.foam;
+  ctx.beginPath();
+  ctx.moveTo(sx - 16, top + 2);
+  ctx.quadraticCurveTo(sx - 4, top - 4.5 * pulse, sx + 9, top + 1.5);
+  ctx.quadraticCurveTo(sx - 2, top + 3.5, sx - 16, top + 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = SEA.foamShade;
+  ctx.fillRect(sx - 18, top + 2.4, 30, 1.6);
+  ctx.restore();
+}
+
+// Spray thrown by something hitting the water. `t` runs 0..1 over the effect.
+export function drawSplash(ctx, x, y, t) {
+  if (t >= 1) return;
+  ctx.save();
+
+  // The column: a short, wide burst of water thrown straight up at the point of
+  // impact, collapsing back within the first third of the effect.
+  const col = Math.max(0, 1 - t * 2.6);
+  if (col > 0) {
+    const g = ctx.createLinearGradient(0, y - 26 * col, 0, y + 2);
+    g.addColorStop(0, 'rgba(234,255,255,0)');
+    g.addColorStop(0.35, SEA.foam);
+    g.addColorStop(1, SEA.foamShade);
+    ctx.fillStyle = g;
+    ctx.globalAlpha = 0.95 * col;
+    ctx.beginPath();
+    ctx.moveTo(x - 10 * col - 2, y + 2);
+    ctx.quadraticCurveTo(x - 4 * col, y - 24 * col, x, y - 27 * col);
+    ctx.quadraticCurveTo(x + 4 * col, y - 24 * col, x + 10 * col + 2, y + 2);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Droplets thrown out of it on a fixed fan, so the same crash throws the same
+  // spray every time.
+  ctx.fillStyle = SEA.foam;
+  for (let i = 0; i < 30; i++) {
+    const k = (i * 2654435761) >>> 0;
+    const a = -Math.PI / 2 + ((i / 29) - 0.5) * 2.5 + ((k % 20) - 10) / 90;
+    const speed = 30 + (k >> 5) % 44;
+    const px = x + Math.cos(a) * speed * t;
+    const py = y + Math.sin(a) * speed * t + 78 * t * t;
+    if (py > y + 1) continue;
+    const r = (2.4 - 1.5 * t) * (0.55 + ((k >> 11) % 9) / 10);
+    ctx.globalAlpha = 0.95 * (1 - t);
+    ctx.beginPath();
+    ctx.arc(px, py, Math.max(0.4, r), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // The ring washing out from the impact.
+  ctx.globalAlpha = 0.7 * (1 - t) ** 1.4;
+  ctx.strokeStyle = SEA.foam;
+  ctx.lineWidth = 2.2 * (1 - t) + 0.5;
+  ctx.beginPath();
+  ctx.ellipse(x, y + 1, 5 + 46 * t, 1.2 + 7 * t, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalAlpha = 0.35 * (1 - t);
+  ctx.fillStyle = SEA.foamShade;
+  ctx.beginPath();
+  ctx.ellipse(x, y + 1, 5 + 34 * t, 1 + 5 * t, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}

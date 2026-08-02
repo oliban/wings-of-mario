@@ -1,72 +1,121 @@
-import { makeSprite, Anim } from '../../core/gfx.js';
+import { ORD } from './palette.js';
 
-// Everything the aircraft drops, fires or turns into. Kept apart from the sea
-// and the sky because it belongs to neither.
-export const ORD_PAL = [
-  '#0a0a10', // 0 outline
-  '#3a4050', // 1 shadowed steel
-  '#6d7484', // 2 steel
-  '#b6bccb', // 3 lit steel
-  '#e8eef8', // 4 specular
-  '#ffd66b', // 5 tracer core
-];
+// Ordnance and the things it leaves behind. Small, but they are the only warm
+// colours in the scene apart from the squadron flash, so they carry a lot of
+// weight against a near-black sky.
 
-export const BOMB = makeSprite(
-  ['.00.', '0430', '0330', '0230', '0220', '0220', '0110', '0110', '.010', '0.0.'],
-  ORD_PAL,
-  { name: 'wings.bomb' }
-);
+export function drawBomb(ctx, x, y, angle = 0) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  const g = ctx.createLinearGradient(-3, 0, 3, 0);
+  g.addColorStop(0, ORD.steelLit);
+  g.addColorStop(0.45, ORD.steel);
+  g.addColorStop(1, ORD.steelDark);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(0, -7);
+  ctx.quadraticCurveTo(3, -4, 3, 1);
+  ctx.lineTo(2, 6);
+  ctx.lineTo(-2, 6);
+  ctx.lineTo(-3, 1);
+  ctx.quadraticCurveTo(-3, -4, 0, -7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = ORD.steelDark;
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(-3.2, 8);
+  ctx.lineTo(0, 4.5);
+  ctx.lineTo(3.2, 8);
+  ctx.stroke();
+  ctx.restore();
+}
 
-export const ROCKET = makeSprite(
-  ['..0000000000', '.04332222210', '043222222110', '.0111111110.'],
-  ORD_PAL,
-  { name: 'wings.rocket' }
-);
+export function drawRocket(ctx, x, y, angle, tick) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  const g = ctx.createLinearGradient(0, -2, 0, 2);
+  g.addColorStop(0, ORD.steelLit);
+  g.addColorStop(1, ORD.steelDark);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.moveTo(7, 0);
+  ctx.lineTo(1, -2);
+  ctx.lineTo(-6, -2);
+  ctx.lineTo(-6, 2);
+  ctx.lineTo(1, 2);
+  ctx.closePath();
+  ctx.fill();
+  // Exhaust plume, flickering off the tick.
+  const f = 0.7 + 0.3 * Math.sin(tick * 0.8);
+  const p = ctx.createLinearGradient(-6, 0, -6 - 11 * f, 0);
+  p.addColorStop(0, ORD.flameCore);
+  p.addColorStop(0.4, ORD.flameHot);
+  p.addColorStop(1, 'rgba(164,71,15,0)');
+  ctx.fillStyle = p;
+  ctx.beginPath();
+  ctx.moveTo(-6, -2.2);
+  ctx.lineTo(-6 - 11 * f, 0);
+  ctx.lineTo(-6, 2.2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
 
-export const TRACER = makeSprite(['0550', '0430'], ORD_PAL, { name: 'wings.tracer' });
+export function drawTracer(ctx, x, y, angle) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  const g = ctx.createLinearGradient(-6, 0, 3, 0);
+  g.addColorStop(0, 'rgba(255,214,107,0)');
+  g.addColorStop(1, ORD.tracer);
+  ctx.strokeStyle = g;
+  ctx.lineWidth = 1.4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-6, 0);
+  ctx.lineTo(3, 0);
+  ctx.stroke();
+  ctx.restore();
+}
 
-export const PUFF_PAL = [
-  '#1a0c06', '#5c2408', '#a4470f', '#e2842a', '#ffd06b', '#fff4c4',
-];
+// A fireball, `t` running 0..1 over its life: a white flash that blooms into
+// flame and collapses into smoke. Deterministic — the lobe layout is a fixed
+// function of the lobe index, never of a random number.
+export function drawFireball(ctx, x, y, t, size = 20) {
+  if (t >= 1) return;
+  ctx.save();
+  ctx.translate(x, y);
+  const grow = size * (0.35 + 1.25 * Math.min(1, t * 2.2));
+  const fade = 1 - t;
 
-// One puff. An explosion is several of these placed around the crater rim at
-// deterministic angles, which reads bigger than any single sprite and costs one
-// drawing instead of a sheet.
-export const PUFF = makeSprite(
-  [
-    '...0000...',
-    '.00544400.',
-    '0544433300',
-    '0544333220',
-    '.054332200',
-    '..00322000',
-    '...00000..',
-  ],
-  PUFF_PAL,
-  { name: 'wings.puff' }
-);
+  if (t < 0.18) {
+    ctx.globalAlpha = 1 - t / 0.18;
+    ctx.fillStyle = ORD.flameCore;
+    ctx.beginPath();
+    ctx.arc(0, 0, grow * 0.9, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
-// The fireball an aircraft leaves behind. Four frames, no loop: it flashes
-// white, blooms, and collapses into smoke.
-export const FIREBALL = new Anim(
-  [
-    makeSprite(
-      ['..0000..', '.055550.', '05544550', '05444450', '05444450', '05544550', '.055550.', '..0000..'],
-      PUFF_PAL, { name: 'wings.fireball.a' }
-    ),
-    makeSprite(
-      ['.004400.', '04433440', '04332340', '43222234', '43222234', '04332340', '04433440', '.004400.'],
-      PUFF_PAL, { name: 'wings.fireball.b' }
-    ),
-    makeSprite(
-      ['.0.33.0.', '03322330', '.3211123', '32111112', '32111112', '.3211123', '03322330', '.0.33.0.'],
-      PUFF_PAL, { name: 'wings.fireball.c' }
-    ),
-    makeSprite(
-      ['..0..0..', '0.2112.0', '.211..12', '2.1....1', '1....1.2', '21..112.', '0.2112.0', '..0..0..'],
-      PUFF_PAL, { name: 'wings.fireball.d' }
-    ),
-  ],
-  6,
-  false
-);
+  for (let i = 0; i < 7; i++) {
+    const a = (i / 7) * Math.PI * 2 + t * 1.1;
+    const d = grow * (0.28 + ((i * 29) % 40) / 100);
+    const r = grow * (0.34 + ((i * 17) % 30) / 100) * (1 - t * 0.35);
+    const lg = ctx.createRadialGradient(
+      Math.cos(a) * d, Math.sin(a) * d - grow * t * 0.5, 0,
+      Math.cos(a) * d, Math.sin(a) * d - grow * t * 0.5, r
+    );
+    const hot = t < 0.45;
+    lg.addColorStop(0, hot ? ORD.flameHot : ORD.flameLow);
+    lg.addColorStop(0.55, hot ? ORD.flameMid : ORD.smoke);
+    lg.addColorStop(1, 'rgba(30,26,32,0)');
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = lg;
+    ctx.beginPath();
+    ctx.arc(Math.cos(a) * d, Math.sin(a) * d - grow * t * 0.5, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}

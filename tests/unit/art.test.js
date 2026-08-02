@@ -1,277 +1,260 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync, readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
 import {
-  PLANE_PAL, PLANE_FRAMES, PLANE_ATTITUDES, PLANE_ANIM, PLANE_ANGLE_STEP,
-  PLANE_PIVOT, GEAR, HOOK, GEAR_MOUNTS, HOOK_MOUNT,
+  SKY, SEA, SHIP, PLANE, PANEL, CLOUD, ORD, ENSIGN, luma,
+} from '../../src/wings/art/palette.js';
+import {
+  PLANE_LEN, PLANE_ASPECT, PLANE_HEIGHT, LANDMARKS, drawPlane, drawPlaneBody, drawParkedPlane,
 } from '../../src/wings/art/plane.js';
+import { surfaceAt, drawSea, drawWake, drawBowWave, drawSplash } from '../../src/wings/art/sea.js';
+import { drawSky, drawStars, drawClouds } from '../../src/wings/art/sky.js';
 import {
-  CARRIER_PAL, C_DECK, C_DECK_PLAIN, C_DECK_WIRE, C_DECK_STRIPE, C_CATWALK,
-  C_CATWALK_LAMP, C_HULL, C_WATERLINE, C_BOW, C_STERN, C_ISLAND, C_RADAR, BOW_WAVE,
+  ISLAND_H, ISLAND_W, DECK_THICK, drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark,
 } from '../../src/wings/art/carrier.js';
-import {
-  SKY_BANDS, SKY_SEAMS, SEAM_H, CLOUD_PAL, CLOUD_S, CLOUD_M, CLOUD_L, SCUD,
-  CLOUD_DECKS, SCUD_BANK,
-} from '../../src/wings/art/sky.js';
-import {
-  SEA_BANDS, SEA_SEAMS, SEA_PAL, SWELL_NEAR, SWELL_FAR, CREST, SPRAY, WAKE,
-} from '../../src/wings/art/sea.js';
-import { ORD_PAL, BOMB, ROCKET, TRACER, PUFF, FIREBALL } from '../../src/wings/art/ordnance.js';
-import { HUD_PAL, HUD_PLATE, FUEL_BEZEL, SQUADRON_PIP, HOOK_PIP_UP, HOOK_PIP_DOWN } from '../../src/wings/art/hud.js';
+import { HUD_H, CELLS, drawPanel } from '../../src/wings/art/hud.js';
+import { drawBomb, drawRocket, drawTracer, drawFireball } from '../../src/wings/art/ordnance.js';
+import { VIEW_W, VIEW_H, DECK_X0, DECK_X1, DECK_Y, SEA_Y } from '../../src/wings/geo.js';
 
-// Flatten anything the art modules export into a flat list of [name, sprite].
-function collect(label, v, out = []) {
-  if (!v) return out;
-  if (Array.isArray(v)) v.forEach((e, i) => collect(`${label}[${i}]`, e, out));
-  else if (v.frames) v.frames.forEach((e, i) => collect(`${label}#${i}`, e, out));
-  else if (v.rows && v.palette) out.push([label, v]);
-  return out;
-}
+// The pilot view is no longer a pixel-art pipeline, so there are no sprite grids
+// to check for ragged rows. What replaced those tests are the things the new
+// approach actually has to get right: the VALUE HIERARCHY and HUE SEPARATION the
+// whole look depends on, the AIRCRAFT PROPORTIONS measured off the original, the
+// layout proportions, and determinism.
 
-const ALL = [];
-for (const [name, v] of Object.entries({
-  PLANE_FRAMES, GEAR, HOOK,
-  C_DECK, C_DECK_PLAIN, C_DECK_WIRE, C_DECK_STRIPE, C_CATWALK, C_CATWALK_LAMP,
-  C_HULL, C_WATERLINE, C_BOW, C_STERN, C_ISLAND, C_RADAR, BOW_WAVE,
-  SKY_SEAMS, CLOUD_S, CLOUD_M, CLOUD_L, SCUD,
-  SEA_SEAMS, SWELL_NEAR, SWELL_FAR, CREST, SPRAY, WAKE,
-  BOMB, ROCKET, TRACER, PUFF, FIREBALL,
-  HUD_PLATE, FUEL_BEZEL, SQUADRON_PIP, HOOK_PIP_UP, HOOK_PIP_DOWN,
-})) collect(name, v, ALL);
+const ART_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../src/wings/art');
+const ART_FILES = readdirSync(ART_DIR).filter((f) => f.endsWith('.js'));
 
-const PALETTES = [
-  ['PLANE_PAL', PLANE_PAL], ['CARRIER_PAL', CARRIER_PAL], ['CLOUD_PAL', CLOUD_PAL],
-  ['SEA_PAL', SEA_PAL], ['ORD_PAL', ORD_PAL], ['HUD_PAL', HUD_PAL],
+// ---------------------------------------------------------------------------
+// Colour
+// ---------------------------------------------------------------------------
+
+const ALL_COLOURS = [
+  ['SKY', SKY], ['SEA', SEA], ['SHIP', SHIP], ['PLANE', PLANE],
+  ['PANEL', PANEL], ['CLOUD', CLOUD], ['ORD', ORD], ['ENSIGN', ENSIGN],
 ];
 
-test('every sprite is rectangular and uses only legal pixel chars', () => {
-  assert.ok(ALL.length > 60, `only found ${ALL.length} sprites`);
-  for (const [name, s] of ALL) {
-    assert.ok(s.rows.length, `${name} has no rows`);
-    for (const row of s.rows) {
-      assert.equal(row.length, s.w, `${name} has a ragged row`);
-      assert.match(row, /^[0-9a-f.]+$/, `${name} uses an illegal pixel char`);
+test('every colour in the scheme is an opaque six-digit hex', () => {
+  for (const [name, group] of ALL_COLOURS) {
+    for (const [k, v] of Object.entries(group)) {
+      assert.equal(typeof v, 'string', `${name}.${k} is not a colour`);
+      assert.match(v, /^#[0-9a-f]{6}$/i, `${name}.${k} = ${v}`);
     }
   }
 });
 
-test('every pixel char has a palette entry', () => {
-  for (const [name, s] of ALL) {
-    for (const row of s.rows) {
-      for (const ch of row) {
-        if (ch === '.') continue;
-        assert.ok(s.palette[parseInt(ch, 16)], `${name} uses slot ${ch} with no colour`);
-      }
-    }
+// The single most important relationship in the whole look: the aircraft is the
+// brightest thing on screen and the sky is the darkest. The old version had this
+// exactly backwards — a dark plane on a pale sky — and that is why it vanished
+// into the water.
+test('the value hierarchy runs sky darkest, sea middle, aircraft brightest', () => {
+  const skyMax = Math.max(...Object.values(SKY).map(luma));
+  const seaBody = [SEA.surface, SEA.shallow, SEA.mid].map(luma);
+  const planeHi = luma(PLANE.spec);
+
+  assert.ok(skyMax < 40, `the sky tops out at luma ${skyMax.toFixed(0)}, which is not a night sky`);
+  for (const v of seaBody) {
+    assert.ok(v > skyMax, 'every lit part of the sea must be brighter than the whole sky');
   }
+  assert.ok(luma(SEA.surface) > 100 && luma(SEA.surface) < 175,
+    `the sea surface is luma ${luma(SEA.surface).toFixed(0)}, wanted the middle of the range`);
+  assert.ok(planeHi > 230, 'the aircraft highlight must be the brightest thing in the frame');
+  assert.ok(planeHi > luma(SEA.surface) + 60, 'the aircraft must separate from the water by value');
+  assert.ok(luma(PLANE.light) > luma(SEA.surface),
+    'the airframe is light-on-dark: even its mid tone outranks the sea');
 });
 
-// ARCHITECTURE.md section 2: 4-10 slots per sprite, every one a distinct colour.
-test('palettes are ramps of four to ten distinct colours', () => {
-  for (const [name, pal] of PALETTES) {
-    const used = pal.filter(Boolean);
-    assert.ok(used.length >= 4, `${name} has only ${used.length} colours`);
-    assert.ok(used.length <= 10, `${name} has ${used.length} colours, over the budget of 10`);
-    assert.equal(new Set(used).size, used.length, `${name} repeats a colour`);
-    for (const c of used) assert.match(c, /^#[0-9a-f]{6}$/i, `${name} has a non-hex entry ${c}`);
-  }
-});
+// Hue separation is why a still of the original is readable at a glance. The
+// specific magenta was a palette accident; owning a hue nobody else uses is not.
+test('sky, sea, ship and aircraft each own a hue nobody else uses', () => {
+  const hue = (hex) => {
+    const n = parseInt(hex.slice(1), 16);
+    const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    if (d < 1e-6) return -1;
+    let h;
+    if (mx === r) h = ((g - b) / d) % 6;
+    else if (mx === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    return ((h * 60) + 360) % 360;
+  };
+  const sat = (hex) => {
+    const n = parseInt(hex.slice(1), 16);
+    const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    const mx = Math.max(...c), mn = Math.min(...c);
+    return mx === 0 ? 0 : (mx - mn) / mx;
+  };
 
-// Anti-aliasing is forbidden, so no colour anywhere may be partly transparent.
-test('no colour is semi-transparent', () => {
-  for (const [name, pal] of PALETTES) {
-    for (const c of pal.filter(Boolean)) {
-      assert.equal(c.length, 7, `${name} entry ${c} carries an alpha channel`);
-    }
-  }
-  for (const c of [...SKY_BANDS, ...SEA_BANDS]) assert.match(c, /^#[0-9a-f]{6}$/i);
-});
-
-// Slots the scene paints with fillStyle rather than with pixels: the fuel
-// needle is a rectangle drawn under the bezel's cut-out, so its three colours
-// live in the palette but never appear in a sprite grid.
-const FILL_ONLY = new Map([[HUD_PAL, new Set([6, 7, 8])]]);
-
-test('every declared palette slot is actually reached by some pixel', () => {
-  const reached = new Map();
-  for (const [, s] of ALL) {
-    let set = reached.get(s.palette);
-    if (!set) reached.set(s.palette, (set = new Set()));
-    for (const row of s.rows) for (const ch of row) if (ch !== '.') set.add(parseInt(ch, 16));
-  }
-  for (const [name, pal] of PALETTES) {
-    const set = [...reached.entries()].find(([p]) => p === pal)?.[1];
-    if (!set) continue; // seam palettes are built per-boundary, not shared
-    for (let i = 0; i < pal.length; i++) {
-      if (FILL_ONLY.get(pal)?.has(i)) continue;
-      if (pal[i]) assert.ok(set.has(i), `${name} declares slot ${i} that no pixel uses`);
-    }
-  }
+  const sea = hue(SEA.surface);
+  const ship = hue(SHIP.hull);
+  const sky = hue(SKY.horizon);
+  // The sea is cyan, the ship is violet, and they are nowhere near each other.
+  assert.ok(sea > 170 && sea < 210, `sea hue ${sea.toFixed(0)} should be cyan`);
+  assert.ok(ship > 240 && ship < 300, `ship hue ${ship.toFixed(0)} should be violet`);
+  assert.ok(Math.abs(sea - ship) > 60, 'the ship must not sit in the sea\'s hue family');
+  assert.ok(Math.abs(sky - ship) > 30 || luma(SKY.horizon) < 40,
+    'sky and ship may share a hue only if the sky is dark enough not to compete');
+  // The aircraft is the one neutral object, so it reads against all three.
+  assert.ok(sat(PLANE.light) < 0.2, 'the airframe should be near-neutral, not another blue');
+  assert.ok(sat(PLANE.flash) > 0.6, 'the squadron flash is the one warm accent and must be warm');
 });
 
 // ---------------------------------------------------------------------------
 // The aircraft
 // ---------------------------------------------------------------------------
 
-test('the plane is drawn by hand at thirteen attitudes, 15 degrees apart', () => {
-  assert.equal(PLANE_ANGLE_STEP, 15);
-  assert.equal(PLANE_ATTITUDES.length, 13);
-  assert.equal((PLANE_ATTITUDES.length - 1) * PLANE_ANGLE_STEP, 180);
-  for (const pair of PLANE_FRAMES) assert.equal(pair.length, 2, 'each attitude needs two prop phases');
+test('the aircraft is drawn to the original\'s proportions', () => {
+  assert.ok(Math.abs(PLANE_ASPECT - 2.7) < 0.01, 'anything squarer than 2.7:1 reads as a bird');
+  assert.ok(Math.abs(PLANE_HEIGHT - PLANE_LEN / PLANE_ASPECT) < 1e-6);
+  assert.equal(LANDMARKS.nose - LANDMARKS.tail, PLANE_LEN, 'length must be nose to tail');
 });
 
-test('every attitude is the same square canvas and rotates about the same pivot', () => {
-  for (const pair of PLANE_FRAMES) {
-    for (const s of pair) {
-      assert.equal(s.w, 32);
-      assert.equal(s.h, 32);
-    }
-  }
-  assert.ok(PLANE_PIVOT.x > 0 && PLANE_PIVOT.x < 32);
-  assert.ok(PLANE_PIVOT.y > 0 && PLANE_PIVOT.y < 32);
+// The one finding from the reference comparison that no amount of rendering
+// quality can buy: the mass belongs at the back.
+test('the vertical fin is the tallest point of the aircraft, and it is at the tail', () => {
+  const { nose, finTopY, finTopX, canopyPeakY, spineY, bellyY, wingLowY } = LANDMARKS;
+  assert.ok(finTopY < canopyPeakY, 'the fin must rise above the canopy');
+  assert.ok(finTopY < spineY, 'the fin must rise above the spine');
+  const aft = (nose - finTopX) / PLANE_LEN;
+  assert.ok(aft > 0.9 && aft <= 1.02, `the fin top is ${(aft * 100).toFixed(0)}% aft, wanted ~95%`);
+  assert.ok(bellyY > 0 && wingLowY > bellyY, 'the wing must hang below the belly to be its own mass');
 });
 
-test('no attitude is a duplicate of another — thirteen frames means thirteen drawings', () => {
-  const seen = new Set();
-  for (const pair of PLANE_FRAMES) {
-    const key = pair[0].rows.join('|');
-    assert.ok(!seen.has(key), 'two attitudes are the same picture');
-    seen.add(key);
-  }
+test('the canopy sits a little past halfway back, as it does on a Hellcat', () => {
+  const aft = (LANDMARKS.nose - LANDMARKS.canopyPeakX) / PLANE_LEN;
+  assert.ok(aft > 0.5 && aft < 0.66, `the canopy is ${(aft * 100).toFixed(0)}% aft, wanted ~56%`);
 });
 
-test('the propeller actually animates', () => {
-  for (let i = 0; i < PLANE_FRAMES.length; i++) {
-    assert.notDeepEqual(
-      PLANE_FRAMES[i][0].rows, PLANE_FRAMES[i][1].rows,
-      `attitude ${i} has two identical prop phases`
-    );
-  }
-  assert.ok(PLANE_ANIM.duration >= 2 && PLANE_ANIM.duration <= 16, 'a prop blur should be fast');
-});
-
-// Rotation preserves area. If an attitude carries materially less ink than the
-// others, part of the aeroplane fell off the edge of its 32x32 canvas — which
-// is silent at runtime and obvious here.
-test('no attitude has lost part of the aeroplane off the canvas', () => {
-  const ink = PLANE_FRAMES.map((p) => p[0].rows.join('').replace(/\./g, '').length);
-  const lo = Math.min(...ink);
-  const hi = Math.max(...ink);
-  assert.ok(lo > 150, `an attitude has only ${lo} pixels of aircraft in it`);
-  assert.ok((hi - lo) / hi < 0.08, `attitude ink spread ${lo}..${hi} suggests a clipped frame`);
-});
-
-test('the gear and the hook are separate parts with mounts to hang them on', () => {
-  assert.ok(GEAR.h > GEAR.w, 'an undercarriage leg is taller than it is wide');
-  assert.equal(GEAR_MOUNTS.length, 2, 'a taildragger still has two main legs');
-  assert.ok(HOOK_MOUNT.x < 0, 'the hook belongs at the tail, which is aft of the pivot');
-  assert.ok(HOOK.w > 1 && HOOK.h > 1);
+// The original's aircraft is 15% of its screen width, but its screen IS the
+// carrier. Ours is a 320px ship in a 512px window, so the honest comparison is
+// aircraft against ship — and that is the ratio this asserts.
+test('the aircraft is scaled against the ship, not against the window', () => {
+  const deck = DECK_X1 - DECK_X0;
+  const ratio = PLANE_LEN / deck;
+  assert.ok(ratio > 0.13 && ratio < 0.2,
+    `the aircraft is ${(ratio * 100).toFixed(1)}% of the flight deck, wanted ~15%`);
+  assert.ok(PLANE_LEN / VIEW_W > 0.09, 'it still has to own the frame, not be a speck');
 });
 
 // ---------------------------------------------------------------------------
 // The ship
 // ---------------------------------------------------------------------------
 
-test('the ship is built from 16px tiles so she can be any length', () => {
-  for (const [name, s] of [
-    ['C_DECK', C_DECK], ['C_DECK_PLAIN', C_DECK_PLAIN], ['C_DECK_WIRE', C_DECK_WIRE],
-    ['C_DECK_STRIPE', C_DECK_STRIPE], ['C_CATWALK', C_CATWALK], ['C_CATWALK_LAMP', C_CATWALK_LAMP],
-    ['C_HULL', C_HULL], ['C_WATERLINE', C_WATERLINE],
-  ]) assert.equal(s.w, 16, `${name} must be one tile wide`);
+// The island is what makes a side-on box read as a flat-top, and in the original
+// it is more than half the play area tall. Ours was 13%, which is why it read as
+// a barge with a shed on it.
+test('the island is about half the play area tall', () => {
+  const play = VIEW_H - HUD_H;
+  const f = ISLAND_H / play;
+  assert.ok(f > 0.4 && f < 0.62, `the island is ${(f * 100).toFixed(0)}% of the play area, wanted ~50%`);
+  assert.ok(ISLAND_H > ISLAND_W, 'an island is taller than it is long');
+  assert.ok(DECK_THICK > 0 && DECK_THICK < 12, 'the flight deck is a plate, not a storey');
 });
 
-test('the bow and the stern are the same height and taper opposite ways', () => {
-  assert.equal(C_BOW.h, C_STERN.h);
-  assert.equal(C_BOW.w, C_STERN.w);
-  const ink = (row) => [...row].map((c, i) => (c === '.' ? -1 : i)).filter((i) => i >= 0);
-  const bowTop = Math.max(...ink(C_BOW.rows[10]));
-  const bowLow = Math.max(...ink(C_BOW.rows[40]));
-  assert.ok(bowLow < bowTop, 'the stem should rake aft as it goes down');
-  const sternTop = Math.min(...ink(C_STERN.rows[10]));
-  const sternLow = Math.min(...ink(C_STERN.rows[40]));
-  assert.ok(sternLow > sternTop, 'the transom should tuck forward as it goes down');
-});
-
-test('the deck is marked, wired and lit', () => {
-  const paint = (s) => s.rows.join('').includes('6');
-  assert.ok(paint(C_DECK), 'the landing area needs a painted centreline');
-  assert.ok(paint(C_DECK_STRIPE), 'the touchdown zone needs stripes');
-  assert.ok(C_DECK_WIRE.rows[0].includes('5'), 'an arrestor wire should stand proud of the deck');
-  assert.ok(C_CATWALK_LAMP.rows.join('').includes('8'), 'the catwalk needs a lamp');
-  assert.ok(!C_CATWALK.rows.join('').includes('8'), 'the unlit catwalk must not carry one');
-});
-
-test('the island stands above the deck and carries a mast', () => {
-  assert.ok(C_ISLAND.h > 24, 'the superstructure should be a superstructure');
-  assert.ok(C_ISLAND.rows.join('').includes('8'), 'the bridge needs lit ports');
-  assert.equal(C_RADAR.frames.length, 4, 'the aerial should sweep, not sit');
+test('the ship fits between the deck and the waterline the simulation gives it', () => {
+  assert.ok(DECK_Y < SEA_Y, 'the deck is above the water');
+  assert.ok(DECK_Y - ISLAND_H > 0, 'the island must not run off the top of the world');
 });
 
 // ---------------------------------------------------------------------------
-// Sky and sea
+// The panel
 // ---------------------------------------------------------------------------
 
-test('the sky and the sea are banded, and every band is darker than the last', () => {
-  const lum = (c) => parseInt(c.slice(1, 3), 16) + parseInt(c.slice(3, 5), 16) + parseInt(c.slice(5, 7), 16);
-  assert.equal(SKY_SEAMS.length, SKY_BANDS.length - 1);
-  assert.equal(SEA_SEAMS.length, SEA_BANDS.length - 1);
-  assert.equal(SEAM_H, 4);
-  for (let i = 1; i < SKY_BANDS.length; i++) {
-    assert.ok(lum(SKY_BANDS[i]) > lum(SKY_BANDS[i - 1]), 'the sky should pale toward the horizon');
-  }
-  for (let i = 1; i < SEA_BANDS.length; i++) {
-    assert.ok(lum(SEA_BANDS[i]) < lum(SEA_BANDS[i - 1]), 'the sea should darken with depth');
-  }
+test('the panel is bottom-anchored, boxed, and about a sixth of the screen', () => {
+  const f = HUD_H / VIEW_H;
+  assert.ok(f > 0.12 && f < 0.21, `the panel is ${(f * 100).toFixed(0)}% of the screen`);
 });
 
-test('both swells tile seamlessly and run at different periods', () => {
-  assert.equal(SWELL_NEAR.w % 2, 0);
-  assert.notEqual(SWELL_NEAR.w, SWELL_FAR.w, 'two identical periods do not beat against each other');
-  for (const s of [SWELL_NEAR, SWELL_FAR]) {
-    // Column 0 must continue from the last column, or the joint shows as a seam.
-    for (let y = 0; y < s.h; y++) {
-      const a = s.rows[y][0] === '.';
-      const b = s.rows[y][s.w - 1] === '.';
-      assert.equal(a, b, `${s.name} does not tile at row ${y}`);
-    }
+test('the panel cells tile the width without overlapping', () => {
+  const cells = Object.entries(CELLS).sort((a, b) => a[1][0] - b[1][0]);
+  let prev = 0;
+  for (const [name, [x0, x1]] of cells) {
+    assert.ok(x0 >= prev, `${name} overlaps the cell to its left`);
+    assert.ok(x1 > x0, `${name} has no width`);
+    prev = x1;
   }
+  assert.ok(prev <= VIEW_W, 'the panel runs off the right of the screen');
+  assert.ok(prev > VIEW_W * 0.95, 'the panel should fill the width, not float in the middle');
 });
 
-test('nothing on the water is static', () => {
-  assert.equal(CREST.frames.length, 3);
-  assert.equal(WAKE.frames.length, 2);
-  assert.equal(SCUD.frames.length, 2);
-  assert.notDeepEqual(WAKE.frames[0].rows, WAKE.frames[1].rows);
-  assert.notDeepEqual(SCUD.frames[0].rows, SCUD.frames[1].rows);
-  assert.notDeepEqual(BOW_WAVE.frames[0].rows, BOW_WAVE.frames[1].rows);
-});
-
-test('an impact throws spray and a wreck burns, and neither loops', () => {
-  assert.equal(SPRAY.loop, false);
-  assert.equal(FIREBALL.loop, false);
-  assert.ok(SPRAY.frames.length >= 3);
-  assert.ok(FIREBALL.frames.length >= 3);
-});
-
-test('the cloud decks are literals, so the sky is the same on every run', () => {
-  assert.ok(CLOUD_DECKS.length >= 12);
-  assert.ok(SCUD_BANK.length >= 6);
-  for (const c of CLOUD_DECKS) {
-    assert.ok(Number.isFinite(c.x) && Number.isFinite(c.y));
-    assert.ok(c.m > 0 && c.m < 1, 'a parallax factor outside (0,1) is not parallax');
-    assert.ok(['s', 'm', 'l'].includes(c.s));
+test('the panel carries the instruments that make a still read as a flight game', () => {
+  for (const k of ['stores', 'alt', 'radar', 'fuel', 'score']) {
+    assert.ok(CELLS[k], `the panel is missing its ${k} cell`);
   }
-  const depths = new Set(CLOUD_DECKS.map((c) => c.m));
-  assert.ok(depths.size >= 3, 'clouds need more than one depth to read as depth');
+  // The two round dials should be round: their cells have to be at least as wide
+  // as the panel is tall, or the gauge collapses into an ellipse.
+  for (const k of ['alt', 'fuel']) {
+    const w = CELLS[k][1] - CELLS[k][0];
+    assert.ok(w >= HUD_H - 8, `the ${k} dial has no room to be round`);
+  }
+  assert.ok(CELLS.radar[1] - CELLS.radar[0] > 90, 'the radar needs to be readable, not a token');
 });
 
 // ---------------------------------------------------------------------------
-// Panel
+// The sea
 // ---------------------------------------------------------------------------
 
-test('the panel is a tiled plate with a cut-out for the fuel gauge', () => {
-  assert.equal(HUD_PLATE.w, 16, 'the plate is tiled across the screen');
-  assert.ok(HUD_PLATE.h >= 24);
-  assert.ok(FUEL_BEZEL.rows[4].includes('.'), 'the gauge well must be see-through');
-  assert.notDeepEqual(HOOK_PIP_UP.rows, HOOK_PIP_DOWN.rows, 'the hook indicator has to move');
-  assert.ok(SQUADRON_PIP.w >= 5);
+test('the sea surface is a pure function of world x and tick', () => {
+  for (const [x, t] of [[0, 0], [137, 41], [-260, 900], [5000, 12345]]) {
+    assert.equal(surfaceAt(x, t), surfaceAt(x, t), 'surfaceAt is not deterministic');
+  }
+  // It has to actually move, and it has to move differently in different places.
+  assert.notEqual(surfaceAt(100, 0), surfaceAt(100, 30));
+  assert.notEqual(surfaceAt(100, 0), surfaceAt(160, 0));
+});
+
+test('the swell is a real seaway, not one repeating glyph', () => {
+  // Three trains beating against each other should not repeat inside a screen.
+  let matches = 0;
+  for (let x = 0; x < 512; x++) {
+    if (Math.abs(surfaceAt(x, 0) - surfaceAt(x + 97, 0)) < 0.01) matches++;
+  }
+  assert.ok(matches < 60, 'the surface repeats on the longest wavelength — that is one train, not three');
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (let x = 0; x < 4000; x++) {
+    const h = surfaceAt(x, 7);
+    lo = Math.min(lo, h);
+    hi = Math.max(hi, h);
+  }
+  assert.ok(hi - lo > 4 && hi - lo < 12, `swell range ${(hi - lo).toFixed(1)}px is wrong for this scale`);
+});
+
+// ---------------------------------------------------------------------------
+// Determinism and self-containment
+// ---------------------------------------------------------------------------
+
+test('nothing in the art is driven by wall-clock time or unseeded randomness', () => {
+  for (const f of ART_FILES) {
+    const src = readFileSync(join(ART_DIR, f), 'utf8');
+    // Strip comments so the prose that explains the rule does not trip it.
+    const code = src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
+    assert.ok(!/Math\.random/.test(code), `${f} uses Math.random`);
+    assert.ok(!/Date\.now|performance\.now|new Date/.test(code), `${f} reads the wall clock`);
+  }
+});
+
+test('the art fetches nothing — no CDN, no external image, no webfont', () => {
+  for (const f of ART_FILES) {
+    const src = readFileSync(join(ART_DIR, f), 'utf8');
+    assert.ok(!/https?:\/\//.test(src), `${f} references a URL`);
+    assert.ok(!/new Image|fetch\(|@font-face|FontFace/.test(src), `${f} loads an external asset`);
+  }
+});
+
+test('every art module exports drawing functions and no canvas at import time', () => {
+  const fns = [
+    drawPlane, drawPlaneBody, drawParkedPlane,
+    drawSea, drawWake, drawBowWave, drawSplash,
+    drawSky, drawStars, drawClouds,
+    drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark,
+    drawPanel, drawBomb, drawRocket, drawTracer, drawFireball,
+  ];
+  for (const fn of fns) assert.equal(typeof fn, 'function');
+  // Importing under Node proves none of them touches `document` on load, which
+  // is what keeps this whole file runnable outside a browser.
+  assert.ok(fns.length > 15);
 });

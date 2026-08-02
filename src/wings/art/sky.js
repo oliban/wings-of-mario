@@ -1,145 +1,137 @@
-import { makeSprite, Anim } from '../../core/gfx.js';
+import { SKY, SKY_STYLE, CLOUD, STAR } from './palette.js';
 
-// The sky. Altitude has to be legible from the backdrop alone, with the HUD
-// covered up, so it is painted as eight discrete bands from a deep blue at the
-// ceiling to a pale haze on the horizon rather than as one smooth wash. Bands
-// are how an 8-bit machine draws a sky; a 240-row gradient is how a 2005 one
-// does, and the difference is most of why the old screenshot read as a web page
-// with a plane on it.
-export const SKY_BANDS = [
-  '#0b2359', // 0 ceiling
-  '#12336f',
-  '#1c4785',
-  '#295f9c',
-  '#3a7ab2',
-  '#5297c8',
-  '#71b3dc',
-  '#96cdec', // 7 horizon haze
+// The sky. In the original it is literally #000000 across 84% of the play area,
+// and that is the single most recognisable thing about the game — a bright
+// aircraft hanging in a black void over a thin cyan sea.
+//
+// We keep the value and drop the flatness. The original's sky is one flat black
+// partly because the machine had six colours and partly because a 1987 side-view
+// game had no altitude to convey; ours has 560 world pixels of climb and the
+// player needs to feel where they are in it. So the sky grades from effectively
+// black at the ceiling to a dark saturated indigo at the horizon: at a glance it
+// still reads black, and the value hierarchy — sky darkest, sea mid, aircraft
+// brightest — is unchanged. Set SKY_STYLE to 'flat' in palette.js for the pure
+// black; both were rendered and compared before choosing.
+
+// Bands are quoted as fractions of the drop from the ceiling to sea level.
+const STOPS = [
+  [0.0, SKY.zenith],
+  [0.35, SKY.high],
+  [0.7, SKY.mid],
+  [1.0, SKY.horizon],
 ];
 
-// The seam between two bands: four rows of ordered dither so the step is a
-// crosshatch and not a hard line. Slot 0 is the band above, slot 1 the band
-// below; the scene recolours one seam sprite per boundary at load.
-const SEAM_ROWS = [
-  '0001000100010001',
-  '0101010101010101',
-  '1010101010101010',
-  '1110111011101110',
-];
+let skyGrad = null;
+let skyKey = '';
 
-export const SKY_SEAMS = [];
-for (let i = 0; i < SKY_BANDS.length - 1; i++) {
-  SKY_SEAMS.push(
-    makeSprite(SEAM_ROWS, [SKY_BANDS[i], SKY_BANDS[i + 1]], { name: `wings.sky.seam${i}` })
-  );
+export function drawSky(ctx, viewW, viewH, camY, ceilingY, seaY) {
+  if (SKY_STYLE === 'flat') {
+    ctx.fillStyle = SKY.flat;
+    ctx.fillRect(0, 0, viewW, viewH);
+    return;
+  }
+  const top = ceilingY - camY;
+  const bottom = seaY - camY;
+  const key = `${top}|${bottom}|${viewW}`;
+  if (key !== skyKey) {
+    skyGrad = ctx.createLinearGradient(0, top, 0, bottom);
+    for (const [at, col] of STOPS) skyGrad.addColorStop(at, col);
+    skyKey = key;
+  }
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, viewW, viewH);
 }
 
-export const SEAM_H = SEAM_ROWS.length;
+// Stars at fixed world positions. They only show in the upper third, where the
+// sky is genuinely black, and they are the cheapest possible altitude cue: if
+// you can see them you are high. A literal table, so the sky is identical on
+// every run and a screenshot at tick N is reproducible.
+const STARS = [];
+for (let i = 0; i < 90; i++) {
+  // A fixed integer hash rather than Math.random: deterministic, and the same
+  // on every machine.
+  const h = (i * 2654435761) >>> 0;
+  STARS.push({
+    x: (h % 6000) - 400,
+    y: ((h >> 12) % 190),
+    m: 0.25 + ((h >> 24) % 40) / 100,
+    b: 0.25 + ((h >> 8) % 60) / 100,
+  });
+}
 
-// Cloud light comes from the upper left like everything else: slot 3 is the
-// sunlit crown, 0 the flat shaded base a cumulus always has.
-export const CLOUD_PAL = [
-  '#5d8cbb', // 0 shaded base
-  '#9dc0e2', // 1 mid
-  '#d5e8fa', // 2 lit
-  '#ffffff', // 3 sunlit crown
+export function drawStars(ctx, viewW, viewH, cam, tick) {
+  if (SKY_STYLE !== 'flat' && cam.y > 220) return;
+  ctx.save();
+  ctx.fillStyle = STAR;
+  for (const s of STARS) {
+    const x = s.x - cam.x * s.m * 0.12;
+    const y = s.y - cam.y * s.m * 0.5;
+    const sx = ((x % 6000) + 6000) % 6000;
+    if (sx > viewW + 4 || y < -2 || y > viewH) continue;
+    // A slow twinkle keyed off the tick, so nothing in the sky is ever static.
+    const tw = 0.55 + 0.45 * Math.sin((tick + s.x) * 0.03);
+    ctx.globalAlpha = s.b * tw * 0.8;
+    ctx.fillRect(sx, y, 1, 1);
+  }
+  ctx.restore();
+}
+
+// Cloud banks. Dim — a cloud brighter than the aeroplane would break the value
+// hierarchy — and drawn as soft stacked lobes rather than outlined blobs.
+const DECKS = [
+  { x: 240, y: 96, m: 0.16, w: 170, h: 15 },
+  { x: 760, y: 260, m: 0.34, w: 124, h: 11 },
+  { x: 1180, y: 150, m: 0.22, w: 196, h: 17 },
+  { x: 1620, y: 372, m: 0.5, w: 146, h: 12 },
+  { x: 2080, y: 62, m: 0.13, w: 158, h: 14 },
+  { x: 2520, y: 300, m: 0.42, w: 178, h: 15 },
+  { x: 2980, y: 190, m: 0.26, w: 136, h: 11 },
+  { x: 3440, y: 410, m: 0.55, w: 200, h: 17 },
+  { x: 3900, y: 120, m: 0.18, w: 150, h: 12 },
+  { x: 4380, y: 330, m: 0.46, w: 170, h: 15 },
+  { x: 4860, y: 220, m: 0.3, w: 132, h: 11 },
+  { x: 5340, y: 80, m: 0.15, w: 188, h: 16 },
 ];
 
-export const CLOUD_S = makeSprite(
-  [
-    '....................',
-    '.......33333........',
-    '....333333323.......',
-    '...333311111233.....',
-    '..03111110111223....',
-    '...0000000001000....',
-    '....00000.00000.....',
-    '............0.......',
-  ],
-  CLOUD_PAL,
-  { name: 'wings.cloud.s' }
-);
+// One bank. Each lobe is a soft radial falloff rather than a filled circle, so
+// the bank has no edge at all — against a near-black sky a hard-edged cloud
+// reads as a bubble, which is exactly what the first attempt looked like. The
+// lobe layout is a fixed function of the bank's own x, so it never changes
+// between runs and no two banks are the same shape.
+function drawBank(ctx, x, y, w, h, seed) {
+  for (let i = 0; i < 9; i++) {
+    // A fixed integer hash off the bank's own x and the lobe index: no two banks
+    // are the same shape, and every bank is the same shape on every run.
+    const k = ((seed * 2654435761) >>> 0) + i * 0x9e3779b1;
+    const t = i / 8;
+    const lx = x + (t - 0.5) * w + (((k >> 3) % 24) - 12);
+    const ly = y - (((k >> 9) % 100) / 100) * h * 1.15;
+    const rx = h * (1.1 + ((k >> 15) % 130) / 100);
+    const ry = rx * (0.34 + ((k >> 21) % 26) / 100);
+    // Lobes on the sunward (left) side and near the crown are brighter, which is
+    // the only thing giving a flat bank any form at all.
+    const lit = (1 - t * 0.5) * (0.6 + (y - ly) / (h * 1.4));
+    const g = ctx.createRadialGradient(lx, ly - ry * 0.4, ry * 0.05, lx, ly, rx);
+    g.addColorStop(0, lit > 0.85 ? CLOUD.crown : CLOUD.lit);
+    g.addColorStop(0.4, CLOUD.core);
+    g.addColorStop(0.75, CLOUD.base);
+    g.addColorStop(1, 'rgba(11,18,41,0)');
+    ctx.globalAlpha = 0.3 + Math.min(0.38, lit * 0.36);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(lx, ly, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
 
-export const CLOUD_M = makeSprite(
-  [
-    '..................................',
-    '............333.......3...........',
-    '..........333333333333233.........',
-    '.......3333322233332222223........',
-    '.....333332222222222222222........',
-    '....3332222222222222222222333.....',
-    '....322222222211122211112222233...',
-    '...0111222221111111111111111122...',
-    '....011111111100011100001111100...',
-    '....000111110000000000000000000...',
-    '.....000000000...000....00000.....',
-    '.......00000......................',
-  ],
-  CLOUD_PAL,
-  { name: 'wings.cloud.m' }
-);
-
-export const CLOUD_L = makeSprite(
-  [
-    '....................................................',
-    '................33333.......33333...................',
-    '..............333333333...333222233.................',
-    '.............3332222233333332222222.................',
-    '.............32222222223332222222223..33333.........',
-    '........333332222222222222222222222..3222223........',
-    '.......33333322222222222222222222222322222223.......',
-    '......33222222222222222222222222222222222222........',
-    '.....3322222222222222222222222122222222222222333....',
-    '.....322222222222221122222221112222222222222222233..',
-    '....0112222222222211111111111101122222221112222222..',
-    '.....0112222222221100111111100011111111111111111110.',
-    '.....0011111111111000000000000.0011111110001111100..',
-    '......0011111111100..0000000...0000000000000000000..',
-    '.......00000000000...............0000000...00000....',
-    '........000000000...................................',
-    '....................................................',
-  ],
-  CLOUD_PAL,
-  { name: 'wings.cloud.l' }
-);
-
-// A thin, fast, low-lying scud layer. Two frames so the near layer visibly
-// boils rather than sliding as a rigid cut-out.
-export const SCUD = new Anim(
-  [
-    makeSprite(
-      ['...2222....22...', '.2222222122222..', '.11111100011110.', '..000.....000...'],
-      CLOUD_PAL,
-      { name: 'wings.scud.a' }
-    ),
-    makeSprite(
-      ['..2222.....222..', '.2222212222222..', '.11110001111110.', '..00.....0000...'],
-      CLOUD_PAL,
-      { name: 'wings.scud.b' }
-    ),
-  ],
-  24
-);
-
-// Cloud decks at fixed world positions and fixed parallax depths. A literal, so
-// the sky is identical on every run and a screenshot at tick N is reproducible.
-// `m` is the parallax factor and `s` selects the sprite.
-export const CLOUD_DECKS = [
-  { x: 180, y: 60, m: 0.18, s: 'l' }, { x: 560, y: 208, m: 0.34, s: 'm' },
-  { x: 900, y: 128, m: 0.22, s: 'l' }, { x: 1240, y: 330, m: 0.52, s: 'l' },
-  { x: 1600, y: 44, m: 0.14, s: 'm' }, { x: 1940, y: 250, m: 0.42, s: 'm' },
-  { x: 2300, y: 150, m: 0.26, s: 'l' }, { x: 2680, y: 380, m: 0.58, s: 's' },
-  { x: 3020, y: 90, m: 0.20, s: 'm' }, { x: 3380, y: 296, m: 0.46, s: 'l' },
-  { x: 3740, y: 176, m: 0.30, s: 's' }, { x: 4100, y: 356, m: 0.55, s: 'm' },
-  { x: 4460, y: 68, m: 0.16, s: 'l' }, { x: 4820, y: 232, m: 0.38, s: 'm' },
-  { x: 5180, y: 118, m: 0.24, s: 'l' }, { x: 5560, y: 310, m: 0.50, s: 'm' },
-];
-
-// The scud layer runs closest to the camera and therefore fastest.
-export const SCUD_BANK = [
-  { x: 300, y: 424, m: 0.78 }, { x: 780, y: 392, m: 0.86 }, { x: 1260, y: 448, m: 0.72 },
-  { x: 1820, y: 404, m: 0.90 }, { x: 2380, y: 436, m: 0.76 }, { x: 2940, y: 388, m: 0.84 },
-  { x: 3560, y: 452, m: 0.70 }, { x: 4180, y: 412, m: 0.88 }, { x: 4820, y: 432, m: 0.74 },
-];
-
-export const CLOUDS_BY_KEY = { s: CLOUD_S, m: CLOUD_M, l: CLOUD_L };
+export function drawClouds(ctx, viewW, viewH, cam, tick) {
+  ctx.save();
+  for (const d of DECKS) {
+    const sx = d.x - tick * 0.05 * d.m - cam.x * d.m;
+    const sy = d.y - cam.y * d.m * 0.75;
+    if (sy - d.h * 2.4 > viewH || sy - d.h * 2.4 < -60) continue;
+    if (sx + d.w / 2 < -20 || sx - d.w / 2 > viewW + 20) continue;
+    drawBank(ctx, sx, sy, d.w, d.h, d.x);
+  }
+  ctx.restore();
+}

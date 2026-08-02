@@ -16,6 +16,8 @@ test('the pilot page', async (t) => {
       const W = window.__WINGS;
       return {
         state: W.state(),
+        view: [W.renderer.viewW, W.renderer.viewH],
+        ss: W.renderer.ss,
         buffer: [W.renderer.buffer.width, W.renderer.buffer.height],
         painted: W.renderer.frames > 0,
         fatal: W.fatal(),
@@ -23,7 +25,10 @@ test('the pilot page', async (t) => {
     });
     assert.equal(s.state.mode, 'deck');
     assert.equal(s.state.squadron, 5);
-    assert.deepEqual(s.buffer, [512, 240]);
+    // The pilot's WORLD is still 512x240 world pixels at Mario's scale; the
+    // buffer behind it is supersampled so the vector art comes out smooth.
+    assert.deepEqual(s.view, [512, 240]);
+    assert.deepEqual(s.buffer, [512 * s.ss, 240 * s.ss]);
     assert.ok(s.painted, 'the page never painted a frame');
     assert.equal(s.fatal, null);
   });
