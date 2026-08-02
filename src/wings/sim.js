@@ -124,30 +124,17 @@ export class WingsSim {
 }
 
 // ---------------------------------------------------------------------------
-// Steering, used by the bots in Task 4 and by __WINGS.
+// Steering, used by __WINGS and (eventually) the bots.
+//
+// There was a `seek()` here for a bot autopilot to steer toward a point. It
+// is deleted rather than kept patched: nothing calls it, it had no test of
+// its own, and it has now silently gone stale across two unrelated control
+// reworks (the pull-back/upright pass, then this one) without anyone
+// noticing until asked directly — an unwired helper encoding a convention
+// nobody is checking is exactly the trap it turned into. Whoever wires up
+// bot steering should write it fresh, against whatever flight.js actually
+// does at that point, with a test that catches the NEXT rework too.
 // ---------------------------------------------------------------------------
-
-// Steer toward a world point. Pitch is +1 for nose UP, and angle DECREASES as
-// the nose comes up, so the sign flips on the way in. thrust defaults to
-// whichever world direction currently accelerates the aeroplane (agreeing
-// with its own facing) rather than a fixed value, since thrust is now a
-// world-frame direction (flight.js's stepAir) and not a lever — a bot that
-// always asked for "thrust: 1" would decelerate and stall-turn itself as soon
-// as it ever faced west.
-export function seek(p, tx, ty, opts = {}) {
-  const thrust = opts.thrust == null ? (Math.cos(p.angle) >= 0 ? 1 : -1) : opts.thrust;
-  let want = Math.atan2(ty - (p.y + PLANE_H / 2), tx - (p.x + PLANE_W / 2));
-  // Never fly the autopilot into the sea while chasing a low target.
-  const floor = opts.floor == null ? SEA_Y - 96 : opts.floor;
-  if (p.y + PLANE_H > floor && Math.sin(want) > 0) want = 0;
-  const d = normalizeAngle(want - p.angle);
-  const dead = opts.dead == null ? 0.03 : opts.dead;
-  return {
-    pitch: d > dead ? -1 : d < -dead ? 1 : 0,
-    thrust,
-    gear: opts.gear == null ? false : opts.gear,
-  };
-}
 
 export function distanceTo(p, tx, ty) {
   const dx = tx - (p.x + PLANE_W / 2);
