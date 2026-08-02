@@ -62,8 +62,8 @@ In the `"scripts"` block, add these three entries alongside the existing ones:
 
 ```json
     "test": "npm run test:unit && npm run test:browser",
-    "test:unit": "node --test tests/unit/",
-    "test:browser": "node --test tests/browser/",
+    "test:unit": "node --test \"tests/unit/*.test.js\"",
+    "test:browser": "node --test \"tests/browser/*.test.mjs\"",
 ```
 
 - [ ] **Step 2: Write the failing test**
@@ -494,9 +494,9 @@ before anything reads it.
 
 Run `npm start`, then in another terminal:
 
-`node -e "import('playwright').then(async ({chromium}) => { const b = await chromium.launch(); const p = await b.newPage(); p.on('pageerror', e => console.log('ERR', e.message)); await p.goto('http://localhost:8123/'); await p.evaluate(() => window.__GAME.ready); await p.evaluate(() => window.__GAME.loadLevel('1-1')); const r = await p.evaluate(() => { const w = window.__GAME.world; const before = w.tileAt(20, 12).solid; const changed = w.blast(20 * 16 + 8, 12 * 16 + 8, 2); return { before, changed: changed.length, after: w.tileAt(20, 12).solid }; }); console.log(r); await b.close(); })"`
+`node -e "import('playwright').then(async ({chromium}) => { const b = await chromium.launch(); const p = await b.newPage(); p.on('pageerror', e => console.log('ERR', e.message)); await p.goto('http://localhost:8123/'); await p.evaluate(() => window.__GAME.ready); await p.evaluate(() => window.__GAME.loadLevel('1-1')); const r = await p.evaluate(() => { const w = window.__GAME.world; const before = w.tileAt(20, 13).solid; const changed = w.blast(20 * 16 + 8, 13 * 16 + 8, 2); return { before, changed: changed.length, after: w.tileAt(20, 13).solid }; }); console.log(r); await b.close(); })"`
 
-Expected: `{ before: true, changed: <a number greater than 0>, after: false }`
+Expected: `before` truthy, `changed` greater than 0, `after` falsy (it is `undefined`, not `false` — the air tile record has no explicit `solid` key).
 
 - [ ] **Step 9: Commit**
 
@@ -682,18 +682,18 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
     await page.evaluate(() => window.__GAME.loadLevel('1-1'));
     const r = await page.evaluate(() => {
       const w = window.__GAME.world;
-      const before = w.tileAt(20, 12).solid;
-      const changed = window.__GAME.blast(20 * 16 + 8, 12 * 16 + 8, 2);
-      return { before, changed, after: w.tileAt(20, 12).solid };
+      const before = w.tileAt(20, 13).solid;
+      const changed = window.__GAME.blast(20 * 16 + 8, 13 * 16 + 8, 2);
+      return { before, changed, after: w.tileAt(20, 13).solid };
     });
-    assert.equal(r.before, true, 'expected solid ground at tile 20,12 of 1-1');
+    assert.ok(r.before, 'expected solid ground at tile 20,13 of 1-1');
     assert.ok(r.changed.length > 0, 'blast destroyed nothing');
-    assert.equal(r.after, false, 'tile survived the blast');
+    assert.ok(!r.after, 'tile survived the blast');
   });
 
   await t.test('damage is reported back as sorted tile keys', async () => {
     const keys = await page.evaluate(() => window.__GAME.damageKeys());
-    assert.ok(keys.includes('20,12'));
+    assert.ok(keys.includes('20,13'));
     assert.deepEqual(keys, [...keys].sort());
   });
 
@@ -702,38 +702,40 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
     const after = await page.evaluate(async (damage) => {
       await window.__GAME.loadLevel('1-1', null, damage);
       return {
-        solid: window.__GAME.world.tileAt(20, 12).solid,
+        solid: window.__GAME.world.tileAt(20, 13).solid,
         keys: window.__GAME.damageKeys(),
       };
     }, keys);
-    assert.equal(after.solid, false, 'reloading the level healed the crater');
+    assert.ok(!after.solid, 'reloading the level healed the crater');
     assert.deepEqual(after.keys, keys);
   });
 
   await t.test('a clean reload restores the ground', async () => {
     const solid = await page.evaluate(async () => {
       await window.__GAME.loadLevel('1-1');
-      return window.__GAME.world.tileAt(20, 12).solid;
+      return window.__GAME.world.tileAt(20, 13).solid;
     });
-    assert.equal(solid, true, 'damage leaked into an undamaged load');
+    assert.ok(solid, 'damage leaked into an undamaged load');
   });
 
   await t.test('Mario falls into a crater blown out beneath him', async () => {
     const r = await page.evaluate(async () => {
       await window.__GAME.loadLevel('1-1');
       window.__GAME.teleport(20, 11);
-      window.__GAME.tick(10);
+      window.__GAME.tick(40); // let him fall the two tiles onto the ground and settle
       const p = window.__GAME.world.player;
       const groundedBefore = p.grounded;
-      // Clear a wide, deep hole directly under him.
-      window.__GAME.blast(20 * 16 + 8, 13 * 16, 3);
+      const yBefore = p.y;
+      // Clear a wide, deep hole directly under him. Rows 13-14 are the only
+      // ground in this stretch of 1-1, so this opens straight through to the pit.
+      window.__GAME.blast(20 * 16 + 8, 13 * 16 + 8, 3);
       window.__GAME.tick(30);
-      return { groundedBefore, groundedAfter: p.grounded, y: p.y };
+      return { groundedBefore, yBefore, groundedAfter: p.grounded, y: p.y };
     });
-    assert.equal(r.groundedBefore, true, 'Mario was not standing on anything to begin with');
+    assert.ok(r.groundedBefore, 'Mario was not standing on anything to begin with');
     assert.ok(
-      r.groundedAfter === false || r.y > 11 * 16,
-      `Mario ignored the hole (grounded=${r.groundedAfter}, y=${r.y})`
+      !r.groundedAfter && r.y > r.yBefore,
+      `Mario ignored the hole (grounded=${r.groundedAfter}, y=${r.yBefore} -> ${r.y})`
     );
   });
 
@@ -748,7 +750,12 @@ test('destructible terrain', { timeout: 120000 }, async (t) => {
 Run: `npm run test:browser`
 Expected: PASS, 6 subtests.
 
-If `a bomb clears solid ground` fails on the `before` assertion, tile (20,12) is not solid ground in the current 1-1. Find one that is and use it consistently throughout the file:
+Two facts about this engine that the assertions above depend on — do not "tighten" them into strict equality:
+
+- The air tile record is `{ name: 'air' }` with no explicit `solid` key, so `tileAt(...).solid` on cleared ground is `undefined`, not `false`. Assert truthiness (`assert.ok(!r.after)`), never `assert.equal(r.after, false)`.
+- In level 1-1, rows 13 and 14 are the ground; row 12 is decor (bushes, hill, pipe body) and row 11 and above are air.
+
+If `a bomb clears solid ground` fails on the `before` assertion, tile (20,13) is not solid ground in the current 1-1. Find one that is and use it consistently throughout the file:
 
 `node -e "import('./src/data/levels/1-1.js').then(m => m.default.tiles.forEach((row, y) => console.log(String(y).padStart(2), row.slice(0, 60))))"`
 
