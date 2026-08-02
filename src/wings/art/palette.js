@@ -4,17 +4,19 @@
 // Two rules drive everything here, both taken from the 1987 original and both
 // design decisions rather than hardware accidents:
 //
-//   VALUE HIERARCHY. The sky is the darkest thing on screen, the sea sits in the
-//   middle, and the aircraft carries the brightest highlights in the frame. A
-//   small fast-moving object stays legible when it is the *brightest* thing
-//   present, and it is the aircraft the player is looking at. Approximate
-//   luminance: sky 2-30, sea 60-145, ship 40-190, aircraft 50-255.
+//   VALUE HIERARCHY, taken by sampling the user's own reference screenshots
+//   rather than from any earlier guess. The sky is the BRIGHTEST large area at
+//   luma 143; the ship is a light grey that sits right beside it and separates by
+//   hue and by its dark structural lines; the sea is a dark saturated blue at
+//   47-104; and the aircraft is a DARK shape at 38-128 carrying small white
+//   markings at 255. The aeroplane reads because it is the darkest, most
+//   saturated object against a bright sky — the opposite of the arrangement that
+//   a black sky calls for, and the arrangement the user actually pictures.
 //
-//   HUE SEPARATION. Every major object owns a hue nobody else uses — sky
-//   near-black indigo, sea cyan, ship violet, aircraft neutral white-grey with a
-//   warm flash. That is why a still of the original is readable at a glance, and
-//   it is achievable at any colour depth. The original's specific magenta is a
-//   six-colour palette accident; the strategy is not.
+//   HUE SEPARATION. Sky and sea are the same blue family at very different
+//   values; the ship is a near-neutral cool grey; the aircraft is a dark
+//   desaturated blue with white markings and one warm accent. Measured off the
+//   reference: sky #00aeff, hull #8d8c9c, sea #00488e-#426d9a.
 //
 // Nothing here is a pixel-art palette. Anti-aliasing, gradients and arbitrary
 // colour depth are all in use — the pilot renders through its own Canvas2D
@@ -24,64 +26,65 @@
 // Sky — near black. See SKY_STYLE below for the graded/flat decision.
 // ---------------------------------------------------------------------------
 export const SKY = {
-  zenith: '#000105',
-  high: '#020514',
-  mid: '#040b22',
-  horizon: '#0a1636',
-  flat: '#000000',
+  zenith: '#0090e6',
+  high: '#009cf0',
+  mid: '#00a8fa',
+  horizon: '#2bb8ff',
+  flat: '#00aeff',
 };
 
-// The original's sky is literally #000000 and that is the single most
-// recognisable thing about the game. We keep the value, not the flatness: a very
-// dark graded indigo reads as black at a glance while giving the player an
-// altitude cue over a 560px climb the original never had to convey. Set to
-// 'flat' for the pure-black homage; both were rendered and compared.
+// The user's references settle this: a strong saturated mid-blue, #00aeff, filling
+// most of the frame. Theirs is flat; ours grades by about twenty luma points from
+// ceiling to horizon, which still reads as one blue at a glance but gives the
+// player a cue over a 560-pixel climb that a 1987 side-view game never had to
+// convey. Set SKY_STYLE to 'flat' for the reference's exact treatment.
 export const SKY_STYLE = 'graded';
 
-// Cloud banks are the only light thing in the sky, and they are dim — a cloud
-// brighter than the aeroplane would break the hierarchy.
+// Fair-weather cumulus. White is safe now that the aeroplane is the DARK object:
+// a bright cloud behind a dark aircraft helps it rather than competing with it.
 export const CLOUD = {
-  core: '#16224a',
-  lit: '#243463',
-  crown: '#334a7d',
-  base: '#0b1229',
+  core: '#bcd9f0',
+  lit: '#e8f4ff',
+  crown: '#ffffff',
+  base: '#8fbde0',
 };
-
-export const STAR = '#5f7bb5';
 
 // ---------------------------------------------------------------------------
 // Sea — saturated cyan-teal, the mid value of the scene.
 // ---------------------------------------------------------------------------
 export const SEA = {
-  crest: '#5fdcff',
-  surface: '#1aa8d8',
-  shallow: '#0f83b4',
-  mid: '#0a5f86',
-  deep: '#053f5c',
-  abyss: '#02202f',
-  foam: '#eaffff',
-  foamShade: '#a5e6f8',
+  crest: '#5b9fd6',
+  surface: '#2f76b4',
+  shallow: '#1c5b98',
+  mid: '#124479',
+  deep: '#0b2f56',
+  abyss: '#061a30',
+  foam: '#ffffff',
+  foamShade: '#a8cbe8',
 };
 
 // ---------------------------------------------------------------------------
 // Carrier — a hue nothing else on screen uses. The original's flat magenta,
 // desaturated into a slate-violet that survives being next to a cyan sea.
 // ---------------------------------------------------------------------------
+// Sampled straight off the reference: a cool grey with a faint violet cast,
+// #8d8c9c, with #646373 and #434252 under it. The earlier slate violet had the
+// right instinct and far too much saturation.
 export const SHIP = {
-  deckLit: '#e8e1f4',
-  deck: '#b5a8ca',
-  deckShade: '#8b7ca6',
-  hullLit: '#7d5fa6',
-  hull: '#63498a',
-  hullShade: '#472f68',
-  hullDark: '#2c1c45',
-  island: '#8f74b8',
-  islandLit: '#a98fd0',
-  islandShade: '#5f4585',
-  rule: '#f2ecfb',
-  window: '#150d22',
-  boot: '#7c2440',
-  lamp: '#ffd98a',
+  deckLit: '#a8a8b8',
+  deck: '#8d8c9c',
+  deckShade: '#757585',
+  hullLit: '#9d9baa',
+  hull: '#8d8c9c',
+  hullShade: '#646373',
+  hullDark: '#434252',
+  island: '#8d8c9c',
+  islandLit: '#a8a8b8',
+  islandShade: '#646373',
+  rule: '#c9c9d6',
+  window: '#323040',
+  boot: '#3a3444',
+  lamp: '#ffe08a',
   crew: '#e2703a',
   crewSkin: '#f6cfa4',
 };
@@ -101,21 +104,29 @@ export const ENSIGN = {
 // luminance of the sky, and putting the light grey underneath is what gives the
 // rim light something to sit on — a uniformly pale aeroplane had nothing for the
 // highlight to be brighter *than*.
+// A dark blue-grey warplane on a bright sky, with white national markings — 1944
+// overall gloss sea blue. Every airframe tone is below the sky's luma of 143, so
+// the aeroplane reads as a dark saturated shape; the markings and the canopy
+// glint are the only bright things on it, and they are small and hard-edged.
+//
+// This is a straight inversion of the scheme built for a near-black sky. The
+// silhouette work is unchanged — taper, fin, cowl, canopy — only the values are
+// restated.
 export const PLANE = {
-  spec: '#ffffff',      // rim light, spinner, cowl lip, canopy glint
-  light: '#dfe7ee',     // gull grey underside
-  skin: '#9fb0c0',      // the transition band at the demarcation
-  mid: '#3d6183',       // upper sides, catching sky
-  shade: '#2a4562',     // sea blue
-  dark: '#1a2c40',      // deep sea blue, shadowed upper surfaces
-  contact: '#070d14',   // shadow and contact edges only
-  canopy: '#cfe9f7',    // glazing, near-white, not a bubble
-  canopyDark: '#31536e',
-  canopyFrame: '#12202e',
+  spec: '#ffffff',      // markings, canopy glint, spinner
+  light: '#5f88ad',     // lit lower surfaces, still darker than the sky
+  skin: '#48709a',
+  mid: '#33587e',
+  shade: '#22405e',
+  dark: '#16283e',      // shadowed upper surfaces
+  contact: '#0a1220',   // contact edges
+  canopy: '#bfe0f2',
+  canopyDark: '#3f6f92',
+  canopyFrame: '#132234',
   pilot: '#e8c9a0',
-  flash: '#d4442c',     // the one warm accent: an aft fuselage band
-  flashDark: '#8a2415',
-  insignia: '#f4f8fc',  // the star and bar
+  flash: '#c03626',     // the one warm accent: a rudder band
+  flashDark: '#7d1f13',
+  insignia: '#ffffff',
   prop: '#dce9f7',
 };
 

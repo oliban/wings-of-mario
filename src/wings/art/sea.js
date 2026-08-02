@@ -1,9 +1,9 @@
 import { SEA } from './palette.js';
 
-// The sea. In the original it is one flat cyan bar 11% of the play area tall —
-// the proportion is a design decision and we keep it, the flatness is a hardware
-// limitation and we do not. It sits in the middle of the value hierarchy: darker
-// than the aircraft, far brighter than the sky.
+// The sea. In the user's reference it is a thin dark band under the hull — about
+// 6% of the play area, running from luma 104 at the foam down to 47 in the deep,
+// against a sky at 143. So it is the DARK half of the frame now, not the middle
+// value, and it stays thin: the render clamps it to a strip in scene.js.
 //
 // The old version's waterline was a repeating square-wave glyph that read as a
 // mechanical zigzag border. This one is three superimposed sine trains at
@@ -99,25 +99,25 @@ export function drawSea(ctx, viewW, viewH, cam, seaY, tick) {
   // then covers reads as distance.
   ctx.save();
   ctx.beginPath();
-  ctx.moveTo(-2, top - 6 + farSurfaceAt(cam.x - 2, tick));
+  ctx.moveTo(-2, top - 4 + farSurfaceAt(cam.x - 2, tick));
   for (let sx = 0; sx <= viewW + 2; sx += 3) {
-    ctx.lineTo(sx, top - 6 + farSurfaceAt(cam.x + sx, tick));
+    ctx.lineTo(sx, top - 4 + farSurfaceAt(cam.x + sx, tick));
   }
   ctx.lineTo(viewW + 2, top + 12);
   ctx.lineTo(-2, top + 12);
   ctx.closePath();
-  const far = ctx.createLinearGradient(0, top - 8, 0, top + 6);
-  far.addColorStop(0, '#2b7fa4');
+  const far = ctx.createLinearGradient(0, top - 6, 0, top + 5);
+  far.addColorStop(0, '#3f86c4');
   far.addColorStop(1, SEA.shallow);
   ctx.fillStyle = far;
   ctx.fill();
   // A pale line right on the far horizon, which is the cue that says "distance".
-  ctx.strokeStyle = 'rgba(140,226,255,0.55)';
+  ctx.strokeStyle = 'rgba(168,203,232,0.6)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(-2, top - 6 + farSurfaceAt(cam.x - 2, tick));
+  ctx.moveTo(-2, top - 4 + farSurfaceAt(cam.x - 2, tick));
   for (let sx = 0; sx <= viewW + 2; sx += 3) {
-    ctx.lineTo(sx, top - 6 + farSurfaceAt(cam.x + sx, tick));
+    ctx.lineTo(sx, top - 4 + farSurfaceAt(cam.x + sx, tick));
   }
   ctx.stroke();
   ctx.restore();
@@ -135,7 +135,7 @@ export function drawSea(ctx, viewW, viewH, cam, seaY, tick) {
   ctx.globalAlpha = 0.55;
   const sheen = ctx.createLinearGradient(0, top - 2, 0, top + 9);
   sheen.addColorStop(0, SEA.crest);
-  sheen.addColorStop(1, 'rgba(95,220,255,0)');
+  sheen.addColorStop(1, 'rgba(91,159,214,0)');
   ctx.fillStyle = sheen;
   ctx.fillRect(0, top - 4, viewW, 14);
   ctx.restore();

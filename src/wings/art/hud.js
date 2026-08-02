@@ -190,7 +190,7 @@ function planIcon(ctx, x, y, s, colour) {
 // area with the ship, the aircraft and the current viewport on it. When there
 // are islands to hunt across, this is what the pilot navigates by.
 function radar(ctx, x, y, w, h, sim, world, tick) {
-  ctx.fillStyle = '#02040a';
+  ctx.fillStyle = '#061428';
   ctx.fillRect(x, y, w, h);
   ctx.save();
   ctx.beginPath();
@@ -199,10 +199,13 @@ function radar(ctx, x, y, w, h, sim, world, tick) {
 
   const span = world.maxX - world.minX;
   const toX = (wx) => x + ((wx - world.minX) / span) * w;
-  const horizon = y + h * 0.62;
+  const horizon = y + h * 0.5;
 
   // Sea and sky, so the window reads as the same world you are flying in.
-  ctx.fillStyle = 'rgba(26,168,216,0.55)';
+  // The window shows the same world: bright sky above, dark sea below.
+  ctx.fillStyle = '#0f9be0';
+  ctx.fillRect(x, y, w, horizon - y);
+  ctx.fillStyle = '#123f70';
   ctx.fillRect(x, horizon, w, h - (horizon - y));
   ctx.strokeStyle = SEA.crest;
   ctx.lineWidth = 0.8;

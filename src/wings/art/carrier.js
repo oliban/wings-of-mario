@@ -19,7 +19,7 @@ import { drawParkedPlane } from './plane.js';
 // number, a deck-crew figure, aircraft parked with their wings folded up into a
 // V — is dressing, but it is the dressing that makes the ship specific.
 
-export const ISLAND_H = 86;
+export const ISLAND_H = 92;
 export const ISLAND_W = 68;
 export const DECK_THICK = 7;
 
@@ -171,15 +171,30 @@ export function drawDeck(ctx, x0, x1, deckY, tick) {
     ctx.fillRect(x + 10, deckY - DECK_THICK - 1, 1.6, 2);
   }
 
-  // Deck-edge catwalk with lamps that blink in two alternating groups.
+  // AA gun galleries along the deck edge: small repeated tubs slung under the
+  // lip, each with a barrel poking out. In the reference these are the strongest
+  // texture on the whole ship, and a row of blinking lamps was standing in for
+  // them.
   ctx.fillStyle = SHIP.hullShade;
   ctx.fillRect(x0 - 8, deckY + 1, x1 - x0 + 19, 3);
   for (let i = 0, x = x0 + 6; x < x1 + 4; x += 15, i++) {
     ctx.fillStyle = SHIP.hullDark;
-    ctx.fillRect(x, deckY + 1, 6, 3);
-    if ((i & 1) === ((tick >> 5) & 1)) {
-      ctx.fillStyle = SHIP.lamp;
-      ctx.fillRect(x + 2, deckY + 1.5, 2, 2);
+    ctx.fillRect(x, deckY + 0.5, 8, 4);
+    ctx.fillStyle = SHIP.deckShade;
+    ctx.fillRect(x + 1, deckY + 1, 6, 1);
+    // Every third tub has its barrel up, and the elevation creeps with the tick
+    // so the battery is never a still photograph.
+    if (i % 3 === 0) {
+      ctx.save();
+      ctx.strokeStyle = SHIP.hullDark;
+      ctx.lineWidth = 1.1;
+      ctx.translate(x + 4, deckY + 0.5);
+      ctx.rotate(-1.1 + 0.18 * Math.sin((tick + i * 40) * 0.02));
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(5, 0);
+      ctx.stroke();
+      ctx.restore();
     }
   }
 
@@ -213,7 +228,7 @@ export function drawIsland(ctx, x, deckY, tick) {
 
   // Mast: a pale pole rising nearly as far again above the bridge, with two
   // yardarms. Half the island's height is mast, exactly as in the original.
-  const bridgeTop = baseY - 47;
+  const bridgeTop = baseY - 50;
   const mastX = x + 26;
   ctx.strokeStyle = SHIP.rule;
   ctx.lineWidth = 1.6;
@@ -248,18 +263,18 @@ export function drawIsland(ctx, x, deckY, tick) {
   drawEnsign(ctx, mastX + 1, baseY - ISLAND_H + 7, tick);
 
   // Lower block: the widest tier, carrying the hull number.
-  block(ctx, x, baseY - 20, ISLAND_W, 20, 3);
+  block(ctx, x, baseY - 21, ISLAND_W, 21, 3);
   // Middle block: bridge proper, four tiers of windows.
-  block(ctx, x + 6, baseY - 36, ISLAND_W - 14, 16, 4);
+  block(ctx, x + 6, baseY - 38, ISLAND_W - 14, 17, 4);
   // Upper block, stepped back — the short arm of the L.
-  block(ctx, x + 16, baseY - 47, ISLAND_W - 34, 11, 3);
+  block(ctx, x + 16, baseY - 50, ISLAND_W - 34, 12, 3);
 
   // Hull number, chunky and white, on the lower block.
   ctx.fillStyle = SHIP.rule;
   ctx.font = 'bold 13px ui-monospace, Menlo, monospace';
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
-  ctx.fillText('18', x + 42, baseY - 5);
+  ctx.fillText('18', x + 6, baseY - 5);
   ctx.restore();
 }
 

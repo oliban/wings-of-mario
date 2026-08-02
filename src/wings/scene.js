@@ -3,7 +3,7 @@ import {
   VIEW_W, VIEW_H, SEA_Y, CEILING_Y, DECK_X0, DECK_X1, DECK_Y, PLANE_W, PLANE_H, clamp,
 } from './geo.js';
 import { MODE, FLIGHT } from './flight.js';
-import { drawSky, drawStars, drawClouds } from './art/sky.js';
+import { drawSky, drawClouds } from './art/sky.js';
 import { drawSea, drawWake, drawBowWave, drawSplash, surfaceAt } from './art/sea.js';
 import {
   drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark, ISLAND_W, ISLAND_H, DECK_THICK,
@@ -24,17 +24,17 @@ import { drawPanel, HUD_H } from './art/hud.js';
 // MORE of the world at once, and everything in it — aircraft, ship, ordnance —
 // gets smaller together, so every proportion fought for so far survives intact.
 //
-// The user's own reference draws the whole world small and fine: a wide field of
-// open sky with modest ground features in it, the aeroplane about 14% of the
-// frame. Ours was drawn at 1:1 with the simulation and came out zoomed in — the
-// aeroplane at 16% and a carrier filling two thirds of the width. This is the
-// one knob that fixes both, and it is a pure render transform: the simulation
-// still works in world pixels at TILE 16, and nothing downstream of `submit`
-// knows the difference.
+// The user's reference frames the ship LARGE — it spans the whole width, with the
+// aeroplane a small dark shape on it at about an eighth of the frame. The fault
+// was never the sprite on its own, it was the ratio: our aeroplane was a fifth of
+// the flight deck where theirs is a ninth. So the aeroplane came down to 42 world
+// pixels and the world is drawn slightly magnified, which puts the ship across
+// three quarters of the frame and the aeroplane at 11% of it — their proportions,
+// both terms at once.
 //
-// There is a gameplay reason too. Plan 3 has the pilot hunting Mario across an
-// archipelago, and seeing a third more world at a glance is worth having.
-export const WORLD_SCALE = 0.76;
+// It is a pure render transform: the simulation still works in world pixels at
+// TILE 16, and nothing downstream of `submit` knows the difference.
+export const WORLD_SCALE = 1.15;
 
 // The play area is what the world is framed in; the panel sits below it.
 export const PLAY_H = VIEW_H - HUD_H;
@@ -42,7 +42,7 @@ export const PLAY_H = VIEW_H - HUD_H;
 // The widest band of sea allowed on screen. Zooming out reveals more below the
 // horizon, and the original keeps the water to a thin strip, so the vertical
 // framing is clamped here rather than by widening the simulation's world box.
-const SEA_BAND = 32;
+const SEA_BAND = 13;
 
 export const ISLAND_X = DECK_X1 - 150;
 const PARK_X = DECK_X1 - 74;
@@ -101,10 +101,7 @@ export class Scene {
       ctx.restore();
     };
 
-    r.draw(LAYER.SKY, world((ctx) => {
-      drawSky(ctx, f.vw, f.vh, cam.y, CEILING_Y, SEA_Y);
-      drawStars(ctx, f.vw, f.vh, cam, this.tick);
-    }));
+    r.draw(LAYER.SKY, world((ctx) => drawSky(ctx, f.vw, f.vh, cam.y, CEILING_Y, SEA_Y)));
     r.draw(LAYER.PARALLAX_FAR, world((ctx) => drawClouds(ctx, f.vw, f.vh, cam, this.tick)));
     r.draw(LAYER.BG_TILES, world((ctx) => this.drawShip(ctx, cam, f)));
     r.draw(LAYER.PLAYER, world((ctx) => this.drawAircraft(ctx, sim, cam)));

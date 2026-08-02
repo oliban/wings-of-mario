@@ -1,4 +1,4 @@
-import { SKY, SKY_STYLE, CLOUD, STAR } from './palette.js';
+import { SKY, SKY_STYLE, CLOUD } from './palette.js';
 
 // The sky. In the original it is literally #000000 across 84% of the play area,
 // and that is the single most recognisable thing about the game — a bright
@@ -42,55 +42,17 @@ export function drawSky(ctx, viewW, viewH, camY, ceilingY, seaY) {
   ctx.fillRect(0, 0, viewW, viewH);
 }
 
-// Stars at fixed world positions. They only show in the upper third, where the
-// sky is genuinely black, and they are the cheapest possible altitude cue: if
-// you can see them you are high. A literal table, so the sky is identical on
-// every run and a screenshot at tick N is reproducible.
-const STARS = [];
-for (let i = 0; i < 90; i++) {
-  // A fixed integer hash rather than Math.random: deterministic, and the same
-  // on every machine.
-  const h = (i * 2654435761) >>> 0;
-  STARS.push({
-    x: (h % 6000) - 400,
-    y: ((h >>> 12) % 190),
-    m: 0.25 + ((h >>> 24) % 40) / 100,
-    b: 0.25 + ((h >>> 8) % 60) / 100,
-  });
-}
-
-export function drawStars(ctx, viewW, viewH, cam, tick) {
-  if (SKY_STYLE !== 'flat' && cam.y > 220) return;
-  ctx.save();
-  ctx.fillStyle = STAR;
-  for (const s of STARS) {
-    const x = s.x - cam.x * s.m * 0.12;
-    const y = s.y - cam.y * s.m * 0.5;
-    const sx = ((x % 6000) + 6000) % 6000;
-    if (sx > viewW + 4 || y < -2 || y > viewH) continue;
-    // A slow twinkle keyed off the tick, so nothing in the sky is ever static.
-    const tw = 0.55 + 0.45 * Math.sin((tick + s.x) * 0.03);
-    ctx.globalAlpha = s.b * tw * 0.8;
-    ctx.fillRect(sx, y, 1, 1);
-  }
-  ctx.restore();
-}
-
-// Cloud banks. Dim — a cloud brighter than the aeroplane would break the value
-// hierarchy — and drawn as soft stacked lobes rather than outlined blobs.
+// Fair-weather cumulus. White now that the aeroplane is the dark object: a
+// bright cloud behind a dark aircraft helps it read rather than competing with
+// it, which is the opposite of the constraint a night sky imposed.
 const DECKS = [
-  { x: 240, y: 96, m: 0.16, w: 170, h: 15 },
-  { x: 760, y: 260, m: 0.34, w: 124, h: 11 },
-  { x: 1180, y: 150, m: 0.22, w: 196, h: 17 },
-  { x: 1620, y: 262, m: 0.5, w: 146, h: 12 },
-  { x: 2080, y: 62, m: 0.13, w: 158, h: 14 },
-  { x: 2520, y: 300, m: 0.42, w: 178, h: 15 },
-  { x: 2980, y: 190, m: 0.26, w: 136, h: 11 },
-  { x: 3440, y: 322, m: 0.55, w: 200, h: 17 },
-  { x: 3900, y: 120, m: 0.18, w: 150, h: 12 },
-  { x: 4380, y: 286, m: 0.46, w: 170, h: 15 },
-  { x: 4860, y: 220, m: 0.3, w: 132, h: 11 },
-  { x: 5340, y: 80, m: 0.15, w: 188, h: 16 },
+  { x: 240, y: 74, m: 0.16, w: 96, h: 9 },
+  { x: 1180, y: 128, m: 0.22, w: 112, h: 10 },
+  { x: 2080, y: 56, m: 0.13, w: 90, h: 8 },
+  { x: 2980, y: 160, m: 0.26, w: 104, h: 9 },
+  { x: 3900, y: 96, m: 0.18, w: 88, h: 8 },
+  { x: 4860, y: 182, m: 0.3, w: 108, h: 10 },
+  { x: 5340, y: 62, m: 0.15, w: 96, h: 9 },
 ];
 
 // One bank. A cumulus has a defined, lumpy TOP and a flat BASE where it meets
@@ -106,43 +68,28 @@ function bankPath(ctx, x, y, w, h) {
     const k = ((x * 2654435761) >>> 0) + i * 0x9e3779b1;
     const t = i / 5;
     const lx = x + (t - 0.5) * (w - h) + (((k >>> 5) % 12) - 6);
-    // Clamped: a hash that ever produced a negative radius would throw and take
-    // the whole frame with it.
     const r = Math.max(1, h * (0.62 + ((k >>> 13) % 70) / 100));
     const ly = y - r * (0.45 + ((k >>> 19) % 45) / 100);
     ctx.moveTo(lx + r, ly);
     ctx.arc(lx, ly, r, 0, Math.PI * 2);
   }
-  // The flat base, inset so it never sticks out past the lobes and reads as a
-  // ruled bar.
   ctx.rect(x - w * 0.38, y - h * 0.42, w * 0.76, h * 0.42);
 }
 
 function drawBank(ctx, x, y, w, h) {
-  // The base stop is fully transparent: a cumulus has a defined base, but a hard
-  // opaque edge there reads as a bar of paint rather than as cloud.
-  const g = ctx.createLinearGradient(0, y - h * 1.9, 0, y + 1);
+  // Soft and low-contrast. The reference sky is clear, so cloud here exists only
+  // to give speed and altitude something to read against — the moment a bank
+  // becomes a hard white shape it competes with the aeroplane, which is the one
+  // thing on screen that has earned the right to be looked at.
+  const g = ctx.createLinearGradient(0, y - h * 1.9, 0, y + 2);
   g.addColorStop(0, CLOUD.crown);
-  g.addColorStop(0.3, CLOUD.lit);
-  g.addColorStop(0.6, CLOUD.core);
-  g.addColorStop(0.76, CLOUD.base);
-  g.addColorStop(1, 'rgba(11,18,41,0)');
-  ctx.globalAlpha = 0.8;
+  g.addColorStop(0.35, CLOUD.lit);
+  g.addColorStop(0.72, CLOUD.core);
+  g.addColorStop(1, 'rgba(143,189,224,0)');
+  ctx.globalAlpha = 0.4;
   ctx.fillStyle = g;
   bankPath(ctx, x, y, w, h);
   ctx.fill();
-
-  // A crisp crown, clipped so it never appears along the flat base.
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(x - w, y - h * 4, w * 2, h * 3.35);
-  ctx.clip();
-  ctx.globalAlpha = 0.55;
-  ctx.strokeStyle = CLOUD.crown;
-  ctx.lineWidth = 0.8;
-  bankPath(ctx, x, y, w, h);
-  ctx.stroke();
-  ctx.restore();
   ctx.globalAlpha = 1;
 }
 

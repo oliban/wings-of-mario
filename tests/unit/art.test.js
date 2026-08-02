@@ -11,7 +11,7 @@ import {
   PLANE_LEN, PLANE_ASPECT, PLANE_HEIGHT, LANDMARKS, drawPlane, drawPlaneBody, drawParkedPlane,
 } from '../../src/wings/art/plane.js';
 import { surfaceAt, drawSea, drawWake, drawBowWave, drawSplash } from '../../src/wings/art/sea.js';
-import { drawSky, drawStars, drawClouds } from '../../src/wings/art/sky.js';
+import { drawSky, drawClouds } from '../../src/wings/art/sky.js';
 import {
   ISLAND_H, ISLAND_W, DECK_THICK, drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark,
 } from '../../src/wings/art/carrier.js';
@@ -47,60 +47,60 @@ test('every colour in the scheme is an opaque six-digit hex', () => {
   }
 });
 
-// The single most important relationship in the whole look: the aircraft is the
-// brightest thing on screen and the sky is the darkest. The old version had this
-// exactly backwards — a dark plane on a pale sky — and that is why it vanished
-// into the water.
-test('the value hierarchy runs sky darkest, sea middle, aircraft brightest', () => {
-  const skyMax = Math.max(...Object.values(SKY).map(luma));
-  const seaBody = [SEA.surface, SEA.shallow, SEA.mid].map(luma);
-  const planeHi = luma(PLANE.spec);
-
-  assert.ok(skyMax < 40, `the sky tops out at luma ${skyMax.toFixed(0)}, which is not a night sky`);
-  for (const v of seaBody) {
-    assert.ok(v > skyMax, 'every lit part of the sea must be brighter than the whole sky');
+// The single most important relationship in the whole look, and it is measured
+// off the user's own reference screenshots: the SKY is the brightest large area,
+// the sea is dark, and the AEROPLANE is a dark saturated shape against the sky
+// carrying small white markings. This file asserted the opposite in an earlier
+// round, for a black sky. Getting it backwards is what makes a screenshot stop
+// looking like the game.
+test('the sky is the brightest large area and the aeroplane is dark against it', () => {
+  const sky = luma(SKY.flat);
+  assert.ok(sky > 115 && sky < 170, `sky luma ${sky.toFixed(0)}, reference is 143`);
+  for (const k of ['zenith', 'high', 'mid', 'horizon']) {
+    assert.ok(Math.abs(luma(SKY[k]) - sky) < 45, `SKY.${k} strays too far from the reference blue`);
   }
-  assert.ok(luma(SEA.surface) > 100 && luma(SEA.surface) < 175,
-    `the sea surface is luma ${luma(SEA.surface).toFixed(0)}, wanted the middle of the range`);
-  assert.ok(planeHi > 230, 'the aircraft highlight must be the brightest thing in the frame');
-  assert.ok(planeHi > luma(SEA.surface) + 60, 'the aircraft must separate from the water by value');
-  assert.ok(luma(PLANE.light) > luma(SEA.surface),
-    'the airframe is light-on-dark: even its mid tone outranks the sea');
+  // Every airframe tone below the sky: the aeroplane is a dark shape, not a
+  // light one. Markings are the only bright thing on it.
+  for (const k of ['light', 'skin', 'mid', 'shade', 'dark']) {
+    assert.ok(luma(PLANE[k]) < sky - 8,
+      `PLANE.${k} at luma ${luma(PLANE[k]).toFixed(0)} is not darker than the sky`);
+  }
+  assert.ok(luma(PLANE.spec) > 240, 'the markings have to be white to carry at this size');
+  assert.ok(luma(PLANE.dark) < 60, 'the upper surface should be genuinely dark');
 });
 
-// Hue separation is why a still of the original is readable at a glance. The
-// specific magenta was a palette accident; owning a hue nobody else uses is not.
-test('sky, sea, ship and aircraft each own a hue nobody else uses', () => {
-  const hue = (hex) => {
-    const n = parseInt(hex.slice(1), 16);
-    const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
-    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
-    if (d < 1e-6) return -1;
-    let h;
-    if (mx === r) h = ((g - b) / d) % 6;
-    else if (mx === g) h = (b - r) / d + 2;
-    else h = (r - g) / d + 4;
-    return ((h * 60) + 360) % 360;
-  };
+test('the sea is the dark half of the frame, well under the sky', () => {
+  const sky = luma(SKY.flat);
+  assert.ok(luma(SEA.surface) < sky - 25,
+    `sea surface ${luma(SEA.surface).toFixed(0)} is not clearly under the sky at ${sky.toFixed(0)}`);
+  assert.ok(luma(SEA.abyss) < 40, 'the deep should go genuinely dark');
+  const order = ['surface', 'shallow', 'mid', 'deep', 'abyss'];
+  for (let k = 1; k < order.length; k++) {
+    assert.ok(luma(SEA[order[k]]) < luma(SEA[order[k - 1]]), 'the sea must darken with depth');
+  }
+  assert.ok(luma(SEA.foam) > 240, 'foam is the one white thing on the water');
+});
+
+// Sampled off the reference: the hull is #8d8c9c, a near-neutral cool grey with a
+// faint violet cast — NOT the saturated slate violet an earlier round invented
+// from an Apple II palette accident. It separates from a blue sky and a blue sea
+// by being desaturated and light, and from the aeroplane by being much lighter.
+test('the ship is a light near-neutral grey, distinct from sky, sea and aircraft', () => {
   const sat = (hex) => {
     const n = parseInt(hex.slice(1), 16);
     const c = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
-    const mx = Math.max(...c), mn = Math.min(...c);
-    return mx === 0 ? 0 : (mx - mn) / mx;
+    const mx = Math.max(...c);
+    return mx === 0 ? 0 : (mx - Math.min(...c)) / mx;
   };
-
-  const sea = hue(SEA.surface);
-  const ship = hue(SHIP.hull);
-  const sky = hue(SKY.horizon);
-  // The sea is cyan, the ship is violet, and they are nowhere near each other.
-  assert.ok(sea > 170 && sea < 210, `sea hue ${sea.toFixed(0)} should be cyan`);
-  assert.ok(ship > 240 && ship < 300, `ship hue ${ship.toFixed(0)} should be violet`);
-  assert.ok(Math.abs(sea - ship) > 60, 'the ship must not sit in the sea\'s hue family');
-  assert.ok(Math.abs(sky - ship) > 30 || luma(SKY.horizon) < 40,
-    'sky and ship may share a hue only if the sky is dark enough not to compete');
-  // The aircraft is the one neutral object, so it reads against all three.
-  assert.ok(sat(PLANE.light) < 0.2, 'the airframe should be near-neutral, not another blue');
-  assert.ok(sat(PLANE.flash) > 0.6, 'the squadron flash is the one warm accent and must be warm');
+  assert.ok(sat(SHIP.hull) < 0.22, `hull saturation ${sat(SHIP.hull).toFixed(2)} — it is a grey ship`);
+  assert.ok(luma(SHIP.hull) > 120, 'the hull is a light mass, which is what the aeroplane reads against');
+  assert.ok(luma(SHIP.hull) > luma(SEA.surface) + 20, 'the hull must lift off the water');
+  assert.ok(luma(SHIP.hull) > luma(PLANE.light) + 8, 'a dark aeroplane needs a lighter deck to sit on');
+  // The aircraft is a saturated blue-grey; the ship is not. That is the
+  // separation, now that both sit in the same value neighbourhood as the sky.
+  assert.ok(sat(PLANE.shade) > sat(SHIP.hull) + 0.2, 'the aeroplane is the more saturated of the two');
+  assert.ok(sat(PLANE.flash) > 0.6, 'the squadron band is the one warm accent and must be warm');
+  assert.ok(sat(SEA.mid) > 0.5, 'the sea is a saturated blue, not a grey');
 });
 
 // ---------------------------------------------------------------------------
@@ -147,21 +147,20 @@ test('the canopy sits a little past halfway back, as it does on a Hellcat', () =
 // Measured against the user's own reference screenshot, where the aeroplane's
 // bounding box is 14.1% of the play area's width. What the player sees is the
 // world-space length through the render zoom, so both terms belong in the test.
-test('the aircraft is about an eighth of the screen, as in the reference', () => {
+// The number that matters is the aeroplane against the SHIP. In the reference the
+// carrier fills the frame and the aircraft is about an eighth of it; ours was a
+// fifth of the deck, which is why the scene read as a close-up however the sprite
+// itself was sized.
+test('the aircraft is a small dark shape on a big ship', () => {
+  const onDeck = PLANE_LEN / (DECK_X1 - DECK_X0);
+  assert.ok(onDeck > 0.09 && onDeck < 0.16,
+    `the aircraft is ${(onDeck * 100).toFixed(0)}% of the flight deck, reference is ~11%`);
   const onScreen = (PLANE_LEN * WORLD_SCALE) / VIEW_W;
-  assert.ok(onScreen > 0.09 && onScreen < 0.15,
-    `the aircraft is ${(onScreen * 100).toFixed(1)}% of screen width, wanted ~12-14%`);
-  // The bounding box runs past the nose and tail — propeller disc and tailplane —
-  // so the drawn extent is wider than the fuselage. Guard that too.
-  assert.ok((PLANE_LEN * 1.17 * WORLD_SCALE) / VIEW_W < 0.17, 'drawn extent has crept up');
-});
-
-// The zoom is what lets the pilot see the world rather than a close-up of it,
-// and Plan 3's archipelago hunt depends on it.
-test('the world is drawn zoomed out, so more of it is visible at once', () => {
-  assert.ok(WORLD_SCALE > 0.6 && WORLD_SCALE < 0.95, `WORLD_SCALE ${WORLD_SCALE}`);
-  const visible = VIEW_W / WORLD_SCALE;
-  assert.ok(visible > VIEW_W * 1.2, 'the point of the zoom is to see more world');
+  assert.ok(onScreen > 0.07 && onScreen < 0.13,
+    `the aircraft is ${(onScreen * 100).toFixed(1)}% of screen width, reference is ~11%`);
+  // ...and the ship has to actually dominate, or the ratio buys nothing.
+  const deckOnScreen = ((DECK_X1 - DECK_X0) * WORLD_SCALE) / VIEW_W;
+  assert.ok(deckOnScreen > 0.6, `the carrier is only ${(deckOnScreen * 100).toFixed(0)}% of the frame`);
   assert.equal(PLAY_H, VIEW_H - HUD_H);
 });
 
@@ -169,13 +168,10 @@ test('the world is drawn zoomed out, so more of it is visible at once', () => {
 // The ship
 // ---------------------------------------------------------------------------
 
-// The island is what makes a side-on box read as a flat-top, and in the original
-// it is more than half the play area tall. Ours was 13%, which is why it read as
-// a barge with a shed on it.
-test('the island is a superstructure, but no longer eats the frame', () => {
+test('the island rises to about half the play area, as in the reference', () => {
   const f = (ISLAND_H * WORLD_SCALE) / PLAY_H;
-  assert.ok(f > 0.25 && f < 0.45,
-    `the island is ${(f * 100).toFixed(0)}% of the play area on screen, wanted ~33%`);
+  assert.ok(f > 0.4 && f < 0.65,
+    `the island is ${(f * 100).toFixed(0)}% of the play area on screen, reference is ~51%`);
   // It still has to be tall relative to the SHIP, which is what makes a box read
   // as a flat-top in the first place.
   assert.ok(ISLAND_H / (SEA_Y - DECK_Y) > 1.4, 'the island must tower over the freeboard');
@@ -278,7 +274,7 @@ test('every art module exports drawing functions and no canvas at import time', 
   const fns = [
     drawPlane, drawPlaneBody, drawParkedPlane,
     drawSea, drawWake, drawBowWave, drawSplash,
-    drawSky, drawStars, drawClouds,
+    drawSky, drawClouds,
     drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark,
     drawPanel, drawBomb, drawRocket, drawTracer, drawFireball,
   ];

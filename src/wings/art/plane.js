@@ -26,15 +26,20 @@ import { PLANE } from './palette.js';
 //   crisp panel lines, and a hard shadow where the wing meets the fuselage. Soft
 //   pastel gradients read as plastic.
 //
-// Colour is the 1944 US Navy scheme: dark sea blue over light gull grey, with a
-// national star-and-bar on the aft fuselage. The dark upper surface is still
-// about three times the luminance of the sky, and the light underside is what
-// gives the rim light something to be brighter than.
+// Colour follows the user's reference: a DARK blue-grey warplane against a bright
+// blue sky, with white national markings. Every airframe tone sits below the
+// sky's luma of 143, so the aeroplane reads as the darkest, most saturated thing
+// in frame — the exact inverse of the light-on-black arrangement a night sky
+// calls for. The bright underside rim light that scheme needed is gone with it:
+// against a bright sky a dark shape needs a DARK contact edge and hard white
+// markings, not a highlight. The silhouette work is untouched.
 
-// Length in world pixels. Settled by eye against both the carrier and the frame
-// rather than against an arithmetic target: big enough that the silhouette can
-// be a silhouette, small enough that it is still an aeroplane standing on a ship.
-export const PLANE_LEN = 70;
+// Length in world pixels. The number that matters is the aeroplane against the
+// SHIP, not against the window: in the reference the aircraft is about an eighth
+// of the flight deck and the deck fills the frame. Ours is 42 against a 320px
+// deck — 13%, against their 11% — and the render zoom in scene.js then makes the
+// ship large enough for that ratio to be what the player sees.
+export const PLANE_LEN = 42;
 
 // The body is authored in a 52-unit frame; PLANE_SCALE stretches the whole
 // aeroplane — gear, hook, propeller, parked aircraft — from that one constant.
@@ -334,12 +339,23 @@ export function drawPlaneBody(ctx, opts = {}) {
   wingPath(ctx);
   ctx.fillStyle = g.wing;
   ctx.fill();
-  ctx.strokeStyle = PLANE.spec;
-  ctx.lineWidth = 1.1;
+  ctx.strokeStyle = PLANE.light;
+  ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(16.5, 2.6);
   ctx.lineTo(5, 7.2);
   ctx.stroke();
+  // A white stripe across the wing.
+  ctx.save();
+  wingPath(ctx);
+  ctx.clip();
+  ctx.strokeStyle = PLANE.insignia;
+  ctx.lineWidth = 1.8;
+  ctx.beginPath();
+  ctx.moveTo(-2.5, 0);
+  ctx.lineTo(-4.5, 9);
+  ctx.stroke();
+  ctx.restore();
 
   // Fuselage.
   fuselagePath(ctx);
@@ -395,14 +411,18 @@ export function drawPlaneBody(ctx, opts = {}) {
   ctx.lineTo(TAIL + 3, -3.1);
   ctx.stroke();
 
-  drawInsignia(ctx, -5.5, 0.2, 2.1);
+  drawInsignia(ctx, -4.6, 0.2, 2.2);
 
-  // The one warm accent on the aeroplane: a squadron band round the aft
-  // fuselage, which is also what tells you which way up it is at a distance.
+  // A white band round the aft fuselage. On a dark aeroplane against a bright
+  // sky these hard white marks are what carry at distance, where a soft
+  // highlight would not.
+  ctx.fillStyle = PLANE.insignia;
+  ctx.fillRect(-11.6, -5.2, 2.1, 10);
+  // And the one warm accent, a squadron band just aft of it.
   ctx.fillStyle = PLANE.flash;
-  ctx.fillRect(-15, -5.6, 2.2, 11);
+  ctx.fillRect(-15.4, -4.9, 1.8, 9.4);
   ctx.fillStyle = PLANE.flashDark;
-  ctx.fillRect(-15, -0.4, 2.2, 6);
+  ctx.fillRect(-15.4, 0, 1.8, 4.5);
   ctx.restore();
 
   // Cowling, over the fuselage: blunt, cylindrical, deeper than what it is
@@ -428,7 +448,7 @@ export function drawPlaneBody(ctx, opts = {}) {
 
   // The cowl lip: a hard bright rim round the front of the cylinder, and the
   // dark intake shadow just inside it.
-  ctx.strokeStyle = PLANE.spec;
+  ctx.strokeStyle = PLANE.light;
   ctx.lineWidth = 1.2;
   ctx.beginPath();
   ctx.moveTo(27.2, -6.4);
@@ -484,9 +504,10 @@ export function drawPlaneBody(ctx, opts = {}) {
   ctx.quadraticCurveTo(0, -10.1, -3.6, -9.7);
   ctx.stroke();
 
-  // THE RIM LIGHT. Last, over everything, unbroken from the cowl lip to the
-  // tailwheel. Nothing is allowed to interrupt this stroke.
-  ctx.strokeStyle = PLANE.spec;
+  // THE CONTACT EDGE. Last, over everything, unbroken from the cowl lip to the
+  // tailwheel. On a black sky this stroke was a white rim light; on a bright sky
+  // the same line does the same job in the opposite value.
+  ctx.strokeStyle = PLANE.contact;
   ctx.lineWidth = 0.9;
   ctx.lineJoin = 'round';
   ctx.lineCap = 'round';
@@ -503,16 +524,16 @@ export function drawPlaneBody(ctx, opts = {}) {
   ctx.lineTo(TAIL + 1, 1.9);
   ctx.stroke();
 
-  // A dark contact edge along the top, so a lit airframe still has a silhouette
-  // when it crosses a cloud.
-  ctx.globalAlpha = 0.6;
-  ctx.strokeStyle = PLANE.contact;
-  ctx.lineWidth = 0.8;
+  // A thin lit edge along the spine, so the upper surface has some form against
+  // the sky instead of reading as a flat cut-out.
+  ctx.globalAlpha = 0.7;
+  ctx.strokeStyle = PLANE.skin;
+  ctx.lineWidth = 0.7;
   ctx.beginPath();
-  ctx.moveTo(13, -6.4);
-  ctx.lineTo(7.5, -5.8);
-  ctx.moveTo(-8.5, -4.7);
-  ctx.lineTo(-9.5, -4.5);
+  ctx.moveTo(13, -6.3);
+  ctx.lineTo(7.5, -5.7);
+  ctx.moveTo(-9, -4.6);
+  ctx.lineTo(TAIL + 1, -3.1);
   ctx.stroke();
   ctx.globalAlpha = 1;
 }
