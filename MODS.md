@@ -65,3 +65,21 @@ needs to delete on load.
 
 **On conflict:** upstream owns this block per ARCHITECTURE.md section 10. Keep
 their version of every pre-existing member and re-add ours.
+
+---
+
+## `index.html` — bomb-test debug panel hook
+
+**Why:** A clickable stand-in for the plane, so destructible terrain can be
+play-tested before the pilot exists. All of its logic and styling lives in
+`src/wings/debug-panel.js`, which builds its own DOM and never touches the
+game's modules except through `window.__GAME`.
+
+**Changed:**
+- Added one line after the `src/main.js` script tag:
+  `<script type="module" src="./src/wings/debug-panel.js"></script>`.
+
+**On conflict:** keep this as the last `<script>` in `<body>`, after
+`src/main.js` — the panel reads `window.__GAME`, which `src/main.js` only
+assigns once its own module body has finished running, and module scripts on
+a page execute in document order.
