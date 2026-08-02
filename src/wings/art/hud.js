@@ -232,11 +232,27 @@ function radar(ctx, x, y, w, h, sim, world, tick) {
   }
   ctx.stroke();
 
-  // The carrier.
+  // The carrier, drawn as a ship rather than as a bar: hull, deck line, island
+  // and mast, so the window shows the thing the pilot is looking for.
+  const sx0 = toX(world.deckX0);
+  const sx1 = toX(world.deckX1);
+  ctx.fillStyle = SHIP.hullShade;
+  ctx.beginPath();
+  ctx.moveTo(sx0 - 1, horizon - 3);
+  ctx.lineTo(sx1 + 2, horizon - 3);
+  ctx.lineTo(sx1, horizon + 1);
+  ctx.lineTo(sx0, horizon + 1);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = SHIP.deckLit;
+  ctx.fillRect(sx0 - 1, horizon - 3.6, sx1 - sx0 + 3, 1);
   ctx.fillStyle = SHIP.island;
-  ctx.fillRect(toX(world.deckX0), horizon - 3.5, toX(world.deckX1) - toX(world.deckX0), 3.5);
+  ctx.fillRect(sx1 - 11, horizon - 8, 5, 4.6);
   ctx.fillStyle = SHIP.rule;
-  ctx.fillRect(toX(world.deckX1) - 12, horizon - 7, 3, 4);
+  ctx.fillRect(sx1 - 9, horizon - 11.5, 0.9, 3.6);
+  // Her wake, so the plan shows which way she is steaming.
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillRect(sx0 - 9, horizon - 1, 8, 1);
 
   // Islands, once there are any.
   ctx.fillStyle = 'rgba(226,112,58,0.8)';

@@ -81,11 +81,17 @@ export function drawHull(ctx, x0, x1, deckY, seaY) {
   ctx.quadraticCurveTo((x0 + x1) / 2, deckY + d * 0.345, x1 + 6, deckY + d * 0.31);
   ctx.stroke();
 
+  // Portholes in irregular groups rather than an even row: a fixed hash decides
+  // the gaps, so the rhythm is broken but identical on every run.
   ctx.fillStyle = 'rgba(14,8,26,0.75)';
-  for (let x = x0 + 14; x < x1 - 10; x += 21) {
+  let px = x0 + 12;
+  for (let i = 0; px < x1 - 10; i++) {
+    const k = ((i * 2654435761) >>> 0);
     ctx.beginPath();
-    ctx.arc(x, deckY + d * 0.45, 1.5, 0, Math.PI * 2);
+    ctx.arc(px, deckY + d * (0.44 + ((k >>> 9) % 5) / 100), 1.5, 0, Math.PI * 2);
     ctx.fill();
+    // Every few ports come in a close pair, as they do on a real side shell.
+    px += ((k >>> 3) % 4) === 0 ? 7 : 15 + ((k >>> 17) % 12);
   }
   // Vertical plate seams, so the side reads as riveted sections not a wash.
   ctx.strokeStyle = 'rgba(20,12,34,0.28)';
@@ -96,7 +102,23 @@ export function drawHull(ctx, x0, x1, deckY, seaY) {
     ctx.stroke();
   }
 
-  // Boot topping at the waterline.
+  // Vertical variation along the length: the shell is not evenly lit, and a
+  // uniform grey the length of the ship is what makes a hull look like a wall.
+  const along = ctx.createLinearGradient(x0, 0, x1, 0);
+  along.addColorStop(0, 'rgba(20,12,34,0.30)');
+  along.addColorStop(0.28, 'rgba(20,12,34,0.05)');
+  along.addColorStop(0.52, 'rgba(20,12,34,0.26)');
+  along.addColorStop(0.78, 'rgba(20,12,34,0.04)');
+  along.addColorStop(1, 'rgba(20,12,34,0.22)');
+  ctx.fillStyle = along;
+  ctx.fillRect(x0 - 8, deckY, x1 - x0 + 20, seaY - deckY + 4);
+
+  // A darker band down at the waterline, then the boot topping itself.
+  const boot = ctx.createLinearGradient(0, seaY - 13, 0, seaY - 3);
+  boot.addColorStop(0, 'rgba(20,12,34,0)');
+  boot.addColorStop(1, 'rgba(20,12,34,0.5)');
+  ctx.fillStyle = boot;
+  ctx.fillRect(x0 - 8, seaY - 13, x1 - x0 + 20, 10);
   ctx.fillStyle = SHIP.boot;
   ctx.fillRect(x0 - 8, seaY - 3.5, x1 - x0 + 20, 6);
   ctx.restore();
@@ -219,57 +241,143 @@ export function drawDeck(ctx, x0, x1, deckY, tick) {
 // Island
 // ---------------------------------------------------------------------------
 
-// Bridge, uptakes, mast and ensign, standing ISLAND_H above the deck. The
-// forward third steps back into a narrower block, so the profile is an L and
-// not a box.
+// The island. Getting this wrong is what made the ship read as a hotel: even
+// rectangular tiers with a uniform grid of identical windows and a plain cross
+// for a mast is an office block, whatever colour it is painted.
+//
+// A warship bridge is four specific things, all visible in the reference:
+//
+//   IRREGULAR STEPPED MASSING. Tiers of different widths AND different offsets,
+//   narrowing as they rise and stepping back further on one side than the other.
+//   Symmetry is what reads as architecture.
+//   A LATTICE MAST with cross-bracing carrying a bedspring radar array and a
+//   yardarm — the single strongest warship cue in the whole silhouette.
+//   FEW, SMALL, IRREGULAR OPENINGS. Bridge glazing and scattered slits, not a
+//   window grid.
+//   GREEBLES. Boxes, vents, a funnel, a director tub, railings and platforms
+//   breaking every outline. Warship superstructures are visually noisy; clean
+//   rectangles read civilian.
 export function drawIsland(ctx, x, deckY, tick) {
   const baseY = deckY - DECK_THICK + 2;
+  const H = ISLAND_H;
+  const W = ISLAND_W;
+  // Heights are fractions of the island's own height, so the massing survives a
+  // change of scale.
+  const at = (f) => baseY - H * f;
+
   ctx.save();
 
-  // Mast: a pale pole rising nearly as far again above the bridge, with two
-  // yardarms. Half the island's height is mast, exactly as in the original.
-  const bridgeTop = baseY - 50;
-  const mastX = x + 26;
-  ctx.strokeStyle = SHIP.rule;
-  ctx.lineWidth = 1.6;
+  // --- masts, drawn first so the tiers overlap their feet -------------------
+  const poleX = x + W * 0.46;
+  const latX = x + W * 0.78;
+
+  // Lattice tripod: two splayed legs with cross-bracing between them. Open
+  // framework, not a solid pole.
+  ctx.strokeStyle = SHIP.deckLit;
+  ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(mastX, bridgeTop);
-  ctx.lineTo(mastX, baseY - ISLAND_H);
+  ctx.moveTo(latX - 3.5, at(0.34));
+  ctx.lineTo(latX - 0.8, at(0.68));
+  ctx.moveTo(latX + 3.5, at(0.34));
+  ctx.lineTo(latX + 0.8, at(0.68));
   ctx.stroke();
-  ctx.lineWidth = 1.1;
-  for (const f of [0.34, 0.66]) {
-    const y = bridgeTop - (ISLAND_H - 52) * f;
-    ctx.beginPath();
-    ctx.moveTo(mastX - 7, y);
-    ctx.lineTo(mastX + 7, y);
-    ctx.stroke();
-  }
-
-  // Air-search aerial at the masthead, swinging through a bearing off the tick.
-  const sweep = Math.sin(tick * 0.035);
-  ctx.save();
-  ctx.translate(mastX, baseY - ISLAND_H + 3);
-  ctx.scale(Math.max(0.15, Math.abs(sweep)), 1);
-  ctx.strokeStyle = SHIP.rule;
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth = 0.6;
   ctx.beginPath();
-  ctx.rect(-5, -3.5, 10, 5);
-  ctx.moveTo(-5, -1);
-  ctx.lineTo(5, -1);
+  for (let i = 0; i < 5; i++) {
+    const f0 = 0.34 + (0.34 * i) / 5;
+    const f1 = 0.34 + (0.34 * (i + 1)) / 5;
+    const w0 = 3.5 - 2.7 * (i / 5);
+    const w1 = 3.5 - 2.7 * ((i + 1) / 5);
+    ctx.moveTo(latX - w0, at(f0));
+    ctx.lineTo(latX + w1, at(f1));
+    ctx.moveTo(latX + w0, at(f0));
+    ctx.lineTo(latX - w1, at(f1));
+  }
+  ctx.stroke();
+
+  // Air-search bedspring on top of the tripod: a flat rectangular array of
+  // horizontal bars, swinging through a bearing off the tick.
+  ctx.save();
+  ctx.translate(latX, at(0.71));
+  ctx.scale(Math.max(0.2, Math.abs(Math.sin(tick * 0.028))), 1);
+  ctx.fillStyle = SHIP.deckLit;
+  ctx.fillRect(-6, -4.5, 12, 5);
+  ctx.strokeStyle = SHIP.hullDark;
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  for (let i = 1; i < 4; i++) {
+    ctx.moveTo(-6, -4.5 + i * 1.25);
+    ctx.lineTo(6, -4.5 + i * 1.25);
+  }
   ctx.stroke();
   ctx.restore();
 
-  // Ensign at the masthead, flying aft, rippling off the tick.
-  drawEnsign(ctx, mastX + 1, baseY - ISLAND_H + 7, tick);
+  // Main pole with a yardarm and the ensign at the truck.
+  ctx.strokeStyle = SHIP.rule;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(poleX, at(0.56));
+  ctx.lineTo(poleX, at(1));
+  ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(poleX - 7, at(0.8));
+  ctx.lineTo(poleX + 7, at(0.8));
+  ctx.moveTo(poleX - 7, at(0.8));
+  ctx.lineTo(poleX - 7, at(0.83));
+  ctx.moveTo(poleX + 7, at(0.8));
+  ctx.lineTo(poleX + 7, at(0.83));
+  ctx.stroke();
+  // A small surface-search aerial on the yardarm.
+  ctx.fillStyle = SHIP.deckLit;
+  ctx.fillRect(poleX + 2, at(0.87) - 3, 4.5, 3);
+  drawEnsign(ctx, poleX + 1.5, at(1) + 1, tick);
 
-  // Lower block: the widest tier, carrying the hull number.
-  block(ctx, x, baseY - 21, ISLAND_W, 21, 3);
-  // Middle block: bridge proper, four tiers of windows.
-  block(ctx, x + 6, baseY - 38, ISLAND_W - 14, 17, 4);
-  // Upper block, stepped back — the short arm of the L.
-  block(ctx, x + 16, baseY - 50, ISLAND_W - 34, 12, 3);
+  // --- massing: five tiers, no two the same width, each offset differently ---
+  tier(ctx, x, at(0.22), W, H * 0.22, 'deck');
+  tier(ctx, x + 3, at(0.34), W - 15, H * 0.12, 'plain');
+  tier(ctx, x + 1, at(0.47), W - 29, H * 0.13, 'bridge');
+  tier(ctx, x + 8, at(0.56), W - 45, H * 0.09, 'plain');
+  tier(ctx, x + 13, at(0.63), W - 54, H * 0.07, 'plain');
 
-  // Hull number, chunky and white, on the lower block.
+  // Funnel: an angled uptake on the outboard side, the tallest solid thing after
+  // the masts and the one part of the island that is not a box.
+  const fx = x + W - 30;
+  ctx.beginPath();
+  ctx.moveTo(fx, at(0.4));
+  ctx.lineTo(fx + 3.5, at(0.63));
+  ctx.lineTo(fx + 12, at(0.63));
+  ctx.lineTo(fx + 12, at(0.4));
+  ctx.closePath();
+  ctx.fillStyle = SHIP.hullShade;
+  ctx.fill();
+  ctx.fillStyle = SHIP.hullDark;
+  ctx.fillRect(fx + 3.5, at(0.63) - 1.5, 8.5, 2);
+
+  // Director tub outboard on the lower block: a cylinder with a wider rim.
+  const dx = x + W - 8;
+  ctx.fillStyle = SHIP.hullShade;
+  ctx.fillRect(dx - 3, at(0.34), 6, H * 0.1);
+  ctx.fillStyle = SHIP.island;
+  ctx.beginPath();
+  ctx.ellipse(dx, at(0.34), 5, 2.4, 0, Math.PI, 0);
+  ctx.fill();
+  ctx.fillStyle = SHIP.deckLit;
+  ctx.fillRect(dx - 5, at(0.34) - 0.8, 10, 1);
+
+  // Greebles: small boxes, vents and a davit breaking the tier outlines.
+  ctx.fillStyle = SHIP.hullShade;
+  ctx.fillRect(x + 6, at(0.24) - 3, 5, 3);
+  ctx.fillRect(x + 26, at(0.35) - 2.5, 4, 2.5);
+  ctx.fillRect(x + W - 30, at(0.23) - 2, 3.5, 2);
+  ctx.fillStyle = SHIP.island;
+  ctx.fillRect(x + 18, at(0.48) - 2, 3, 2);
+  // Railings along the open platforms: a dotted light line, not a solid rule.
+  ctx.fillStyle = SHIP.deckLit;
+  for (let i = 0; i < 9; i++) ctx.fillRect(x + 4 + i * 3.4, at(0.22) - 2.2, 0.9, 2.2);
+  for (let i = 0; i < 5; i++) ctx.fillRect(x + 34 + i * 3.2, at(0.34) - 2, 0.8, 2);
+
+  // The hull number, on the forward face where nothing parks in front of it.
   ctx.fillStyle = SHIP.rule;
   ctx.font = 'bold 13px ui-monospace, Menlo, monospace';
   ctx.textBaseline = 'alphabetic';
@@ -278,38 +386,44 @@ export function drawIsland(ctx, x, deckY, tick) {
   ctx.restore();
 }
 
-// One tier of superstructure: a lit top edge, a shaded face, a row of windows.
-function block(ctx, x, y, w, h, rows) {
+// One tier. `kind` decides what openings it carries: a bridge gets a glazing
+// band, everything else gets a few scattered slits. Never a grid.
+function tier(ctx, x, y, w, h, kind) {
   const g = ctx.createLinearGradient(0, y, 0, y + h);
   g.addColorStop(0, SHIP.islandLit);
-  g.addColorStop(0.3, SHIP.island);
+  g.addColorStop(0.22, SHIP.island);
   g.addColorStop(1, SHIP.islandShade);
   ctx.fillStyle = g;
   ctx.fillRect(x, y, w, h);
-  ctx.fillStyle = SHIP.rule;
-  ctx.fillRect(x, y, w, 1.2);
-  ctx.fillStyle = 'rgba(20,12,34,0.5)';
+  ctx.fillStyle = SHIP.deckLit;
+  ctx.fillRect(x, y, w, 1);
+  ctx.fillStyle = SHIP.hullDark;
   ctx.fillRect(x, y + h - 1, w, 1);
 
-  // Horizontal bands separated by lighter rules, each carrying evenly spaced
-  // dark window rectangles. This is the whole texture of the original's bridge.
-  const step = (h - 2) / rows;
-  for (let r = 0; r < rows; r++) {
-    const by = y + 2 + r * step;
-    // A continuous dark window strip broken by mullions reads as a bridge
-    // gallery; a grid of separate squares reads as a filing cabinet.
+  if (kind === 'bridge') {
+    // Continuous glazing broken by mullions — the bridge windows, and the only
+    // large opening on the island.
     ctx.fillStyle = SHIP.window;
-    ctx.fillRect(x + 2.5, by + step * 0.2, w - 5, Math.max(1.4, step * 0.4));
+    ctx.fillRect(x + 2, y + h * 0.28, w - 4, Math.max(1.6, h * 0.32));
     ctx.fillStyle = SHIP.islandShade;
-    for (let wx = x + 6; wx < x + w - 4; wx += 6.5) {
-      ctx.fillRect(wx, by + step * 0.2, 1.1, Math.max(1.4, step * 0.4));
+    for (let wx = x + 6; wx < x + w - 3; wx += 6) {
+      ctx.fillRect(wx, y + h * 0.28, 1, Math.max(1.6, h * 0.32));
     }
-    // The lighter rule under each tier is what separates the bands.
-    ctx.fillStyle = 'rgba(242,236,251,0.8)';
-    ctx.fillRect(x + 1, by + step - 1.1, w - 2, 1.1);
+    return;
+  }
+
+  // Scattered slits at irregular intervals, from a fixed hash of the tier's own
+  // position so they never change between runs and never line up into a grid.
+  ctx.fillStyle = SHIP.window;
+  const k = ((x * 2654435761) >>> 0) ^ ((y * 40503) >>> 0);
+  let px = x + 3;
+  for (let i = 0; px < x + w - 4; i++) {
+    const gap = 5 + ((k >>> (i * 3 % 20)) % 7);
+    const wide = ((k >>> (i * 5 % 18)) % 3) === 0;
+    ctx.fillRect(px, y + (kind === 'deck' ? h * 0.55 : h * 0.34), wide ? 3.4 : 1.6, 1.4);
+    px += gap;
   }
 }
-
 function drawEnsign(ctx, x, y, tick) {
   const w = 20;
   const h = 11;

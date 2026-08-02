@@ -77,19 +77,31 @@ function bankPath(ctx, x, y, w, h) {
 }
 
 function drawBank(ctx, x, y, w, h) {
-  // Soft and low-contrast. The reference sky is clear, so cloud here exists only
-  // to give speed and altitude something to read against — the moment a bank
-  // becomes a hard white shape it competes with the aeroplane, which is the one
-  // thing on screen that has earned the right to be looked at.
-  const g = ctx.createLinearGradient(0, y - h * 1.9, 0, y + 2);
+  // A cumulus has a lumpy, DEFINED top and a flat base. Soft in every direction
+  // is a smudge, which is what this was for three rounds. The lobes are unioned
+  // into one path with a rectangle across the base, filled with a vertical ramp
+  // that fades out at the bottom, and only the crown gets a crisp lighter edge.
+  const g = ctx.createLinearGradient(0, y - h * 2.1, 0, y + 1);
   g.addColorStop(0, CLOUD.crown);
-  g.addColorStop(0.35, CLOUD.lit);
-  g.addColorStop(0.72, CLOUD.core);
+  g.addColorStop(0.3, CLOUD.lit);
+  g.addColorStop(0.68, CLOUD.core);
   g.addColorStop(1, 'rgba(143,189,224,0)');
-  ctx.globalAlpha = 0.4;
+  ctx.globalAlpha = 0.62;
   ctx.fillStyle = g;
   bankPath(ctx, x, y, w, h);
   ctx.fill();
+
+  // The crown, clipped so it never draws along the flat base.
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x - w, y - h * 5, w * 2, h * 4.3);
+  ctx.clip();
+  ctx.globalAlpha = 0.85;
+  ctx.strokeStyle = CLOUD.crown;
+  ctx.lineWidth = 0.9;
+  bankPath(ctx, x, y, w, h);
+  ctx.stroke();
+  ctx.restore();
   ctx.globalAlpha = 1;
 }
 
