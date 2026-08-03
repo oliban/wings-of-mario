@@ -35,6 +35,10 @@ import { drawPanel, HUD_H } from './art/hud.js';
 //
 // It is a pure render transform: the simulation still works in world pixels at
 // TILE 16, and nothing downstream of `submit` knows the difference.
+//
+// This is now the SEA-LEVEL scale specifically — the widest the world is ever
+// drawn, and the one the ship and the aeroplane were proportioned against.
+// Climbing scales the world down from here; see ZOOM below.
 export const WORLD_SCALE = 1.15;
 
 // The play area is what the world is framed in; the panel sits below it.
@@ -59,6 +63,76 @@ const SEA_BAND = 13;
 // shoreline.
 const LAND_BIAS = 40;
 const LAND_FADE = 200;
+
+// ALTITUDE ZOOM.
+//
+// The user's third reference is the original seen from height: the aeroplane a
+// speck, the island a strip of palms along the bottom, sky filling everything
+// else. The world is simply drawn smaller the higher you are, and that is the
+// effect — it is also the answer to the complaint that flying high shows
+// nothing but blue, since the ground only comes back into frame if the frame
+// gets bigger.
+//
+// RANGE. WORLD_SCALE (1.15) at sea level down to ZOOM.MIN at the ceiling. The
+// reference's own scale is roughly a third — its aeroplane is about 1.5% of
+// the frame width — and the user asked for "maybe not as far out" for good
+// reason: at that scale our 42px aeroplane is 14 screen pixels, the bomb is
+// two, and you cannot aim. 0.62 keeps the aeroplane at 26px, still clearly an
+// aeroplane with a visible attitude, and nearly doubles the vertical span of
+// the play area (170 world px to 316). It is the far end of the user's
+// suggested range because the effect is barely worth having at the near end.
+//
+// CURVE. Nothing at all happens below FROM_Y, and smoothstep from there to the
+// ceiling. The dead band is the point: FROM_Y is the attack altitude the
+// bombing run is actually flown at, the altitude the sea band, the land bias
+// and the aeroplane-to-ship proportions were all tuned at, and a linear curve
+// would have taken a fifth of the scale off before you ever got there.
+// Smoothstep above it means the change starts gently rather than the instant
+// you cross the line, spends itself through the middle of the climb, and
+// arrives at the ceiling flat rather than still moving.
+//
+// NO SPRING, deliberately, and unlike the roll. The roll's input is a step
+// function — a manoeuvre begins — so it needs a spring to have any duration at
+// all. The zoom's input is ALTITUDE, which is continuous and speed-limited:
+// even a vertical dive at MAX_SPEED moves the scale by 0.008 per tick, so the
+// curve is already smoother than a spring would make it. Adding one would only
+// buy back a lag that has to be caught up after dropped frames, which is
+// exactly how a screenshot at tick N stops being reproducible.
+export const ZOOM = {
+  MAX: WORLD_SCALE,
+  MIN: 0.5,
+  FROM_Y: 440,
+  // Where the aeroplane sits in the play area once the world has opened up:
+  // centred at low level, a fifth of the way down at the ceiling. Without this
+  // the extra span the zoom buys is split evenly above and below, and half of
+  // it is spent on empty sky ABOVE the service ceiling — which is nothing, by
+  // definition. Tilting the frame down is what turns the zoom from a smaller
+  // aeroplane into a view of the world you are flying over, and it is what
+  // the reference actually shows: the aeroplane high, the land along the
+  // bottom.
+  LOOK_DOWN: 0.3,
+  // ...but never so far that the frame runs off the top of the world, and
+  // never so far that the aeroplane itself is pushed into the top edge. The
+  // simulation's own camera already stops following upward near the ceiling,
+  // so the look-down is applied on top of a frame that is riding high anyway.
+  ABOVE_CEILING: 24,
+  TOP_MARGIN: 0.18,
+};
+
+// The scale the world should be drawn at for an aeroplane whose centre is at
+// world y. A curve and nothing else: no clock, no history, no state — the
+// same altitude gives the same scale on every machine and every frame.
+export function zoomFor(worldY) {
+  return ZOOM.MAX + (ZOOM.MIN - ZOOM.MAX) * altitudeEase(worldY);
+}
+
+// How far through the zoom band an altitude is, 0 below FROM_Y and 1 at the
+// ceiling, smoothstepped. Both the scale and the look-down are read off this
+// one curve, so they arrive together instead of fighting each other.
+export function altitudeEase(worldY) {
+  const alt = clamp((ZOOM.FROM_Y - worldY) / (ZOOM.FROM_Y - CEILING_Y), 0, 1);
+  return alt * alt * (3 - 2 * alt);
+}
 
 export const ISLAND_X = DECK_X1 - 150;
 const PARK_X = DECK_X1 - 74;
@@ -143,6 +217,8 @@ export class Scene {
     // heading for. `rollTarget` accumulates a half turn per crossing of the
     // vertical, in the direction the nose is already sweeping, so a full loop
     // rolls all the way round once and comes out where it started.
+    // The scale the world is currently drawn at, chasing zoomFor(altitude).
+    this.zoom = ZOOM.MAX;
     this.roll = 0;
     this.rollVel = 0;
     this.rollTarget = 0;
@@ -261,35 +337,55 @@ export class Scene {
     const turn = sim.turnState();
     const steps = Math.min(Math.max(sim.tick - this.tick, 0), ROLL.MAX_STEPS);
     for (let i = 0; i < steps; i++) this.stepRoll(sim.plane, turn);
+    // The zoom carries no state, so it is read straight off the aeroplane
+    // rather than caught up a tick at a time: at simulation tick N it is
+    // whatever the altitude at tick N says, dropped frames or not.
+    this.zoom = zoomFor(sim.plane.y + PLANE_H / 2);
     this.tick = sim.tick;
     for (const f of this.fx) f.t++;
     this.fx = this.fx.filter((f) => f.t < f.life);
     return this;
   }
 
-  // The world viewport, in world pixels, once WORLD_SCALE has been applied. The
-  // drawing functions take these instead of VIEW_W/VIEW_H and are otherwise
-  // unaware that any zoom happened.
+  // The world viewport, in world pixels, once the current zoom has been
+  // applied. The drawing functions take these instead of VIEW_W/VIEW_H and are
+  // otherwise unaware that any zoom happened.
   frame(sim) {
-    const vw = VIEW_W / WORLD_SCALE;
-    const vh = VIEW_H / WORLD_SCALE;
+    // The live scale, not the constant: everything below is written in terms
+    // of it, so the whole framing — the centring, the sea band, the land bias
+    // — holds at any zoom rather than being tuned for one.
+    const scale = this.zoom;
+    const vw = VIEW_W / scale;
+    const vh = VIEW_H / scale;
     // Re-centre: the simulation frames the aeroplane in the middle of a 512x240
     // window, but the bottom of that window is under the panel, so the world is
     // centred on the middle of the PLAY area instead.
     const x = sim.cam.x + VIEW_W / 2 - vw / 2;
-    let y = sim.cam.y + VIEW_H / 2 - PLAY_H / 2 / WORLD_SCALE + landBias(sim);
+    const play = PLAY_H / scale;
+    // Look down as the world opens up: the aeroplane rides higher in the frame
+    // the higher it is, so the span the zoom bought is spent on the world
+    // below rather than on sky above the ceiling.
+    const centre = sim.plane.y + PLANE_H / 2;
+    const look = play * ZOOM.LOOK_DOWN * altitudeEase(centre);
+    let y = sim.cam.y + VIEW_H / 2 - play / 2 + look + landBias(sim);
+    // Keep the aeroplane clear of the top edge whatever the look-down asked for.
+    y = Math.min(y, centre - play * ZOOM.TOP_MARGIN);
     // Keep the sea a thin strip at the bottom however low the aeroplane goes.
-    y = Math.min(y, SEA_Y - (PLAY_H - SEA_BAND) / WORLD_SCALE);
-    return { vw, vh, cam: { x, y } };
+    y = Math.min(y, SEA_Y - (PLAY_H - SEA_BAND) / scale);
+    // And never frame more than a sliver of the nothing above the ceiling.
+    y = Math.max(y, CEILING_Y - ZOOM.ABOVE_CEILING);
+    return { vw, vh, scale, cam: { x, y } };
   }
 
   submit(r, sim) {
     const f = this.frame(sim);
     const cam = f.cam;
-    // Every world layer draws through the same zoom; the panel does not.
+    // Every world layer draws through the same zoom; the panel does not — the
+    // instrument panel is a fixed size at the bottom of the screen at every
+    // altitude, as it is in the reference.
     const world = (fn) => (ctx) => {
       ctx.save();
-      ctx.scale(WORLD_SCALE, WORLD_SCALE);
+      ctx.scale(f.scale, f.scale);
       fn(ctx);
       ctx.restore();
     };
@@ -298,7 +394,7 @@ export class Scene {
     r.draw(LAYER.PARALLAX_FAR, world((ctx) => drawClouds(ctx, f.vw, f.vh, cam, this.tick)));
     r.draw(LAYER.BG_TILES, world((ctx) => this.drawShip(ctx, cam, f)));
     r.draw(LAYER.TILES, world((ctx) => this.drawIslands(ctx, sim, cam, f)));
-    r.draw(LAYER.ENTITIES, world((ctx) => this.drawShots(ctx, sim, cam)));
+    r.draw(LAYER.ENTITIES, world((ctx) => this.drawShots(ctx, sim, cam, f)));
     r.draw(LAYER.PLAYER, world((ctx) => this.drawAircraft(ctx, sim, cam)));
     r.draw(LAYER.OVERLAY, world((ctx) => {
       drawSea(ctx, f.vw, f.vh, cam, SEA_Y, this.tick);
@@ -337,11 +433,15 @@ export class Scene {
   // Ordnance in the air, each round pointed along its own velocity — which is
   // what makes a bomb visibly tip over onto its nose as it falls, and is the
   // pilot's only cue about where it is actually going.
-  drawShots(ctx, sim, cam) {
+  drawShots(ctx, sim, cam, f) {
     for (const s of sim.shots) {
+      // The drawn position IS the simulated position, moved into view space
+      // and nothing else. Nothing here recomputes where a bomb "should" be:
+      // that is the difference between aiming being honest at every zoom and
+      // aiming being a second physics model that disagrees with the first.
       const x = s.x - cam.x;
       const y = s.y - cam.y;
-      if (x < -24 || x > VIEW_W + 24) continue;
+      if (x < -24 || x > f.vw + 24) continue;
       const a = Math.atan2(s.vy, s.vx);
       if (s.kind === 'gun') drawTracer(ctx, x, y, a);
       else if (s.kind === 'rocket') drawRocket(ctx, x, y, a, this.tick);
