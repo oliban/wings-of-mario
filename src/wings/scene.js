@@ -49,89 +49,84 @@ export const PLAY_H = VIEW_H - HUD_H;
 // framing is clamped here rather than by widening the simulation's world box.
 const SEA_BAND = 13;
 
-// LOOKING DOWN OVER LAND. The framing above centres the aeroplane in the play
-// area, which is right over open water — there is nothing below it worth
-// giving screen to. Over an island there is: the terrain surface is the last
-// three rows before the sea, and centred framing puts them behind the
-// instrument panel, so the pilot would be bombing ground he cannot see. So the
-// frame drops by LAND_BIAS as the aeroplane comes over an island, which brings
-// the whole shoreline into the play area and costs nothing but sky.
+// ALTITUDE ZOOM, AND THE FRAMING THAT MAKES IT WORTH ANYTHING.
 //
-// It is a pure function of the aeroplane's POSITION, not an animation: no
-// state, no clock, and a screenshot at tick N frames identically however many
-// frames were drawn getting there. The fade is what stops it snapping at the
-// shoreline.
-const LAND_BIAS = 40;
-const LAND_FADE = 200;
-
-// ALTITUDE ZOOM.
+// The user's reference is the original seen from height: the aeroplane a speck
+// near the top, the island a thin strip of palms along the bottom, sky filling
+// everything between. The first pass at this scaled the world down with
+// altitude and left the camera centred on the aeroplane, and the user's answer
+// was exact: "it zooms out but I need to be able to see the island when high
+// above it". Scaling alone cannot do it. Centring puts half the play area
+// above an aeroplane that has nothing above it, and the ground falls out of
+// the bottom no matter how small the world is drawn.
 //
-// The user's third reference is the original seen from height: the aeroplane a
-// speck, the island a strip of palms along the bottom, sky filling everything
-// else. The world is simply drawn smaller the higher you are, and that is the
-// effect — it is also the answer to the complaint that flying high shows
-// nothing but blue, since the ground only comes back into frame if the frame
-// gets bigger.
+// THE RULE, therefore, is a composition rather than a curve:
 //
-// RANGE. WORLD_SCALE (1.15) at sea level down to ZOOM.MIN at the ceiling. The
-// reference's own scale is roughly a third — its aeroplane is about 1.5% of
-// the frame width — and the user asked for "maybe not as far out" for good
-// reason: at that scale our 42px aeroplane is 14 screen pixels, the bomb is
-// two, and you cannot aim. 0.62 keeps the aeroplane at 26px, still clearly an
-// aeroplane with a visible attitude, and nearly doubles the vertical span of
-// the play area (170 world px to 316). It is the far end of the user's
-// suggested range because the effect is barely worth having at the near end.
+//   the SEA LINE sits SEA_BAND above the bottom of the play area,
+//   the AEROPLANE rides at PLANE_ROW down from the top of it,
+//   and the SCALE is whatever makes both true at once.
 //
-// CURVE. Nothing at all happens below FROM_Y, and smoothstep from there to the
-// ceiling. The dead band is the point: FROM_Y is the attack altitude the
-// bombing run is actually flown at, the altitude the sea band, the land bias
-// and the aeroplane-to-ship proportions were all tuned at, and a linear curve
-// would have taken a fifth of the scale off before you ever got there.
-// Smoothstep above it means the change starts gently rather than the instant
-// you cross the line, spends itself through the middle of the climb, and
-// arrives at the ceiling flat rather than still moving.
+// Which is one division: the world distance from the aeroplane down to the sea
+// has to fit the device distance between those two rows. Everything the pilot
+// needs is between those rows by construction — the aeroplane, the water, the
+// island standing in it — at every altitude, rather than at the altitudes a
+// hand-tuned curve happened to keep them both.
 //
-// NO SPRING, deliberately, and unlike the roll. The roll's input is a step
-// function — a manoeuvre begins — so it needs a spring to have any duration at
-// all. The zoom's input is ALTITUDE, which is continuous and speed-limited:
-// even a vertical dive at MAX_SPEED moves the scale by 0.008 per tick, so the
-// curve is already smoother than a spring would make it. Adding one would only
-// buy back a lag that has to be caught up after dropped frames, which is
-// exactly how a screenshot at tick N stops being reproducible.
+// Two consequences worth stating plainly:
+//
+//   THE DEAD BAND IS FREE. At the attack altitude the existing framing ALREADY
+//   pinned the sea to the bottom of the play area (that is what SEA_BAND did),
+//   so PLANE_ROW is not a new number — it is measured from that framing, and
+//   the rule reproduces it exactly at FROM_Y and is clamped to WORLD_SCALE
+//   below it. Nothing changes where the bombing happens.
+//
+//   THE SCALE FALLS AS 1/HEIGHT, not as a gentle ease, because pinning two
+//   points on a fixed screen while their separation grows is exactly what
+//   perspective is. Climbing 60px from the attack altitude takes a third off
+//   the scale. That is the cost of the requirement, and it is why the earlier
+//   smoothstep — pleasant, gradual, and useless — was the wrong shape.
+//
+// It remains a pure function of the aeroplane's position: no clock, no state,
+// no history, so a screenshot at tick N frames identically however many frames
+// were drawn getting there.
 export const ZOOM = {
   MAX: WORLD_SCALE,
-  MIN: 0.5,
+  // The floor is not a taste decision, it is the smallest scale the geometry
+  // needs: at the service ceiling the aeroplane is 554 world px above the sea,
+  // and fitting that into the play area with the aeroplane clear of the top
+  // edge takes 0.32. Anything larger and the water leaves the screen at the
+  // top of the climb, which is the bug this pass exists to fix. It costs: the
+  // aeroplane is 13 screen pixels up there, close to the reference's own
+  // speck. Anything SMALLER would only shrink it for nothing.
+  MIN: 0.32,
+  // The top of the dead band: the attack altitude, below which the framing is
+  // exactly what it was before any zoom existed.
   FROM_Y: 440,
-  // Where the aeroplane sits in the play area once the world has opened up:
-  // centred at low level, a fifth of the way down at the ceiling. Without this
-  // the extra span the zoom buys is split evenly above and below, and half of
-  // it is spent on empty sky ABOVE the service ceiling — which is nothing, by
-  // definition. Tilting the frame down is what turns the zoom from a smaller
-  // aeroplane into a view of the world you are flying over, and it is what
-  // the reference actually shows: the aeroplane high, the land along the
-  // bottom.
-  LOOK_DOWN: 0.3,
-  // ...but never so far that the frame runs off the top of the world, and
-  // never so far that the aeroplane itself is pushed into the top edge. The
-  // simulation's own camera already stops following upward near the ceiling,
-  // so the look-down is applied on top of a frame that is riding high anyway.
-  ABOVE_CEILING: 24,
-  TOP_MARGIN: 0.18,
+  // How close to the top edge the aeroplane may be pushed once the scale has
+  // bottomed out and the sea can no longer be pinned as well.
+  TOP_MIN: 14,
 };
 
-// The scale the world should be drawn at for an aeroplane whose centre is at
-// world y. A curve and nothing else: no clock, no history, no state — the
-// same altitude gives the same scale on every machine and every frame.
-export function zoomFor(worldY) {
-  return ZOOM.MAX + (ZOOM.MIN - ZOOM.MAX) * altitudeEase(worldY);
-}
+// Where the sea line sits: SEA_BAND device pixels above the bottom of the play
+// area. The original keeps the water to a thin strip and so does this.
+const SEA_ROW = PLAY_H - SEA_BAND;
 
-// How far through the zoom band an altitude is, 0 below FROM_Y and 1 at the
-// ceiling, smoothstepped. Both the scale and the look-down are read off this
-// one curve, so they arrive together instead of fighting each other.
-export function altitudeEase(worldY) {
-  const alt = clamp((ZOOM.FROM_Y - worldY) / (ZOOM.FROM_Y - CEILING_Y), 0, 1);
-  return alt * alt * (3 - 2 * alt);
+// Where the aeroplane rides, in device pixels down from the top of the play
+// area. DERIVED from the old framing at the top of the dead band, so the rule
+// below is continuous with it: at FROM_Y it produces the identical picture.
+const PLANE_ROW = SEA_ROW - ZOOM.MAX * (SEA_Y - ZOOM.FROM_Y - PLANE_H / 2);
+
+// The device distance between those two rows — the window everything has to
+// fit into.
+const FIT = SEA_ROW - PLANE_ROW;
+
+// The scale for an aeroplane whose top-left is at world y. One division, then
+// clamped: full scale wherever the aeroplane is low enough that the picture
+// already fits, and never below the floor.
+export function zoomFor(planeY) {
+  const drop = SEA_Y - (planeY + PLANE_H / 2);
+  if (drop <= 0) return ZOOM.MAX;
+  return clamp(FIT / drop, ZOOM.MIN, ZOOM.MAX);
 }
 
 export const ISLAND_X = DECK_X1 - 150;
@@ -175,18 +170,12 @@ const ROLL = {
   MAX_STEPS: 8,
 };
 
-// How far the frame has dropped to show land: full over an island, nothing
-// out in open water, smooth across the LAND_FADE either side of the shore.
-function landBias(sim) {
-  const px = sim.plane.x + PLANE_W / 2;
-  let gap = Infinity;
-  for (const isle of sim.islands) {
-    gap = Math.min(gap, Math.max(0, isle.x0 - px, px - isle.x1));
-  }
-  if (!Number.isFinite(gap)) return 0;
-  const t = clamp(1 - gap / LAND_FADE, 0, 1);
-  return LAND_BIAS * t * t * (3 - 2 * t);
-}
+// There was a landBias() here — the frame dropped 40px over an island so the
+// terrain surface cleared the instrument panel. Pinning the sea line subsumes
+// it completely: the water is at the bottom of the play area everywhere, over
+// open ocean and over land alike, and an island stands in that water. A second
+// bias on top would only move the horizon around depending on where you were,
+// which is the opposite of what a horizon is for.
 
 // A plane that is not mid-manoeuvre, in the shape state() publishes.
 const NOT_TURNING = { turning: false, turnProgress: 0, turnDir: 0 };
@@ -340,7 +329,7 @@ export class Scene {
     // The zoom carries no state, so it is read straight off the aeroplane
     // rather than caught up a tick at a time: at simulation tick N it is
     // whatever the altitude at tick N says, dropped frames or not.
-    this.zoom = zoomFor(sim.plane.y + PLANE_H / 2);
+    this.zoom = zoomFor(sim.plane.y);
     this.tick = sim.tick;
     for (const f of this.fx) f.t++;
     this.fx = this.fx.filter((f) => f.t < f.life);
@@ -351,29 +340,24 @@ export class Scene {
   // applied. The drawing functions take these instead of VIEW_W/VIEW_H and are
   // otherwise unaware that any zoom happened.
   frame(sim) {
-    // The live scale, not the constant: everything below is written in terms
-    // of it, so the whole framing — the centring, the sea band, the land bias
-    // — holds at any zoom rather than being tuned for one.
     const scale = this.zoom;
     const vw = VIEW_W / scale;
     const vh = VIEW_H / scale;
-    // Re-centre: the simulation frames the aeroplane in the middle of a 512x240
-    // window, but the bottom of that window is under the panel, so the world is
-    // centred on the middle of the PLAY area instead.
+    // Horizontally the simulation's own camera still decides; it is the
+    // VERTICAL framing the composition rule owns.
     const x = sim.cam.x + VIEW_W / 2 - vw / 2;
-    const play = PLAY_H / scale;
-    // Look down as the world opens up: the aeroplane rides higher in the frame
-    // the higher it is, so the span the zoom bought is spent on the world
-    // below rather than on sky above the ceiling.
-    const centre = sim.plane.y + PLANE_H / 2;
-    const look = play * ZOOM.LOOK_DOWN * altitudeEase(centre);
-    let y = sim.cam.y + VIEW_H / 2 - play / 2 + look + landBias(sim);
-    // Keep the aeroplane clear of the top edge whatever the look-down asked for.
-    y = Math.min(y, centre - play * ZOOM.TOP_MARGIN);
-    // Keep the sea a thin strip at the bottom however low the aeroplane goes.
-    y = Math.min(y, SEA_Y - (PLAY_H - SEA_BAND) / scale);
-    // And never frame more than a sliver of the nothing above the ceiling.
-    y = Math.max(y, CEILING_Y - ZOOM.ABOVE_CEILING);
+
+    // Pin the sea line to its row. At and below the dead band the scale is
+    // clamped, so this is the same fixed horizon the framing always had; above
+    // it the scale is exactly the one that also puts the aeroplane on its row,
+    // so pinning one pins both.
+    let y = SEA_Y - SEA_ROW / scale;
+    // Once the scale has bottomed out the two can no longer both be honoured —
+    // the aeroplane keeps climbing and the sea cannot come up to meet it — so
+    // the aeroplane wins a minimum margin from the top edge and the sea slides
+    // the last few pixels down toward the panel. ZOOM.MIN is chosen so that it
+    // never slides off it.
+    y = Math.min(y, sim.plane.y + PLANE_H / 2 - ZOOM.TOP_MIN / scale);
     return { vw, vh, scale, cam: { x, y } };
   }
 

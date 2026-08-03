@@ -136,6 +136,67 @@ test('the altitude zoom is a render transform and nothing else', { timeout: 1200
     assert.ok(dy > 0 && dy < 240, `the bomb is not on screen (${dy})`);
   });
 
+  // THE ACCEPTANCE CRITERION, in the user's own words: "I need to be able to
+  // see the island when high above it". Not "a scale factor changed" — the
+  // island has to be ON THE SCREEN, so this reads the pixels the player would
+  // be looking at and requires land among them.
+  await t.test('an island directly below is visible from every altitude, ceiling included', async () => {
+    const look = (y) => page.evaluate((py) => {
+      const W = window.__WINGS;
+      W.reset();
+      const isle = W.sim.islands[0];
+      const p = W.sim.plane;
+      p.mode = 'air';
+      p.gear = false;
+      p.angle = 0;
+      // Column 60 of 1-1 is open ground with bushes on it — land, not a pit.
+      p.x = isle.x0 + 60 * 16;
+      p.y = py;
+      p.speed = 2.7;
+      p.vx = 2.7;
+      p.vy = 0;
+      W.tick(2);
+      const r = W.renderer;
+      const ss = r.ss;
+      const playH = 240 - 44;
+      const img = r.ctx.getImageData(0, 0, r.buffer.width, playH * ss).data;
+      // Count land: the island's earth and grass are the only warm/green
+      // pixels in a scene made of sky blue, sea blue and a grey aeroplane.
+      let earth = 0;
+      let grass = 0;
+      let lowest = 0;
+      for (let row = 0; row < playH * ss; row++) {
+        for (let col = 0; col < r.buffer.width; col += 4) {
+          const i = (row * r.buffer.width + col) * 4;
+          const [rr, gg, bb] = [img[i], img[i + 1], img[i + 2]];
+          if (rr > gg + 20 && gg > bb + 20) { earth++; lowest = Math.max(lowest, row / ss); }
+          else if (gg > rr + 30 && gg > bb + 30) { grass++; lowest = Math.max(lowest, row / ss); }
+        }
+      }
+      const f = W.scene.frame(W.sim);
+      return {
+        earth,
+        grass,
+        lowest,
+        zoom: W.scene.zoom,
+        seaRow: (560 - f.cam.y) * f.scale,
+        playH,
+      };
+    }, y);
+
+    for (const y of [440, 360, 280, 200, 120, 40, 0]) {
+      const r = await look(y);
+      assert.ok(
+        r.earth + r.grass > 40,
+        `from y=${y} (zoom ${r.zoom.toFixed(2)}) there is no island on screen: ${r.earth} earth and ${r.grass} grass pixels`
+      );
+      assert.ok(
+        r.seaRow <= r.playH,
+        `from y=${y} the sea line is at device row ${Math.round(r.seaRow)}, past the ${r.playH}px play area`
+      );
+    }
+  });
+
   await t.test('the instrument panel is the same size at every altitude', async () => {
     // The panel is drawn outside the world transform, so its top edge — the
     // bright green bezel that runs the full width — must land on the same
@@ -175,30 +236,49 @@ test('the altitude zoom is a render transform and nothing else', { timeout: 1200
   });
 
   await t.test('flying up and down again returns to exactly the scale it started at', async () => {
+    // Flown under power, not teleported: the rate the scale actually moves at
+    // is the rate the aeroplane can actually climb, and the two are only the
+    // same if it is the flight model doing the moving.
     const r = await page.evaluate(() => {
       const W = window.__WINGS;
       W.reset();
-      const p = W.sim.plane;
-      p.mode = 'air';
-      p.gear = false;
-      p.angle = 0;
-      p.x = 900;
-      p.y = 460;
-      p.speed = 2.5;
-      p.vx = 2.5;
-      W.tick(1);
+      W.hold({ pitch: 1, thrust: 1 });
+      while (W.state().mode !== 'air') W.tick(1);
+      W.hold({ pitch: 0, thrust: 1 });
+      for (let i = 0; i < 200 && W.state().y < 470; i++) W.tick(1);
       const before = W.scene.zoom;
       const seen = [before];
-      for (let i = 0; i < 120; i++) { p.y -= 3; W.tick(1); seen.push(W.scene.zoom); }
+      const at = [];
+      for (let i = 0; i < 900 && W.state().y > 8; i++) {
+        W.hold({ pitch: W.state().angle > -0.5 ? 1 : 0, thrust: 1 });
+        W.tick(1);
+        seen.push(W.scene.zoom);
+        at.push(W.state().y);
+      }
       const top = W.scene.zoom;
-      for (let i = 0; i < 120; i++) { p.y += 3; W.tick(1); seen.push(W.scene.zoom); }
+      for (let i = 0; i < 600 && W.state().y < 460 && W.state().mode === 'air'; i++) {
+        W.hold({ pitch: W.state().angle < 0.5 ? -1 : 0, thrust: 1 });
+        W.tick(1);
+        seen.push(W.scene.zoom);
+        at.push(W.state().y);
+      }
+      W.release();
       let worst = 0;
-      for (let i = 1; i < seen.length; i++) worst = Math.max(worst, Math.abs(seen[i] - seen[i - 1]));
-      return { before, top, after: W.scene.zoom, worst };
+      let worstAt = null;
+      for (let i = 1; i < seen.length; i++) {
+        const d = Math.abs(seen[i] - seen[i - 1]);
+        if (d > worst) { worst = d; worstAt = at[i - 1]; }
+      }
+      return { before, top, worst, worstAt, low: W.scene.zoom, y: W.state().y };
     });
-    assert.ok(r.top < r.before - 0.3, `never zoomed out on the way up (${r.before} -> ${r.top})`);
-    assert.equal(r.after, r.before, 'came back to a different scale than it left at');
-    assert.ok(r.worst < 0.01, `the zoom stepped by ${r.worst} in a single tick`);
+    assert.ok(r.before > 1.1, 'the climb did not start inside the dead band');
+    assert.ok(r.top < 0.4, `never zoomed out on the way up (${r.before} -> ${r.top})`);
+    assert.equal(r.low, 1.15, `coming back down to y=${r.y} did not restore full scale`);
+    // Flown rather than teleported, the steepest single tick is well under a
+    // fiftieth of the scale — and it happens just above the dead band, where
+    // 1/height is steepest, exactly as the unit tests describe.
+    assert.ok(r.worst < 0.02, `the zoom stepped by ${r.worst} in a single tick at y=${r.worstAt}`);
+    assert.ok(r.worstAt > 300, `the steepest tick was at y=${r.worstAt}, not down near the dead band`);
   });
 
   await t.test('no uncaught page errors', () => {
