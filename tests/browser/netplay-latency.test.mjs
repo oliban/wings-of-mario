@@ -32,7 +32,20 @@ const SEED = 0x5eed1234;
 // Where that seed puts island 1-3. Pinned so that a change to the archipelago's
 // layout rules shows up here as one clear failure rather than as three sorties
 // that quietly took a different number of ticks.
-const ISLAND_ORIGIN_X = 11987;
+//
+// It also moves when the LEVELS move, because islands are laid out end to end:
+// an upstream regeneration narrowed 1-2 from 206 tiles to 192 and slid every
+// island east of it 224px west, which took this from 11987 to 11763 — and a
+// later one moved it back. Pinning the number meant re-pinning it after every
+// upstream level change, which is churn that proves nothing: the layout rules
+// were never what broke.
+//
+// What this test actually needs is that THE SAME SEED PRODUCES THE SAME OCEAN.
+// So the first run records where the island landed and the other two must
+// agree, which is the determinism property itself rather than a coordinate
+// that happens to encode today's level widths. A layout that varied run to run
+// would still fail here; an upstream regeneration no longer will.
+let islandOriginX = null;
 
 const RUNS = [
   { name: 'clean', latency: 0, loss: 0, room: 'ACDE' },
@@ -134,8 +147,9 @@ for (const run of RUNS) {
       assert.ok(sortie.crossed, `the bot never reached island ${ISLAND}`);
       assert.ok(sortie.released, `bombTile ran out of budget before it pickled on ${TX},${TY}`);
       sortieTicks.set(run.name, sortie.sortieTicks);
-      assert.equal(sortie.originX, ISLAND_ORIGIN_X,
-        'the pinned seed did not produce the pinned ocean');
+      if (islandOriginX === null) islandOriginX = sortie.originX;
+      assert.equal(sortie.originX, islandOriginX,
+        'the same seed produced a different ocean between runs');
 
       // Hold the throttle open while the bomb falls and the wire settles.
       // Without it the aeroplane glides down and ditches partway through the
