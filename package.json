@@ -7,8 +7,10 @@
     "start": "npx http-server -p 8123 -c-1 .",
     "shots": "node tools/shot.mjs --scenes tools/scenes.json",
     "sheet": "node tools/sheet.mjs",
-    "test": "npm run test:unit && npm run test:browser",
+    "serve": "node server/index.js",
+    "test": "npm run test:unit && npm run test:net && npm run test:browser",
     "test:unit": "node --test \"tests/unit/*.test.js\"",
+    "test:net": "node --test \"tests/net/*.test.mjs\"",
     "test:browser": "node --test --test-concurrency=1 \"tests/browser/*.test.mjs\""
   },
   "keywords": [],
@@ -18,5 +20,8 @@
   "devDependencies": {
     "playwright": "^1.62.0"
   },
-  "private": true
+  "private": true,
+  "dependencies": {
+    "ws": "^8.21.2"
+  }
 }
