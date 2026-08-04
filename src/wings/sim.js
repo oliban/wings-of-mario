@@ -2,7 +2,9 @@ import { TILE } from '../core/constants.js';
 import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import { landingVerdict, hitsHull, arrest, spotOnDeck } from './carrier.js';
-import { createLoadout, release, stepShot, detonate, canDamage, GUN_INTERVAL } from './ordnance.js';
+import {
+  createLoadout, release, stepShot, detonate, canDamage, GUN_INTERVAL, GUN_TRACE_TICKS,
+} from './ordnance.js';
 import { Archipelago } from './archipelago.js';
 import { Radar } from './radar.js';
 
@@ -63,6 +65,12 @@ export class WingsSim {
     // `gunDry` is "the click has already sounded for this dry trigger".
     this.gunCooldown = 0;
     this.gunDry = false;
+    // The most recent gun round's RELEASE — {t, owner, x, y, vx, vy} — kept so
+    // gunTrace() can put it on the wire. It is not a second copy of the shot:
+    // the shot itself is in `this.shots` and is stepped there. This is the seed
+    // Mario's client needs to re-derive the same round on his own machine, and
+    // it is written once, on the tick of the shot, and then never touched.
+    this.lastGun = null;
     this.cam = cameraFor(this.plane.x, this.plane.y, this.bounds);
     this.rearm();
   }
@@ -176,8 +184,28 @@ export class WingsSim {
       return null;
     }
     this.shots.push(shot);
+    if (kind === 'gun') {
+      this.lastGun = {
+        t: this.tick, owner: shot.owner,
+        x: shot.x, y: shot.y, vx: shot.vx, vy: shot.vy,
+      };
+    }
     this.emit('released', { kind, x: shot.x, y: shot.y, left: this.loadout[kind] });
     return shot;
+  }
+
+  // The gun round for the snapshot, or null when there is nothing recent enough
+  // to be worth carrying. See GUN_TRACE_TICKS for why this is a snapshot field
+  // and not a reliable event, and why it repeats.
+  //
+  // `owner` travels with it for the same reason it travels on a shot: "mine"
+  // has to mean the same thing on both clients, so the ownership rule in
+  // ordnance.js#canDamage is one rule applied twice rather than an assumption
+  // the receiving side makes about who must have fired.
+  gunTrace() {
+    const g = this.lastGun;
+    if (!g || this.tick - g.t > GUN_TRACE_TICKS) return null;
+    return { ...g };
   }
 
   stepShots() {
@@ -366,6 +394,7 @@ export class WingsSim {
     this.islands = this.archipelago.islands();
     this.bounds = worldBounds(this.islands);
     this.shots.length = 0;
+    this.lastGun = null;
     this.squadron = SQUADRON;
     this.plane = spotOnDeck(createPlane());
     this.hookArmed = false;

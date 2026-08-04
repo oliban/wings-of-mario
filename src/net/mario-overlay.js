@@ -1,5 +1,7 @@
 import { drawPlane, PLANE_LEN } from '../wings/art/plane.js';
+import { drawTracer, drawGunSpark } from '../wings/art/ordnance.js';
 import { PLANE_W, PLANE_H } from '../wings/geo.js';
+import { SPARK_TICKS } from '../wings/gun-rounds.js';
 import { SCREEN_W, SCREEN_H } from '../core/constants.js';
 
 // The remote aeroplane, drawn on a canvas of our own laid over the game's.
@@ -17,6 +19,13 @@ export class NetOverlay {
     this.canvas = null;
     this.ctx = null;
     this.remote = null;
+    // The pilot's rounds in the air and the sparks where they landed, both in
+    // island-local pixels, both owned by src/wings/gun-rounds.js — held by
+    // reference and never copied, because they are stepped on the engine's
+    // fixed clock and drawn on this one.
+    this.rounds = null;
+    this.sparks = null;
+    this.cam = null;
     // Frames drawn. Drives the propeller disc, and nothing in the match.
     this.frame = 0;
   }
@@ -63,10 +72,19 @@ export class NetOverlay {
     this.remote = remote;
   }
 
+  // The gunfire, with its own camera: rounds outlive the aeroplane leaving the
+  // screen, so they cannot borrow the one on `remote`.
+  setRounds(rounds, sparks, cam) {
+    this.rounds = rounds || null;
+    this.sparks = sparks || null;
+    this.cam = cam || null;
+  }
+
   draw() {
     this.frame++;
     if (!this.ctx) return;
     this.ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+    this.drawGun();
     const r = this.remote;
     if (!r) return;
     // The snapshot carries the plane's TOP-LEFT, per ARCHITECTURE.md section 1;
@@ -83,6 +101,28 @@ export class NetOverlay {
     // drawPlane's default — the stall-turn animation is the pilot's own
     // feedback and the snapshot deliberately does not carry a bank angle.
     drawPlane(this.ctx, sx, sy, r.angle || 0, { tick: this.frame });
+  }
+
+  // Tracer and strike. Under the aeroplane deliberately: a round leaves the
+  // nose, and drawing it over the sprite would put the muzzle flash on top of
+  // the propeller.
+  drawGun() {
+    const cam = this.cam;
+    if (!cam) return;
+    const ctx = this.ctx;
+    if (this.rounds) {
+      for (const s of this.rounds) {
+        const sx = s.x - cam.x;
+        const sy = s.y - cam.y;
+        if (sx < -16 || sx > SCREEN_W + 16 || sy < -16 || sy > SCREEN_H + 16) continue;
+        drawTracer(ctx, sx, sy, Math.atan2(s.vy, s.vx));
+      }
+    }
+    if (this.sparks) {
+      for (const k of this.sparks) {
+        drawGunSpark(ctx, k.x - cam.x, k.y - cam.y, k.age / SPARK_TICKS);
+      }
+    }
   }
 
   detach() {

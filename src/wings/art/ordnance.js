@@ -81,6 +81,34 @@ export function drawTracer(ctx, x, y, angle) {
   ctx.restore();
 }
 
+// A round striking Mario, `t` running 0..1 over the spark's short life. Four
+// fixed spokes and a core, shrinking and fading — the smallest thing that reads
+// as "that hit you" from a 256x240 screen with a man standing in front of it.
+// The spokes are a fixed function of their index, never of a random number, so
+// two clients drawing the same hit draw the same spark.
+export function drawGunSpark(ctx, x, y, t) {
+  if (t >= 1) return;
+  const fade = 1 - t;
+  const r = 2 + 5 * t;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.globalAlpha = fade;
+  ctx.strokeStyle = ORD.tracer;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2 + Math.PI / 4;
+    const dx = Math.cos(a);
+    const dy = Math.sin(a);
+    ctx.moveTo(dx * 1.5, dy * 1.5);
+    ctx.lineTo(dx * r, dy * r);
+  }
+  ctx.stroke();
+  ctx.fillStyle = ORD.flameCore;
+  ctx.fillRect(-1, -1, 2, 2);
+  ctx.restore();
+}
+
 // A fireball, `t` running 0..1 over its life: a white flash that blooms into
 // flame and collapses into smoke. Deterministic — the lobe layout is a fixed
 // function of the lobe index, never of a random number.

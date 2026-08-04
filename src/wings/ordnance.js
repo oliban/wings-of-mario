@@ -24,6 +24,24 @@ export const ORDNANCE_KINDS = Object.keys(ORDNANCE);
 // and make every replay a coin toss.
 export const GUN_INTERVAL = 6;
 
+// How long a round's RELEASE stays in the plane's 20Hz snapshot, in ticks.
+//
+// Gun rounds do not get a reliable event each. Ten a second, each alive for
+// three quarters of a second, acked and resent until the peer confirms it,
+// would be an order of magnitude more wire traffic than the whole rest of the
+// match — for an object that is gone before the resend timer would even fire.
+// So a round travels as its release state on the snapshot the plane is already
+// sending, and Mario's client re-derives the round from it: a gun round has
+// gravity 0, so position is an exact linear function of the release and the
+// tick, and nothing has to be streamed after it leaves the muzzle.
+//
+// Twice GUN_INTERVAL, so a round rides FOUR consecutive snapshots (they go out
+// every SNAPSHOT_INTERVAL_TICKS = 3). That is the redundancy that replaces the
+// ack: three snapshots in a row have to be lost before a round goes missing,
+// where an unreliable per-round event would lose one round per dropped packet.
+// The receiver keys on the release tick, so the repeats cost nothing.
+export const GUN_TRACE_TICKS = GUN_INTERVAL * 2;
+
 // A fresh ammo rack: one counter per kind, seeded from ORDNANCE[kind].load.
 // Plain data — the caller owns the object and can serialize/replace it freely.
 export function createLoadout() {

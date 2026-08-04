@@ -7,12 +7,14 @@ import {
   rememberSeat, recallSeat, forgetSeat,
 } from './lobby.js';
 import { openFrontDoor } from './lobby-screen.js';
+import { TILE } from '../core/constants.js';
 import { ISLAND_TOP_Y } from '../wings/geo.js';
 import { layoutArchipelago } from '../wings/archipelago.js';
+import { GunRounds } from '../wings/gun-rounds.js';
 import { DamageSync, applyToWorld } from './damage-sync.js';
 import { noteDesync } from './desync.js';
 import { MatchVerdict, MarioEvents, applyWire, mayEmitFrom } from './match-events.js';
-import { marioSnapshot } from './reach.js';
+import { marioSnapshot, isReachable } from './reach.js';
 import { guardWorld } from '../wings/sanctuary.js';
 
 // Mario's half of the match. Like src/wings/debug-panel.js, this file talks to
@@ -51,6 +53,21 @@ export class MarioNet {
     // shadow marker and the whistle to hang off (spec 4.2, Plan 4).
     this.lastBlast = null;
     this.lastBombRelease = null;
+    // THE PILOT'S GUNFIRE, on our machine. The rounds are re-derived here from
+    // the release on his snapshot, and whether one of them hits MARIO is
+    // decided here too, against Mario's own hitbox — spec 7.3, the same rule
+    // that keeps the bomb kill on this side of the wire. See
+    // src/wings/gun-rounds.js. `_gunIsland` is which island the rounds in the
+    // air belong to; a round is a position on one tile map and means nothing on
+    // any other. `onGunHit` is presentation, wired up by mario-main.js.
+    this.gun = new GunRounds({ solidAt: (x, y) => this.solidAt(x, y) });
+    this._gunIsland = null;
+    this.onGunHit = null;
+    // Callbacks for whatever wants to draw the end of a match. Presentation,
+    // not state: the verdict above is the state.
+    this.onDeath = null;
+    this.onCleared = null;
+    this.onMatchOver = null;
     // Callbacks for whatever wants to draw the end of a match. Presentation,
     // not state: the verdict above is the state.
     this.onDeath = null;
@@ -139,6 +156,9 @@ export class MarioNet {
     this.session.on('peer', (m) => {
       if (!m.present) {
         this.pilotInterp.clear();
+        // Rounds outlive the aeroplane that fired them by up to 45 ticks, but
+        // not the pilot leaving the room: nobody is left to have fired them.
+        this.gun.clear();
         this.remote = null;
         this.overlay.set(null);
         this.overlay.draw();
@@ -328,6 +348,84 @@ export class MarioNet {
     return missing.length;
   }
 
+  // ---- the pilot's guns ----------------------------------------------------
+
+  // Is this island-local pixel blocking? The LIVE tile map, so a crater the
+  // pilot already made is a hole his own tracer flies through — exactly as
+  // MarioOverlay#surfaceAt reads it for the telegraph reticle.
+  // OFF THE MAP IS NOT TERRAIN. world.recAt answers EDGE_REC — solid — for any
+  // column outside the level, which is right for a man who must not walk out of
+  // the world and wrong for a bullet: the pilot's Island is bounded, his sim
+  // lets a round fly over open sea, and an invisible wall here would stop every
+  // round fired from beyond the island's edge on THIS screen and no other. A
+  // round approaching from off-island is exactly how a strafing run starts.
+  solidAt(x, y) {
+    const w = this.game && this.game.world;
+    if (!w || !w.level || typeof w.tileAtPixel !== 'function') return false;
+    if (y < 0 || x < 0 || x >= w.w * TILE) return false;
+    const rec = w.tileAtPixel(x, y);
+    return !!(rec && (rec.solid || rec.platform));
+  }
+
+  // A sampled pilot snapshot may carry a gun round's release, in WORLD pixels.
+  // Convert into the island-local frame Mario's engine works in — the same
+  // conversion `remote` gets, and the same reason it cannot be skipped — and
+  // hand it to the round list, which dedupes the repeats.
+  //
+  // Fed from the network pump (rAF) because that is when we LEARN of a round;
+  // STEPPED from the engine's fixed clock because that is when it moves and
+  // when it can hit somebody. Learning about it a frame early or late changes
+  // where the tracer is drawn and nothing else.
+  feedGun(s, originX) {
+    const world = this.game && this.game.world;
+    const island = this.islandId();
+    if (!world || !island || originX == null) return null;
+    // Down a pipe or in a coin room there is no aeroplane overhead and no
+    // shared tile map to be shot on: the same boundary reach.js draws for the
+    // snapshot, drawn once more for the thing that could hurt him. Rounds
+    // already in the air are dropped rather than held, because he will come
+    // back up somewhere else and three quarters of a second will have passed.
+    if (!isReachable(world)) {
+      this.gun.clear();
+      return null;
+    }
+    // A different island is a different tile map; a round's coordinates mean
+    // nothing on it.
+    if (island !== this._gunIsland) {
+      this.gun.clear();
+      this._gunIsland = island;
+    }
+    const g = s && s.g;
+    if (!g) return null;
+    return this.gun.feed({
+      t: g.t,
+      owner: g.owner,
+      x: g.x - originX,
+      y: g.y - ISLAND_TOP_Y,
+      vx: g.vx,
+      vy: g.vy,
+    });
+  }
+
+  // One fixed 60.0988Hz step of the rounds in the air, and THE HIT: called from
+  // MarioOverlay's hook list, which is the engine's own timestep. Nothing about
+  // how far a bullet travels between hit tests may depend on the frame rate.
+  stepGun(world) {
+    const w = world || (this.game && this.game.world);
+    const p = w && w.player;
+    if (!p || !w.level) {
+      this.gun.clear();
+      return [];
+    }
+    if (!isReachable(w) || this.islandId() !== this._gunIsland) {
+      this.gun.clear();
+      return [];
+    }
+    const hits = this.gun.step(p);
+    for (const h of hits) if (this.onGunHit) this.onGunHit(h, p);
+    return hits;
+  }
+
   // ---- our own news --------------------------------------------------------
 
   // Mario's client owns Mario, so it is the one that announces what happened to
@@ -382,13 +480,13 @@ export class MarioNet {
     // frame, which is the frame Mario's camera lives in.
     const s = this.pilotInterp.sampleLocal(this.tick);
     const originX = this.originOf(this.islandId());
+    // rcam is the RENDER camera — the sub-pixel-smoothed one the engine
+    // actually draws with. Using world.cam instead makes the aeroplane
+    // shimmer against a scrolling background by up to a pixel a frame.
+    const cam = (world && (world.rcam || world.cam)) || { x: 0, y: 0 };
     if (!s || originX == null || !world) {
       this.remote = null;
     } else {
-      // rcam is the RENDER camera — the sub-pixel-smoothed one the engine
-      // actually draws with. Using world.cam instead makes the aeroplane
-      // shimmer against a scrolling background by up to a pixel a frame.
-      const cam = world.rcam || world.cam || { x: 0, y: 0 };
       this.remote = {
         x: s.x - originX,
         y: s.y - ISLAND_TOP_Y,
@@ -397,7 +495,10 @@ export class MarioNet {
         camY: cam.y,
       };
     }
+    // Any round on that snapshot, before the overlay is told what to draw.
+    this.feedGun(s, originX);
     this.overlay.set(this.remote);
+    this.overlay.setRounds(this.gun.rounds, this.gun.sparks, cam);
     this.overlay.draw();
   }
 
@@ -415,6 +516,8 @@ export class MarioNet {
       matchStatus: this.matchStatus,
       winner: this.winner(),
       lastBlast: this.lastBlast ? { ...this.lastBlast } : null,
+      gunRounds: this.gun.rounds.length,
+      gunHits: this.gun.hits,
       desyncs: this.desyncs.length,
       stats: this.session ? this.session.stats() : null,
     };
@@ -537,6 +640,15 @@ window.__NET = {
   snapshot: () => marioSnapshot(net.game && net.game.world, net.islandId()),
   pump: () => net.pump(),
   winner: () => net.winner(),
+  // The pilot's rounds as this client has them: what is in the air, and how
+  // many have connected. `stepGun` advances them one fixed tick by hand, for a
+  // test that drives the page rather than watching it.
+  gun: () => ({
+    hits: net.gun.hits,
+    rounds: net.gun.rounds.map((r) => ({ ...r })),
+    sparks: net.gun.sparks.map((k) => ({ ...k })),
+  }),
+  stepGun: () => net.stepGun().length,
   damage: (island) => net.damage.keys(island),
   latency: (ms) => (net.transport ? net.transport.latency(ms) : 0),
   drop: (pct) => (net.transport ? net.transport.drop(pct) : 0),

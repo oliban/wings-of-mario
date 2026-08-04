@@ -6,7 +6,7 @@ import { FerryRide } from './ferry-ride.js';
 // already the wings layer's entry point on it: the ENTIRE upstream footprint of
 // two plans stays at the one tag that loads this file. It polls for __GAME on
 // its own and does nothing at all without a `?room=` code.
-import '../net/mario-side.js';
+import net from '../net/mario-side.js';
 
 // Loaded from index.html. This module and the one <script> tag that loads it
 // are the ENTIRE upstream footprint of the telegraph.
@@ -26,6 +26,22 @@ const overlay = new MarioOverlay();
 // timestep anything on this page gets; the ride needs one, so it takes that.
 const ride = new FerryRide();
 overlay.hooks.push((world) => ride.update(world));
+
+// The pilot's gun rounds, on the ENGINE'S fixed clock. They are learned about
+// on the network's rAF pump but they must be flown and hit-tested here, at the
+// same 60.0988Hz Mario himself runs at: a bullet whose travel per hit test
+// depended on the frame rate would pass through a man on a slow machine and
+// shove him twice on a fast one. The overlay's hook list is the only fixed
+// timestep this page has, which is why the ferry is already on it.
+overlay.hooks.push((world) => net.stepGun(world));
+
+// Being shot should be audible. One short, hard, falling chirp per round —
+// through the whistle's own synth rather than the engine's playSfx, because
+// that graph is already here and takes live parameters. It is deliberately not
+// the whistle: a bomb coming down and a round landing on you must not sound
+// alike, so this is short, low and dry where the whistle is long and swept.
+net.onGunHit = () => overlay.synth.play({ freq: 300, to: 90, dur: 0.05, tag: 'gun-hit' });
+
 
 // A bounded log of everything the overlay asked to be played, so a browser
 // test can assert the whistle without an audio device. The synth keeps its own

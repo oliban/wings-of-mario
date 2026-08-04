@@ -243,12 +243,25 @@ export class PilotNet {
     if (!sim) return;
     this.tick = sim.tick;
     const p = sim.plane;
+    // GUNFIRE rides the snapshot rather than the reliable channel: `g` is the
+    // most recent round's release, in world pixels, and Mario's client
+    // re-derives the round from it (src/wings/gun-rounds.js). Five numbers,
+    // only while the gun is actually firing, on a packet that was going out
+    // anyway — against ten acked-and-resent events a second if a round were an
+    // event. See GUN_TRACE_TICKS for the redundancy that replaces the ack.
+    //
+    // It is a statement about our own aeroplane, which is the only kind of
+    // thing a snapshot is allowed to be (spec 7.1): where a round left the
+    // muzzle and how fast. It makes no claim about Mario at all — the pilot's
+    // client is not permitted to say his rounds hit anybody, and does not.
+    const g = sim.gunTrace ? sim.gunTrace() : null;
     // We are the truth about ourselves (spec 7.1), so this goes out flat, at
     // 20Hz, and is never negotiated. Session throttles it to the interval.
     this.session.sendSnapshot(sim.tick, {
       x: p.x, y: p.y, vx: p.vx, vy: p.vy,
       angle: p.angle, mode: p.mode, gear: p.gear ? 1 : 0, fuel: p.fuel,
       squadron: sim.squadron, status: sim.status,
+      ...(g ? { g } : null),
     });
     this.emitOwnEvents();
     this.session.pump(sim.tick);
