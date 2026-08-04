@@ -5,6 +5,7 @@ import { NetOverlay } from './mario-overlay.js';
 import {
   roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure, lobbyHeader,
 } from './lobby.js';
+import { openFrontDoor } from './lobby-screen.js';
 import { ISLAND_TOP_Y } from '../wings/geo.js';
 import { layoutArchipelago } from '../wings/archipelago.js';
 import { DamageSync, applyToWorld } from './damage-sync.js';
@@ -449,6 +450,17 @@ async function boot() {
     banner(document, 'SOLO');
     return null;
   }
+  // THE FRONT DOOR, and the reason this page no longer mints a room the
+  // instant it loads. Somebody who just typed the server's address has not
+  // chosen anything yet; minting for them is what made the room code a thing
+  // you had to read out loud. Every button on that screen navigates to a URL
+  // this page already understood, so if it goes up we are done here — the next
+  // load of this file is the one that joins something.
+  //
+  // It returns null, and we fall straight through to the old behaviour, for
+  // every case where there is nothing to choose from: a `?room=` in the URL, a
+  // `?solo`, a page served with no /rooms endpoint at all.
+  if (!room && (await openFrontDoor({ doc: document, win: window }))) return null;
   // Started here, before the room is minted, and told to read `joining` each
   // time so our own room drops out of the list the moment we have one. It
   // never throws and is never awaited: the match must not wait on the lobby.

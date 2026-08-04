@@ -62,6 +62,18 @@ export function showRoom(win, code, side) {
 const OTHER_SEAT = { pilot: 'mario', mario: 'pilot' };
 const SEAT_PAGE = { pilot: '/pilot.html', mario: '/' };
 
+// The URL that puts a player in a given seat of a given room. The one place
+// that mapping is written down: the header list, the front door and the
+// SEAT TAKEN advice all read it from here, so a page that ever moves moves
+// once. Relative, so it works on whatever host the page came from — the LAN
+// address included.
+export function seatHref(side, code) {
+  const page = SEAT_PAGE[side];
+  const room = normalizeRoomCode(code);
+  if (!page || !room) return null;
+  return `${page}?room=${encodeURIComponent(room)}`;
+}
+
 export function bootFailure(err, { room, side } = {}) {
   const reason = err && err.message ? String(err.message) : '';
   const here = room ? `ROOM ${room} — ` : '';
@@ -117,8 +129,8 @@ export function openSeat(summary) {
 // or port the page is being served from — the LAN address included.
 export function joinHref(summary) {
   const side = openSeat(summary);
-  if (!side || !summary.code) return null;
-  return `${SEAT_PAGE[side]}?room=${encodeURIComponent(summary.code)}`;
+  if (!side || !summary) return null;
+  return seatHref(side, summary.code);
 }
 
 // Age, in the two characters a header can spare. Not a timestamp: the question
