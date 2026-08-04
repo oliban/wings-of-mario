@@ -3,6 +3,7 @@ import { GameLoop } from '../core/loop.js';
 import { PilotRenderer } from './pilot-renderer.js';
 import { Scene } from './scene.js';
 import { WingsSim } from './sim.js';
+import { takeoff, flyTo, bombTile, autoLand } from './bot.js';
 
 const HEADLESS = new URLSearchParams(location.search).has('headless');
 if (HEADLESS) document.body.classList.add('headless');
@@ -275,6 +276,34 @@ window.__WINGS = {
     }
     pilot.render();
     return pilot.sim.tick;
+  },
+
+  // Bot primitives (src/wings/bot.js). Each drives pilot.sim directly —
+  // bypassing the keyboard latch and pilot.update() entirely, the same way
+  // tick() drives it through pilot.update() — and renders once when done so a
+  // screenshot after the call shows where it ended up, not where it started.
+  takeoff(budget = 600) {
+    const ok = takeoff(pilot.sim, budget);
+    pilot.render();
+    return ok;
+  },
+
+  flyTo(x, y, budget = 6000) {
+    const ok = flyTo(pilot.sim, x, y, budget);
+    pilot.render();
+    return ok;
+  },
+
+  bombTile(island, tx, ty, budget = 8000) {
+    const ok = bombTile(pilot.sim, island, tx, ty, budget);
+    pilot.render();
+    return ok;
+  },
+
+  land(budget = 8000) {
+    const ok = autoLand(pilot.sim, budget);
+    pilot.render();
+    return ok;
   },
 
   state() {

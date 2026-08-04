@@ -186,6 +186,12 @@ export class WingsSim {
     return null;
   }
 
+  // Bots aim at an island by the id they were told to bomb, not by pixel —
+  // the one lookup bot.js needs that nothing else here provided.
+  islandById(id) {
+    return this.islands.find((isle) => isle.id === id) || null;
+  }
+
   // -------------------------------------------------------------------------
 
   checkPlane() {
