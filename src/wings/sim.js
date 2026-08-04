@@ -2,7 +2,7 @@ import { TILE } from '../core/constants.js';
 import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import { landingVerdict, hitsHull, arrest, spotOnDeck } from './carrier.js';
-import { createLoadout, release, stepShot, detonate, GUN_INTERVAL } from './ordnance.js';
+import { createLoadout, release, stepShot, detonate, canDamage, GUN_INTERVAL } from './ordnance.js';
 import { Archipelago } from './archipelago.js';
 import { Radar } from './radar.js';
 
@@ -35,6 +35,17 @@ export class WingsSim {
     this.radar = new Radar({ seed: opts.seed });
     this._fix = { present: false };
     this.squadron = opts.squadron != null ? opts.squadron : SQUADRON;
+    // Who this aeroplane IS, for hit resolution. Every round it fires is
+    // stamped with this id and can never directly hit it back (ordnance.js's
+    // canDamage). A string rather than the plane object, and one that OUTLIVES
+    // the airframe: `this.plane` is thrown away and rebuilt on every respawn
+    // and sail, so an identity carried on it would make rounds still in the
+    // air from the sortie you just died in hostile to the aeroplane that
+    // replaces you. The squadron is one owner. It is also what goes on the
+    // wire in the next plan, where "mine" has to mean the same thing on both
+    // clients — hence an id and not a reference. Overridable so a match with
+    // more than one aircraft in it does not have to re-derive the idea.
+    this.planeId = opts.planeId || 'pilot';
     this.plane = spotOnDeck(createPlane());
     this.tick = 0;
     this.events = [];
@@ -159,7 +170,7 @@ export class WingsSim {
   // Spend one round and put it in the air. Running dry is normal, not a bug:
   // release() returns null and spends nothing, and the pilot hears a click.
   launch(kind) {
-    const shot = release(kind, this.plane, this.loadout);
+    const shot = release(kind, this.plane, this.loadout, this.planeId);
     if (!shot) {
       this.emit('dryFire', { kind });
       return null;
@@ -249,6 +260,20 @@ export class WingsSim {
       keys,
     });
     return keys;
+  }
+
+  // Hit resolution's FIRST question, asked before any geometry: could this
+  // round hurt the aeroplane at all? Whatever eventually runs the swept box
+  // test against the plane — the flak battery in the threats plan, Mario's
+  // fireballs after it — asks this first and skips the geometry entirely when
+  // the answer is no. Own gun rounds and own rockets can never answer yes.
+  //
+  // `blast` is the one exception and it is the whole of spec 3.3: a
+  // detonation's radius does not care whose bomb it was, so a low release
+  // still kills the pilot who made it. Pass blast: true from a blast test and
+  // ownership drops out.
+  canHitPlane(shot, { blast = false } = {}) {
+    return canDamage(shot, this.planeId, blast);
   }
 
   islandAt(px, py) {
@@ -391,7 +416,12 @@ export class WingsSim {
       // Stores and what is in the air. `loadout` is a copy of the one counter
       // in ordnance.js, never a second one.
       loadout: { ...this.loadout },
-      shots: this.shots.map((s) => ({ kind: s.kind, x: s.x, y: s.y, vx: s.vx, vy: s.vy, age: s.age })),
+      // `owner` travels with the round, because who fired it is simulation
+      // state and not a rendering detail: a client replaying this state has to
+      // reach the same hit answers as the one that produced it.
+      shots: this.shots.map((s) => ({
+        kind: s.kind, owner: s.owner, x: s.x, y: s.y, vx: s.vx, vy: s.vy, age: s.age,
+      })),
       contact: this.radarContact(),
       ...this.turnState(),
     };

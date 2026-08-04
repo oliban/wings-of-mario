@@ -39,7 +39,9 @@ export function createLoadout() {
 // release by returning null rather than throwing, since running dry mid-dive
 // is a normal thing to happen, not a bug. An unknown kind IS a bug (a typo'd
 // key or a stale save), so that still throws regardless of loadout.
-export function release(kind, p, loadout) {
+// `owner` is who fired it — a stable id, not an object reference, so it
+// survives state(), a snapshot and a replay unchanged. See canDamage().
+export function release(kind, p, loadout, owner = null) {
   const spec = ORDNANCE[kind];
   if (!spec) throw new Error(`ordnance: unknown kind "${kind}"`);
   if (loadout && !(loadout[kind] > 0)) return null;
@@ -47,6 +49,7 @@ export function release(kind, p, loadout) {
   const nose = nosePoint(p);
   return {
     kind,
+    owner,
     x: nose.x,
     y: nose.y,
     vx: p.vx + Math.cos(p.angle) * spec.muzzle,
@@ -54,6 +57,34 @@ export function release(kind, p, loadout) {
     age: 0,
     dead: false,
   };
+}
+
+// OWNERSHIP, asked before any geometry: may this round hurt `targetId` at all?
+//
+// The rule is one line — **a round never DIRECTLY hits whatever fired it** —
+// and the word "directly" is the whole of it. An aeroplane cannot shoot itself
+// down with its own forward-firing guns; a round leaves the muzzle at the nose,
+// which is already inside the aeroplane's own box, so a hit test that did not
+// ask this question would score a hit on the firer on the very tick of the
+// shot. The gun is the case that matters today (`radius: 0` — it has nothing
+// BUT a direct hit), and it is the case the pilot asked for.
+//
+// A BLAST is deliberately not covered. Spec 3.3 makes bombing too low one of
+// the five ways to lose an aeroplane, and that rule survives this one intact:
+// pass `blast` and ownership stops applying, because an expanding sphere of
+// fire does not check whose bomb it was. So the pilot still dies to his own
+// bomb, and still dies to his own rocket, while his own tracer sails past him.
+//
+// `owner` is an ID rather than a plane object on purpose. It goes through
+// state() and will go across the wire in the next plan, where "mine" has to
+// mean the same thing on both clients — an object reference would mean
+// "mine" only ever resolved locally, which is exactly the corner not to be
+// painted into. A null owner (neutral flak, an unattributed round) harms
+// everyone, which is the safe default for a predicate that gates damage.
+export function canDamage(shot, targetId, blast = false) {
+  if (blast) return true;
+  if (shot.owner == null || targetId == null) return true;
+  return shot.owner !== targetId;
 }
 
 // Pure physics: gravity and motion only. This module has no idea what
