@@ -114,11 +114,44 @@ test('two browsers in one room', { timeout: 180000 }, async (t) => {
     });
     // A takeoff run, stepped synchronously. __WINGS.tick drives pilot.update(),
     // which is where the network pump hangs, so the snapshots go out with it.
+    //
+    // TAKE OFF AND CLIMB OUT, rather than holding full pull-back for 240 ticks.
+    // A sustained pull from the deck does not climb, it LOOPS, and a loop that
+    // starts at deck height brings the aeroplane back down onto its own ship
+    // with the hook up — which is a crash, correctly, and which the pilot page
+    // tests have always avoided for exactly this reason. It used to get away
+    // with it because the loop was only ~50px tall; doubling the aeroplane's
+    // speed doubled the radius to ~110px and the loop now reaches the deck.
+    // Everything below this point needs a LIVE aeroplane, so it climbs out
+    // properly the way a pilot would.
     await pilot.page.evaluate(() => {
-      window.__WINGS.hold({ pitch: 1, thrust: 1 });
-      window.__WINGS.tick(240);
-      window.__WINGS.release();
+      const W = window.__WINGS;
+      const s = () => W.state();
+      const until = (map, done, cap = 400) => {
+        for (let i = 0; i < cap; i++) {
+          W.hold(map());
+          W.tick(1);
+          if (done()) return true;
+        }
+        return false;
+      };
+      until(() => ({ thrust: 1, pitch: s().speed >= 2.2 ? 1 : 0 }), () => s().mode === 'air');
+      until(() => ({ thrust: 1, pitch: s().angle > -0.5 ? 1 : 0 }), () => s().y <= 300);
+      // LEVEL OFF before letting go. This page is booted without ?headless, so
+      // its rAF loop keeps flying the aeroplane in real time between one
+      // `evaluate` and the next. Released in a nose-up attitude it coasts,
+      // bleeds airspeed, stalls and dives — and the subtests after this one
+      // would then find a wreck, intermittently, depending on how long the
+      // wire took. Level and fast is the only attitude that survives being
+      // left alone.
+      until(() => ({ thrust: 1, pitch: -1 }), () => s().angle >= -0.01);
+      W.hold({ thrust: 1, pitch: 0 });
+      W.tick(30);
+      W.release();
     });
+    const airborne = await pilot.page.evaluate(() => window.__WINGS.state());
+    assert.equal(airborne.mode, 'air', 'the pilot never got airborne, so nothing below can be about the network');
+    assert.equal(airborne.squadron, 5, 'the climb-out cost an aircraft');
     await pilot.page.waitForTimeout(250);
     const after = await mario.page.evaluate(() => {
       for (let i = 0; i < 45; i++) window.__NET.pump();
@@ -136,10 +169,37 @@ test('two browsers in one room', { timeout: 180000 }, async (t) => {
     // is still a game in which the two players cannot see each other.
     const flown = await pilot.page.evaluate(() => {
       const r = window.__WINGS.net.remote();
-      const ok = window.__WINGS.flyTo(r.x + 12, r.y - 48);
+      // ARRIVE SLOWLY, AND ARRIVE SHORT. This page runs a live rAF loop
+      // (bootRoom does not pass ?headless), and a backgrounded tab is
+      // throttled and then CATCHES UP in bursts, so an unknown number of ticks
+      // separates arriving from being looked at. At the 5.39 px/f cruise the
+      // aeroplane now has, that burst is easily the width of Mario's 256px
+      // screen — it used to loiter over him for free simply by being slow.
+      //
+      // Three things buy it back. Line up WEST of Mario first and run in from
+      // there — the same two-stage approach bombTile flies, and for the same
+      // reason: a single carrot the aeroplane happens to be sitting east of is
+      // flown as a REVERSAL, and it comes out of that fast and pointed the
+      // wrong way. `speed` makes the run-in itself a walk rather than a
+      // 5.39 px/f cruise. And the run-in stops SHORT of Mario rather than 12px
+      // past him, so the drift that is left runs ACROSS his screen instead of
+      // off the right-hand edge of it. 140px short satisfies both windows at
+      // once: Mario's 256px overlay, which the aeroplane must be inside when
+      // the ink is counted, and the pilot's own 445px viewport, which MARIO
+      // must be inside a moment later for the cull test below.
+      window.__WINGS.flyTo(r.x - 700, r.y - 120, 6000, { speed: 1.2 });
+      const ok = window.__WINGS.flyTo(r.x - 140, r.y - 48, 6000, { speed: 1.2 });
       // The bot primitives drive the sim directly and bypass pilot.update(),
       // so nothing has been transmitted yet; these ticks are what send it.
-      window.__WINGS.tick(60);
+      //
+      // A HANDFUL, not 60. Snapshots go at 20Hz throttled on the WALL CLOCK,
+      // so it is the waitForTimeout below that carries them, not the tick
+      // count — these ticks only have to call pump() at all. Meanwhile every
+      // one of them flies the aeroplane onward, and at the doubled cruise
+      // speed 60 of them is over 300px: the aeroplane arrived above Mario and
+      // then left his 256px-wide screen again before anybody looked, so the
+      // overlay was blank and the failure read as a coordinate bug.
+      window.__WINGS.tick(10);
       return ok;
     });
     assert.equal(flown, true, 'the bot could not fly the aeroplane over Mario');

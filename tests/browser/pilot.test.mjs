@@ -168,14 +168,65 @@ test('the pilot page', async (t) => {
   // East holding Right, hold Left, and the aeroplane should bleed off,
   // stall-turn, and pick up speed West under the same held Left key — twice
   // in a row, reversing back East the second time.
+  //
+  // WAIT FOR THE MANOEUVRE, DO NOT COUNT TICKS AT IT. This used to tick a flat
+  // 100 and assert the aeroplane had come out the far side, which stopped being
+  // true the moment the stall turn was lengthened (a reversal is now ~48 ticks
+  // of speed bleed plus a 70-tick sweep). A fixed number here is a second copy
+  // of the manoeuvre's duration living in a browser test, and it would go stale
+  // again the next time the turn is retuned. So: run until the sim says the
+  // turn has armed AND cleared, under a generous bounded cap — which still
+  // fails loudly, and with a better message, if a turn never arms or never
+  // ends.
+  const reverse = () =>
+    page.evaluate(() => {
+      const W = window.__WINGS;
+      let armed = false;
+      // `calls` is the whole reversal, bleed included; `sweep` is only the
+      // part the simulation calls a turn. They are different questions — the
+      // bleed depends on how much speed you happened to arrive with, the sweep
+      // should not depend on anything at all.
+      let sweep = 0;
+      for (let i = 1; i <= 600; i++) {
+        W.tick(1);
+        if (W.state().turning) { armed = true; sweep++; }
+        else if (armed) return { calls: i, sweep, armed: true, ended: true };
+      }
+      return { calls: 600, sweep, armed, ended: false };
+    });
+
   await t.test('holding the opposite arrow to zero triggers a real stall turn, repeatably, in both directions', async () => {
     await page.evaluate(() => window.__WINGS.reset());
+    // CLIMB FIRST. This used to run the aeroplane off the bow and reverse twice
+    // at deck height, which left ~60px of water underneath it. A stall turn
+    // sweeps through straight-down at its midpoint and sinks ~31px doing it, so
+    // two reversals in a row now put the aeroplane in the sea and the test was
+    // failing on a drowning, not on the mechanic. Get some sky first, exactly
+    // as a pilot would before practising a manoeuvre that costs height.
     await page.evaluate(() => {
       const W = window.__WINGS;
+      const until = (map, done, cap = 900) => {
+        for (let i = 0; i < cap; i++) {
+          W.hold(map());
+          W.tick(1);
+          if (done()) return true;
+        }
+        return false;
+      };
+      const s = () => W.state();
+      until(() => ({ thrust: 1, pitch: s().speed >= 2.2 ? 1 : 0 }), () => s().mode === 'air');
+      until(() => ({ thrust: 1, pitch: s().angle > -0.6 ? 1 : 0 }), () => s().y <= 240);
+      until(() => ({ thrust: 1, pitch: -1 }), () => s().angle >= -0.01);
+      // hold() persists across tick(), so the nose-down input above has to be
+      // cancelled explicitly or these settling ticks fly it into a dive.
       W.hold({ thrust: 1, pitch: 0 });
-      while (W.state().mode !== 'air') W.tick(1);
+      W.tick(30);
       W.release();
     });
+    const aloft = await page.evaluate(() => window.__WINGS.state());
+    // Two reversals cost ~62px of altitude between them; anything under y=400
+    // leaves more than twice that in hand before the sea at 560.
+    assert.ok(aloft.mode === 'air' && aloft.y < 400, `test premise: should be well clear of the sea, y=${aloft.y}`);
 
     await page.keyboard.down('ArrowRight');
     await page.evaluate(() => window.__WINGS.tick(120)); // build to cruise, facing East
@@ -185,10 +236,12 @@ test('the pilot page', async (t) => {
 
     // Reversal 1: East -> West.
     await page.keyboard.down('ArrowLeft');
-    await page.evaluate(() => window.__WINGS.tick(100));
+    const r1 = await reverse();
+    assert.ok(r1.armed, 'holding the opposite arrow never triggered a stall turn at all');
+    assert.ok(r1.ended, 'the stall turn armed but never finished');
     const west = await page.evaluate(() => window.__WINGS.state());
     assert.ok(Math.cos(west.angle) < -0.9, 'should now be facing West');
-    assert.equal(west.turning, false, 'the turn should have finished within 100 ticks');
+    assert.equal(west.turning, false, `the turn should have finished (took ${r1.calls} ticks)`);
     assert.ok(west.speed > 0, 'should exit already moving, not dead in the air');
     const beforeAccel1 = west.speed;
     await page.evaluate(() => window.__WINGS.tick(30));
@@ -198,10 +251,23 @@ test('the pilot page', async (t) => {
 
     // Reversal 2: West -> East, proving it is not a one-shot special case.
     await page.keyboard.down('ArrowRight');
-    await page.evaluate(() => window.__WINGS.tick(100));
+    const r2 = await reverse();
+    assert.ok(r2.armed, 'the second reversal never triggered a stall turn');
+    assert.ok(r2.ended, 'the second stall turn armed but never finished');
     const east = await page.evaluate(() => window.__WINGS.state());
     assert.ok(Math.cos(east.angle) > 0.9, 'should be facing East again');
-    assert.equal(east.turning, false, 'the second turn should also have finished within 100 ticks');
+    assert.equal(east.turning, false, `the second turn should also have finished (took ${r2.calls} ticks)`);
+    // Both directions, the same manoeuvre. The SWEEP is a fixed-length sweep
+    // whichever way it started — that is the whole design of it — so the two
+    // must match closely. Compared instead of the full reversal on purpose:
+    // the reversals legitimately differ in total length here because the first
+    // one enters from full cruise and the second from a shorter acceleration,
+    // and that is the speed bleed, not the turn. This is the assertion the old
+    // fixed tick count could never make, because it measured nothing.
+    assert.ok(
+      Math.abs(r1.sweep - r2.sweep) <= 4,
+      `the sweep took ${r1.sweep} ticks one way and ${r2.sweep} the other — the turn is not symmetric`
+    );
     await page.keyboard.up('ArrowRight');
   });
 

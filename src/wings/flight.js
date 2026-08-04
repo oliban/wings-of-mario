@@ -39,11 +39,21 @@ export const FLIGHT = {
   DRAG: 0.003,
   GRAVITY: 0.12,
   TURN_RATE: 0.06,
-  // A speed, so it doubles with the aeroplane: left at 1.6 it would have
-  // meant turn authority saturating at 29% of cruise instead of 59%, which
-  // is a different aeroplane, not a faster one.
-  TURN_SPEED_REF: 3.2,
-  // NOT doubled, and this is the one place the scaling deliberately breaks.
+  // NOT doubled, for the same reason STALL_SPEED below is not. It reads like
+  // a cruise-relative number — "authority saturates at some fraction of top
+  // speed" — and it was briefly doubled to 3.2 on exactly that reasoning.
+  // That was wrong, and it broke recovery: authority is speed/REF, so
+  // doubling REF HALVES the pitch authority available at every low speed,
+  // which is precisely the regime where authority matters. An aeroplane that
+  // has fallen out of a climb at 0.9 px/f went from 0.56 of its turn rate to
+  // 0.28 — not enough to get the nose up before it hit something. The
+  // scripted pilot flew into the carrier on departure and it took a bisect to
+  // see why.
+  //
+  // Low-speed handling is anchored to the LANDING envelope, which is absolute
+  // (see STALL_SPEED). These two are a matched pair and both stay put.
+  TURN_SPEED_REF: 1.6,
+  // NOT doubled either, and for the same reason.
   // STALL_SPEED is referenced to the LANDING envelope, not to cruise, and
   // that envelope is absolute px/f in carrier.js (0.6 to 1.8) with no
   // knowledge of anything here. Doubling this to 1.6 puts the stall speed

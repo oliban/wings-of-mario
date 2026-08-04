@@ -321,8 +321,14 @@ window.__WINGS = {
     return ok;
   },
 
-  flyTo(x, y, budget = 6000) {
-    const ok = flyTo(pilot.sim, x, y, budget);
+  // `opts` is bot.js's own seek options — {near, speed, floor, dead, gear}.
+  // Passed through rather than swallowed because `speed` is the only way a
+  // caller can ask the autopilot to ARRIVE SLOWLY, and a scripted flight that
+  // has to loiter somewhere needs that: at cruise the aeroplane crosses a
+  // 256px screen in under a second, so "fly there and look at it" is not a
+  // thing you can express without it.
+  flyTo(x, y, budget = 6000, opts = {}) {
+    const ok = flyTo(pilot.sim, x, y, budget, opts);
     pilot.render();
     return ok;
   },
