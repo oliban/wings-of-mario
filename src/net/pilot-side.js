@@ -8,7 +8,9 @@ import {
 import pilot from '../wings/pilot-main.js';
 import { DamageSync, applyToIsland } from './damage-sync.js';
 import { noteDesync } from './desync.js';
-import { MatchVerdict, pilotWireEvent, applyWire, mayEmitFrom } from './match-events.js';
+import {
+  MatchVerdict, pilotWireEvent, applyWire, mayEmitFrom, repositionWorld,
+} from './match-events.js';
 import { contactFrom, REACH_SNAP } from './reach.js';
 import { worldOfIsland } from '../wings/sail.js';
 
@@ -191,6 +193,8 @@ export class PilotNet {
       this.marioIsland = null;
     } else if (m.type === 'worldCleared') {
       this.onWorldCleared(m.d || {});
+    } else if (m.type === 'worldReset') {
+      this.onWorldReset(m.d || {});
     }
     this._announce(before);
   }
@@ -217,6 +221,33 @@ export class PilotNet {
     const to = worldOfIsland(d.next);
     if (to == null) return false;
     return this.host.sailTo(to);
+  }
+
+  // MARIO'S RUN RESTARTED SOMEWHERE ELSE, and this side's part in it is the
+  // same as in a sail: obey. He spent his last life and the engine put him back
+  // on 1-1, or the turn passed to a slot standing in another world. Either way
+  // the ocean holds ONE world at a time and it has to be HIS, or every crater,
+  // radar blip and desync hash after this moment is about an archipelago he is
+  // not on. The detector cannot catch that divergence — it compares
+  // destroyed-tile sets, and two oceans he has not bombed yet are both empty.
+  //
+  // Declared by Mario's client for the same reason worldCleared is (spec 7.3,
+  // EVENT_OWNER.worldReset === 'mario'): only it can see which level the engine
+  // actually loaded. This side never infers a restart, and could not — a man
+  // who has stopped sending is a man on a slow connection.
+  //
+  // THE DESTINATION IS TAKEN FROM THE EVENT, exactly as the sail takes it, so
+  // the two clients lay out the same ocean whatever route he took to it.
+  //
+  // A DECIDED MATCH DOES NOT MOVE. `verdict.over` latches, and the restart that
+  // follows a game over arrives strictly after the marioDeath that ended the
+  // match on this same ordered channel. Sailing then would be the carrier group
+  // putting to sea for a match nobody is playing.
+  onWorldReset(d) {
+    this.marioIsland = d.next || null;
+    const to = repositionWorld(d, { over: this.verdict.over });
+    if (to == null) return false;
+    return this.host.repositionTo(to);
   }
 
   // The one tick the ocean is replaced, from src/wings/pilot-main.js. Mario is

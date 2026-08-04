@@ -21,7 +21,8 @@ test('match events over a real socket', { timeout: 60000 }, async (t) => {
     // outright and it silently never arrives. Better to fail here.
     for (const type of [
       'marioDeath', 'islandCleared', 'ferryBoard', 'ferrySunk',
-      'sortieStart', 'landed', 'planeLost', 'worldCleared', 'detonate', 'bombRelease',
+      'sortieStart', 'landed', 'planeLost', 'worldCleared', 'worldReset',
+      'detonate', 'bombRelease',
     ]) {
       assert.ok(EVENT_OWNER[type], `${type} has no owner`);
     }

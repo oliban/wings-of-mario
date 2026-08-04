@@ -104,6 +104,41 @@ export function sailText(from, to, note = '') {
   return { title: 'THE CARRIER GROUP IS UNDER WAY', lines };
 }
 
+// THE OTHER REASON THE GROUP MOVES. Mario's run can restart — he spends his
+// last life and the engine puts him back on 1-1 — and when it does, the ocean
+// has to follow him or the pilot is left bombing an archipelago Mario is not
+// anywhere near. That is a REPOSITIONING, not a victory, and it must not say
+// "WORLD 5 SECURED": nobody secured anything, and on the way BACK that sentence
+// would be an outright lie about the state of the match.
+//
+// BACKWARDS AND FORWARDS, because a restart is not always a retreat: two
+// players taking alternate turns can hand the ocean to a man standing further
+// on than the one who just died. The direction changes the sentence and nothing
+// else.
+//
+// Same title as sailText, deliberately. It is the same carrier group making the
+// same crossing; only the reason differs, and the reason is the second line.
+export function resetText(from, to, note = '') {
+  const lines = Number(to) < Number(from)
+    ? [
+      `MARIO'S RUN IN WORLD ${from} IS OVER`,
+      `FALLING BACK TO THE WORLD ${to} ARCHIPELAGO`,
+    ]
+    : [
+      `REPOSITIONING TO WORLD ${to}`,
+      `WORLD ${from} WAS NOT CLEARED — MARIO'S RUN HAS RESTARTED`,
+    ];
+  if (note) lines.push(String(note));
+  return { title: 'THE CARRIER GROUP IS UNDER WAY', lines };
+}
+
+// Why the group is moving. A SAIL is Mario's progress and can only ever go
+// forward; a RESET is his run restarting and may go either way. The two share
+// every tick of the scene and differ only in the words on the card and in which
+// directions are legal, which is why this is a flag on one class rather than a
+// second class.
+export const SAIL_KIND = { SAIL: 'sail', RESET: 'reset' };
+
 // The world number an island id belongs to: '2-1' -> 2. Null for anything that
 // is not an island of the archipelago — a coin room, one of Harry's painted
 // levels — which is exactly the set of things that must never start a sail.
@@ -127,6 +162,7 @@ export class Sail {
     this.from = 0;
     this.to = 0;
     this.note = '';
+    this.kind = SAIL_KIND.SAIL;
   }
 
   // Begin the crossing to `to`. Refused if one is already running or if the
@@ -134,7 +170,14 @@ export class Sail {
   // one for a world already behind us, must not restart the scene or sail
   // twice. That refusal is what makes this safe on a reliable channel that
   // delivers at least once and dedupes only by sequence number.
-  begin({ from, to, note = '' } = {}) {
+  //
+  // A SAIL may only go forward, and that is the refusal above. A RESET is
+  // Mario's run restarting, which is very often a move BACK — so the only
+  // thing it refuses is a crossing to the world the group is already on. The
+  // idempotence argument still holds for it: a resent worldReset finds either a
+  // crossing already running (refused on the first line) or a group already
+  // standing on the destination (refused below).
+  begin({ from, to, note = '', kind = SAIL_KIND.SAIL } = {}) {
     if (this.active) return false;
     // `== null` before Number(), which turns null into a perfectly finite 0 and
     // would put "WORLD 0 SECURED" on both screens. A missing world number means
@@ -143,12 +186,14 @@ export class Sail {
     if (from == null || to == null) return false;
     const a = Number(from);
     const b = Number(to);
-    if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return false;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+    if (kind === SAIL_KIND.RESET ? b === a : b <= a) return false;
     this.active = true;
     this.elapsed = 0;
     this.from = a;
     this.to = b;
     this.note = note;
+    this.kind = kind === SAIL_KIND.RESET ? SAIL_KIND.RESET : SAIL_KIND.SAIL;
     return true;
   }
 
@@ -172,7 +217,9 @@ export class Sail {
   }
 
   text() {
-    return sailText(this.from, this.to, this.note);
+    return this.kind === SAIL_KIND.RESET
+      ? resetText(this.from, this.to, this.note)
+      : sailText(this.from, this.to, this.note);
   }
 
   cancel() {

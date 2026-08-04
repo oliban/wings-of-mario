@@ -73,11 +73,16 @@ export class SailScreen {
   // Mario's client cleared the world, so Mario's client starts the scene. `to`
   // is the world he has actually walked into, which a warp zone can put three
   // ahead of the one he was in.
-  begin({ from, to, note = '' } = {}) {
-    if (!this.sail.begin({ from, to, note })) return false;
+  //
+  // `kind` is why the group is moving: SAIL_KIND.SAIL for a world he cleared,
+  // SAIL_KIND.RESET for a run of his that restarted somewhere else. It only
+  // reaches src/wings/sail.js, which owns both the words and which directions
+  // each kind may take — this screen draws whatever it is handed.
+  begin({ from, to, note = '', kind } = {}) {
+    if (!this.sail.begin({ from, to, note, kind })) return false;
     this.mount();
     this.crossings++;
-    this.last = { from: this.sail.from, to: this.sail.to };
+    this.last = { from: this.sail.from, to: this.sail.to, kind: this.sail.kind };
     this.render();
     return true;
   }
@@ -110,9 +115,9 @@ export class SailScreen {
     this.el.style.visibility = veil > 0 ? 'visible' : 'hidden';
     if (this.card) {
       this.card.style.opacity = String(text);
-      if (text > 0 && this.card.dataset.for !== `${this.sail.from}>${this.sail.to}`) {
+      if (text > 0 && this.card.dataset.for !== `${this.sail.kind}:${this.sail.from}>${this.sail.to}`) {
         const t = this.sail.text();
-        this.card.dataset.for = `${this.sail.from}>${this.sail.to}`;
+        this.card.dataset.for = `${this.sail.kind}:${this.sail.from}>${this.sail.to}`;
         this.card.textContent = '';
         const h = this.doc.createElement('div');
         h.className = 'sail-title';
@@ -140,6 +145,7 @@ export class SailScreen {
       active: this.sail.active,
       from: this.sail.from,
       to: this.sail.to,
+      kind: this.sail.kind,
       phase: this.sail.active ? f.phase : null,
       veil: this.sail.active ? f.veil : 0,
       text: this.sail.active ? f.text : 0,

@@ -43,6 +43,12 @@ export const EVENT_OWNER = {
   islandCleared: 'mario',
   ferryBoard: 'mario',
   worldCleared: 'mario',
+  // Mario's run restarted somewhere else — he spent his last life and the
+  // engine put him back on 1-1, or the turn passed to a slot standing in
+  // another world. Mario-owned for exactly the reason worldCleared is: only his
+  // client can see which level the engine actually loaded, and the pilot must
+  // never infer the ocean he is flying over from anything he can see.
+  worldReset: 'mario',
 };
 
 export const RELIABLE_TYPES = new Set(Object.keys(EVENT_OWNER));

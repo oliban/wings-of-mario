@@ -4,7 +4,7 @@ import { PilotRenderer } from './pilot-renderer.js';
 import { Scene } from './scene.js';
 import { WingsSim, SQUADRON } from './sim.js';
 import { ARCHIPELAGO } from './archipelago.js';
-import { Sail } from './sail.js';
+import { Sail, SAIL_KIND } from './sail.js';
 import { takeoff, flyTo, bombTile, autoLand } from './bot.js';
 import { SPEED_TUNE, getMaxSpeed, setMaxSpeed, resetMaxSpeed } from './flight.js';
 
@@ -444,6 +444,32 @@ class Pilot {
     });
   }
 
+  // MARIO'S RUN RESTARTED IN ANOTHER WORLD. Same ownership rule as sailTo and
+  // the same obedience: his client says so (src/net/pilot-side.js hears the
+  // reliable `worldReset`), this one moves.
+  //
+  // It is the SAME CROSSING as a sail — same fade, same durations, same card
+  // layout — because it is the same carrier group doing the same thing for a
+  // different reason, and a second transition would be a second thing to keep
+  // right. Only two things differ, and both live in src/wings/sail.js: the
+  // words (resetText: nothing was secured) and the fact that it may go BACK.
+  //
+  // Refused when the group is already on that world, which is what makes a
+  // resent worldReset a no-op. Clamped rather than rejected at the ends, so an
+  // island id from an eventual ninth world cannot throw the ocean away.
+  repositionTo(toWorld) {
+    const from = this.sim.archipelago.world;
+    const n = Math.round(Number(toWorld));
+    if (!Number.isFinite(n)) return false;
+    const to = Math.max(1, Math.min(ARCHIPELAGO.WORLDS, n));
+    return this.crossing.begin({
+      from,
+      to,
+      kind: SAIL_KIND.RESET,
+      note: `SQUADRON REPLENISHED — ${SQUADRON} AIRCRAFT ON DECK`,
+    });
+  }
+
   // Is the network layer attached? It hooks itself on here once, and only once
   // it has actually joined a room (src/net/pilot-side.js, at the end of boot);
   // `?solo`, the capture tool and a failed connect all leave it null. Read
@@ -555,16 +581,21 @@ class Pilot {
       // The whole of the changeover: a new ocean from the seed, a full
       // squadron, the aeroplane respotted, and nothing left in the air.
       //
-      // A debug jump FORWARDS is exactly that, unaltered — the real sail. Only
-      // a jump backwards needs anything else, because Archipelago#sail refuses
+      // Anything moving FORWARDS is exactly that, unaltered — the real sail,
+      // whether a cleared world, a debug jump or a restart in a further world.
+      // Only going BACK needs anything else, because Archipelago#sail refuses
       // to run the group's world number down and must go on refusing it: that
       // guard is what makes a resent worldCleared idempotent. Going back is
       // therefore a REBUILD from the same match seed rather than a sail, which
       // lands on the identical ocean seedFor(seed, world) would have given —
       // the layout is a pure function of the two, so there is no third way for
       // world 2 to look.
-      if (jump != null && jump <= this.sim.archipelago.world) {
-        this.sim = new WingsSim({ seed: this.sim.archipelago.seed, world: jump });
+      //
+      // Decided off the DESTINATION rather than off which caller asked, so the
+      // debug jump and Mario's restart go back down the one path. A forward
+      // sail can never take it: its `to` is always past the current world.
+      if (to <= this.sim.archipelago.world) {
+        this.sim = new WingsSim({ seed: this.sim.archipelago.seed, world: to });
         // A whole new Scene rather than clearFx: every cached thing in it —
         // craters, wakes, the camera — belongs to a sim that no longer exists.
         // (reset() is not used here: it would cancel the crossing we are
@@ -760,6 +791,20 @@ window.__WINGS = {
   // world along.
   sail(toWorld) {
     const ok = pilot.sailTo(toWorld == null ? pilot.sim.archipelago.world + 1 : toWorld);
+    pilot.render();
+    return ok;
+  },
+
+  // THE SAME CROSSING, run because Mario's run restarted somewhere else. In a
+  // match this is started by his client's `worldReset` and never by anything on
+  // this page (src/net/pilot-side.js#onWorldReset); the scripted entry point is
+  // here for the same reason sail() has one.
+  //
+  // NOT the debug world jump below. That refuses to move while a Mario is on
+  // the other end, because nothing would carry him along; this is the case
+  // where he has ALREADY moved and the group is catching up.
+  reposition(toWorld) {
+    const ok = pilot.repositionTo(toWorld);
     pilot.render();
     return ok;
   },

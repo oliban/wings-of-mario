@@ -16,7 +16,7 @@ test('there are exactly two sides and they are each other', () => {
 test('every reliable event has exactly one owner', () => {
   const expected = [
     'bombRelease', 'detonate', 'marioDeath', 'islandCleared', 'ferryBoard',
-    'ferrySunk', 'sortieStart', 'landed', 'planeLost', 'worldCleared',
+    'ferrySunk', 'sortieStart', 'landed', 'planeLost', 'worldCleared', 'worldReset',
   ];
   assert.deepEqual(Object.keys(EVENT_OWNER).sort(), [...expected].sort());
   for (const type of expected) {

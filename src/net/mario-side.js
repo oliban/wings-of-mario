@@ -74,6 +74,12 @@ export class MarioNet {
     // for where `final` is decided). src/wings/mario-main.js hangs the fade off
     // it; this class does not know a screen exists.
     this.onSail = null;
+    // THE SAME CROSSING, run because this client's own run RESTARTED somewhere
+    // else rather than because a world was cleared. Fired from the same place
+    // and on the same tick as the wire event the pilot's client obeys, so the
+    // two fades come from one decision. Not fired once the match is decided:
+    // then it ends, and a decided match does not put to sea.
+    this.onReset = null;
     // Which level our retained craters have been pushed into, and how much
     // damage that level held when we did it. `world.damage` is CLEARED by
     // world.loadLevel on every load, sub-areas included, so a shrinking set is
@@ -454,6 +460,13 @@ export class MarioNet {
       // start from one decision rather than from two clients each noticing
       // something. `final` is 8-4: the match is over, nothing sails.
       if (e.type === 'worldCleared' && !e.d.final && this.onSail) this.onSail(e.d);
+      // The group repositioning behind a restarted run. Announced from the same
+      // place as the wire event for the same reason as the sail above — one
+      // decision, two screens — and refused once the match has a winner. The
+      // death that ends the match is emitted strictly BEFORE this (it leaves at
+      // the start of the death animation, seconds before the engine reloads),
+      // so `over` is already latched here and on the pilot's client alike.
+      if (e.type === 'worldReset' && !this.verdict.over && this.onReset) this.onReset(e.d);
     }
     return out;
   }

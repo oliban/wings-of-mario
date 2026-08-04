@@ -141,6 +141,17 @@ export class MarioEvents {
     this._deathSent = false;
     this._lastLevel = null;
     this._seen = false;
+    // THE RUN IS OVER, latched until the level id next changes.
+    //
+    // The engine's game-over path (src/main.js endSession) restores three lives
+    // and loads 1-1 BEFORE Mario's client next reads it, so by the time the
+    // level change arrives there is nothing left in the reading to say that the
+    // change was a death rather than progress. Without this latch a man who
+    // died on 5-2 would announce that he had cleared world 5, and a man who
+    // died on 8-4 would announce that he had cleared the game and WIN THE
+    // MATCH. The latch is set from the death itself, which is the last moment
+    // the fact is visible.
+    this._runOver = false;
   }
 
   // `s` is a flat reading of the engine, taken once per frame:
@@ -162,27 +173,84 @@ export class MarioEvents {
       // pilot needs the number that decides the match, and sending the stale
       // one would mean the last death never reads as the last death.
       const left = s.gameOver || lives == null ? 0 : Math.max(0, lives - 1);
+      // Only when the count is actually KNOWN to be spent. A missing `lives`
+      // reads as 0 above so that an unknown last death still ends the match the
+      // safe way round, but it is not evidence that the run is over and must
+      // not latch a restart onto the next level change.
+      if (lives != null && left <= 0) this._runOver = true;
       out.push({ type: 'marioDeath', d: { island, lives: left, x: s.x, y: s.y } });
     }
     if (!dying) this._deathSent = false;
+    // Belt and braces: the engine may also be read while it is already sitting
+    // in its game-over state, and a run that ended is over however we saw it.
+    if (s.gameOver) this._runOver = true;
 
-    // Clearing an island: the level id changed under us, and the level it
-    // changed from was not one a dying Mario was being taken off.
+    // THE LEVEL ID CHANGED UNDER US, and the level it changed from was not one
+    // a dying Mario was being taken off. There are two entirely different
+    // reasons that happens and they must not be confused:
+    //
+    //   PROGRESS. He walked into the flagpole, or down a warp pipe. The world
+    //   number can only go up, and when it does the carrier group sails.
+    //
+    //   A RESTART. His run ended and the engine put him somewhere else — 1-1
+    //   after a game over, or the other player's level when the turn passes.
+    //   Nothing was cleared, and the world number is very often lower.
+    //
+    // Both move the ocean; only the first is progress. Announcing a restart as
+    // a clear is how the pilot ends up over an archipelago Mario left.
     if (this._seen && this._lastLevel && island && island !== this._lastLevel && !dying) {
       const from = this._lastLevel;
-      out.push({ type: 'islandCleared', d: { island: from, next: island } });
-      // 8-4 is the end of the archipelago, and there is nothing past it to
-      // sail to: that is Mario winning outright (spec 3.4). Any other castle
-      // is the group weighing anchor, which is progress, not a verdict.
+      // 8-4 is the end of the archipelago, and there is nothing past it to sail
+      // to: that is Mario winning outright (spec 3.4). The engine puts him back
+      // on 1-1 afterwards, so WITHOUT this the win would read as the biggest
+      // backwards move in the game and be announced as a restart. `final`
+      // therefore outranks direction — but NOT `_runOver`, which is the man who
+      // spent his last life ON 8-4 and cleared nothing at all.
       const final = from === '8-4';
-      if (final || worldOf(from) !== worldOf(island)) {
-        out.push({ type: 'worldCleared', d: { island: from, next: island, final } });
+      const back = !final && worldOf(island) < worldOf(from);
+      if (this._runOver || back) {
+        // Not `islandCleared`: he cleared nothing. The pilot's client takes his
+        // new island from this event instead, so the one fact still arrives.
+        out.push({ type: 'worldReset', d: { island: from, next: island } });
+      } else {
+        out.push({ type: 'islandCleared', d: { island: from, next: island } });
+        // Any castle other than 8-4 is the group weighing anchor, which is
+        // progress, not a verdict.
+        if (final || worldOf(from) !== worldOf(island)) {
+          out.push({ type: 'worldCleared', d: { island: from, next: island, final } });
+        }
       }
+      // Consumed by the move it explains. A second restart needs a second
+      // death, and leaving it latched would make the next real clear a lie in
+      // the other direction.
+      this._runOver = false;
     }
     if (island) this._lastLevel = island;
     if (island || lives != null) this._seen = true;
     return out;
   }
+}
+
+// WHERE THE OCEAN GOES when Mario's run restarts. The rule, on its own, so that
+// it is one testable thing rather than three lines inside a class that cannot
+// be constructed without a browser.
+//
+// `d` is the worldReset payload; `over` is whether the match already has a
+// winner. Returns the world number the carrier group must move to, or null for
+// "do not move".
+//
+// TAKEN FROM THE EVENT, never counted. `d.next` is the island Mario's engine
+// actually loaded, so however he got there — a game over, a turn passing, a
+// warp — both clients name the same world and lay out the same ocean. Counting
+// would be a second authority for the one fact the whole match hangs off.
+//
+// A DECIDED MATCH DOES NOT MOVE. The match ending is the ending; the group has
+// nothing left to reposition for, and sailing then would replenish a squadron
+// for a match nobody is playing.
+export function repositionWorld(d = {}, opts = {}) {
+  if (opts.over) return null;
+  const to = worldOf(d && d.next);
+  return to == null || !isIslandId(d && d.next) ? null : to;
 }
 
 // ---------------------------------------------------------------------------

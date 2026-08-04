@@ -8,7 +8,7 @@ import { FerryRide } from './ferry-ride.js';
 // its own and does nothing at all without a `?room=` code.
 import net from '../net/mario-side.js';
 import { SailScreen } from '../net/sail-screen.js';
-import { worldOfIsland } from './sail.js';
+import { worldOfIsland, SAIL_KIND } from './sail.js';
 
 // Loaded from index.html. This module and the one <script> tag that loads it
 // are the ENTIRE upstream footprint of the telegraph.
@@ -52,6 +52,19 @@ net.onSail = (d) => sailScreen.begin({
   from: worldOfIsland(d.island),
   to: worldOfIsland(d.next),
   note: `MARIO GOES ASHORE ON ${d.next}`,
+});
+
+// AND THE SAME SCENE THE OTHER WAY. A run that restarts moves the ocean too —
+// the carrier group has to follow Mario back to world 1 or the pilot spends the
+// rest of the match over an archipelago Mario is not on. Same screen, same
+// clock, same card; only src/wings/sail.js's words differ, because nothing was
+// cleared. See MarioEvents in src/net/match-events.js for how a restart is told
+// apart from progress.
+net.onReset = (d) => sailScreen.begin({
+  from: worldOfIsland(d.island),
+  to: worldOfIsland(d.next),
+  kind: SAIL_KIND.RESET,
+  note: `MARIO STARTS AGAIN ON ${d.next}`,
 });
 
 // Being shot should be audible. One short, hard, falling chirp per round —
@@ -181,6 +194,8 @@ window.__SAIL = {
     return sailScreen.begin({
       from: opts.from == null ? to - 1 : opts.from,
       to,
+      // Defaulted rather than required, so every existing caller means a sail.
+      kind: opts.kind || SAIL_KIND.SAIL,
       note: opts.note == null ? `MARIO GOES ASHORE ON ${to}-1` : opts.note,
     });
   },
