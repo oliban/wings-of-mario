@@ -74,6 +74,24 @@ node tools/shot.mjs --scenes tools/scenes.json  # capture gameplay scenes determ
 is right for players and terrible for debugging — a single ragged sprite row once silently deleted
 Mario from the game. `validate.mjs` removes the safety net and names the culprit.
 
+## Tests
+
+```bash
+npm run test:unit     # pure logic, no browser, about a second
+npm run test:browser  # drives the real game in headless Chromium
+npm test              # both
+```
+
+Use `test:unit` while working. The browser suite is the expensive one: every test file starts a
+headless Chromium, so it takes a **machine-wide lock** and runs one browser at a time even across
+separate `npm test` invocations — a second run waits for the first rather than competing with it.
+A run that finds a static server already on port 8199 reuses it instead of starting another, and
+leaves it running afterwards.
+
+If a run is killed and something seems stuck, `pkill -f "node --test"` clears it; the browsers are
+children and go with it. The lock records its holder's PID, so the next run reclaims it
+automatically once that process is gone.
+
 ## Architecture
 
 `ARCHITECTURE.md` is the binding contract: coordinate system and units, the sprite and animation
