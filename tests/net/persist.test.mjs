@@ -13,8 +13,9 @@ import { startServer } from '../../server/index.js';
 import { Rooms, ROOM_IDLE_MS } from '../../src/net/room.js';
 import { MSG, PROTOCOL_VERSION } from '../../src/net/protocol.js';
 import {
-  loadState, serializeState, createSaver, roomToJSON, roomFromJSON, STATE_VERSION,
+  loadState, serializeState, createSaver, roomToJSON, roomFromJSON, STATE_VERSION, SEAT_HOLD_MS,
 } from '../../server/persist.js';
+import { joinHref } from '../../src/net/lobby.js';
 import { FakeClient } from './helpers.mjs';
 
 const quiet = { info() {}, warn() {}, error() {} };
@@ -144,6 +145,33 @@ test('an expired room is not written out either', () => {
   const written = JSON.parse(serializeState(rooms, now));
   assert.deepEqual(written.rooms.map((r) => r.code), [live.code]);
   assert.ok(stale.code !== live.code);
+});
+
+test('a seat is held across a quick restart and let go after a long one', () => {
+  const now = 10_000_000;
+  const seats = [{ side: 'pilot', token: 'ACDE.pilot.1.abc' }];
+  const write = (lastActivity) => {
+    const path = tmp('rooms.json');
+    writeFileSync(path, JSON.stringify({
+      v: STATE_VERSION,
+      rooms: [{ code: 'ACDE', seed: 1, createdAt: 0, lastActivity, seats, damage: { 'i-1': ['1,1'] } }],
+    }));
+    return loadState(path, { now, log: quiet }).get('ACDE');
+  };
+
+  // A `npm run serve` cycle mid-playtest: the pilot's page is still open with
+  // its token in memory, so the seat is still his.
+  const quick = write(now - 5000);
+  assert.deepEqual(quick.summary(now).seats, { mario: 'open', pilot: 'away' });
+  assert.equal(quick.join({ token: 'ACDE.pilot.1.abc' }, now).reconnected, true);
+
+  // An hour later nothing holds that token, and a seat nobody can claim is a
+  // room nobody can join. The world survives; the seats do not.
+  const slow = write(now - SEAT_HOLD_MS - 1);
+  assert.deepEqual(slow.summary(now).seats, { mario: 'open', pilot: 'open' });
+  assert.equal(slow.seed, 1, 'same archipelago');
+  assert.deepEqual(slow.damage.keys('i-1'), ['1,1'], 'same craters');
+  assert.equal(joinHref(slow.summary(now)), '/?room=ACDE', 'and the front door can link it');
 });
 
 // ---------------------------------------------------------------------------

@@ -77,6 +77,26 @@ export function roomToJSON(room) {
 // The inverse, and the only place a room is built from something a human could
 // have edited. Returns null for anything it cannot vouch for — see loadState:
 // one bad room is dropped, it never takes the file or the boot with it.
+// How long a restored seat is still held for the token that owns it.
+//
+// A seat token lives in the Session object on the page and NOWHERE ELSE — not
+// in storage, not in the URL — so it survives a dropped socket and does not
+// survive a reload. That is fine while the server is up: the client that lost
+// its socket reconnects itself, with its token, and gets its seat back.
+//
+// Across a restart it needs a limit, or persistence introduces a dead end that
+// memory never had. A room whose two seats came back held by tokens that no
+// live page holds any more is a room the front door lists as HELD, links to
+// nobody, and cannot be got into for the full ROOM_IDLE_MS — where before this
+// file existed the same code would at least have opened an empty room.
+//
+// So the seats are kept only if the gap was short enough that a page could
+// plausibly still be sitting there with its token: a `npm run serve` restart
+// mid-playtest, which is the case worth protecting. Past that the ROOM comes
+// back — same code, same archipelago, same craters — with both seats OPEN,
+// which is the state anybody can walk into.
+export const SEAT_HOLD_MS = 60 * 1000;
+
 export function roomFromJSON(raw, opts = {}) {
   if (!raw || typeof raw !== 'object') return null;
   const code = normalizeRoomCode(raw.code);
@@ -88,7 +108,10 @@ export function roomFromJSON(raw, opts = {}) {
   room.lastActivity = Number.isFinite(raw.lastActivity) ? raw.lastActivity : room.createdAt;
   room.seatsMinted = Number.isFinite(raw.seatsMinted) ? raw.seatsMinted : 0;
 
-  for (const seat of Array.isArray(raw.seats) ? raw.seats : []) {
+  // See SEAT_HOLD_MS. `now` of null means "do not judge", which is what the
+  // round-trip tests want and what nothing in the server asks for.
+  const held = opts.now == null || (opts.now - room.lastActivity) <= (opts.seatHoldMs ?? SEAT_HOLD_MS);
+  for (const seat of held ? (Array.isArray(raw.seats) ? raw.seats : []) : []) {
     if (!seat || !SIDES.includes(seat.side) || typeof seat.token !== 'string' || !seat.token) {
       // A seat we cannot describe is a seat nobody can reconnect into. Dropping
       // it leaves the seat OPEN, which is the safe direction: the worst case is
@@ -116,7 +139,8 @@ export function roomFromJSON(raw, opts = {}) {
 // from a newer version, a directory where a file should be: all of them mean
 // "no rooms", never "no server". Losing rooms is the annoyance this whole file
 // exists to reduce; a server that will not boot is a worse one.
-export function loadState(path, { now = Date.now(), rand, log = console, idleMs = ROOM_IDLE_MS } = {}) {
+export function loadState(path, opts = {}) {
+  const { now = Date.now(), rand, log = console, idleMs = ROOM_IDLE_MS } = opts;
   const rooms = new Rooms(rand ? { rand } : {});
   if (!path) return rooms;
 
@@ -148,7 +172,7 @@ export function loadState(path, { now = Date.now(), rand, log = console, idleMs 
   for (const raw of Array.isArray(parsed.rooms) ? parsed.rooms : []) {
     let room = null;
     try {
-      room = roomFromJSON(raw, { rand });
+      room = roomFromJSON(raw, { rand, now, seatHoldMs: opts.seatHoldMs });
     } catch (err) {
       room = null;
     }
