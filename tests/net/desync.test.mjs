@@ -199,8 +199,11 @@ test('the desync detector', { timeout: 30000 }, async (t) => {
     // Silence about an island is a claim that it is undamaged. A client that
     // lost 1-2's craters entirely would otherwise be invisible to a detector
     // that only ever compares what it was told about.
+    // '40,9' rather than a tile near the left edge: 1-2's spawn sits at the
+    // top of the map, so its sanctuary strip runs the full height of the level
+    // and the server would drop the key before it ever reached a broadcast.
     const { mario, pilot } = await pair(port, 'NPQR');
-    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-2', keys: ['3,4'] } });
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-2', keys: ['40,9'] } });
     await mario.ofType(MSG.DAMAGE);
     // Past the grace window, so the crater cannot still be in flight.
     await quiet(3100);
@@ -212,7 +215,7 @@ test('the desync detector', { timeout: 30000 }, async (t) => {
     mario.send({ t: MSG.HASH, tick: 300, h: { '1-1': hashKeys([]) } });
     const repair = await mario.ofType(MSG.DAMAGE, 3000, since);
     assert.equal(repair.island, '1-2');
-    assert.deepEqual(repair.keys, ['3,4'], 'the repair carries the authoritative set');
+    assert.deepEqual(repair.keys, ['40,9'], 'the repair carries the authoritative set');
 
     // Still silent about it on the next hash, so the repair did not take.
     mario.send({ t: MSG.HASH, tick: 360, h: { '1-1': hashKeys([]) } });

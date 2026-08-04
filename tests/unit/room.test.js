@@ -4,6 +4,30 @@ import { Room, Rooms, ROOM_IDLE_MS, HASH_GRACE_MS } from '../../src/net/room.js'
 import { hashKeys } from '../../src/wings/damage.js';
 import { isRoomCode } from '../../src/net/protocol.js';
 
+// THESE TESTS ARE ABOUT HASHING, NOT ABOUT LEVELS. Each one hashes a key list
+// it wrote itself and compares it against what the room stored — so the two
+// must be the same list. recordDetonate() drops keys inside a spawn sanctuary
+// (src/wings/sanctuary.js), which makes the stored list shorter than the one
+// the test hashed, for a reason that has nothing to do with hashing.
+//
+// That is not hypothetical: an upstream level regeneration moved 1-2's spawn
+// from {x:2,y:12} to {x:2.5,y:2}, and because a sanctuary runs from the spawn
+// down to the map floor, the strip grew from rows 11-14 to rows 1-14 and
+// swallowed '1,1' — which these tests had been naming since they were written.
+// The hash was never wrong; the coordinates drifted underneath it.
+//
+// So detonate through this helper. It asserts the room stored the whole list,
+// which turns the next such drift into a failure that says "sanctuary" instead
+// of an unreadable hash diff. Tests that mean to exercise filtering call
+// recordDetonate directly.
+function detonate(room, island, keys, t) {
+  const out = room.recordDetonate('pilot', island, keys, t);
+  assert.deepEqual(out.keys, keys,
+    `${island} ${JSON.stringify(keys)}: the room dropped a key. These tiles are `
+    + 'inside a spawn sanctuary now — pick tiles further from the spawn column.');
+  return out;
+}
+
 test('the first player picks a side and the second gets the other', () => {
   const r = new Room('ACDE', { seed: 7 });
   const a = r.join({ side: 'pilot' });
@@ -41,7 +65,7 @@ test('asking for a taken side is refused rather than silently reassigned', () =>
 test('a token reconnects into the same seat, damage and all', () => {
   const r = new Room('ACDE', { seed: 7 });
   const a = r.join({ side: 'pilot' });
-  r.recordDetonate('pilot', '1-1', ['5,10', '6,10']);
+  detonate(r, '1-1', ['5,10', '6,10']);
   assert.equal(r.leave(a.token), true);
   assert.equal(r.present('pilot'), false);
 
@@ -107,7 +131,7 @@ test('detonate is recorded and deduplicated by the SERVER, not the client', () =
   // Decision D2: DamageMap.add() is the only authority on what is in the set.
   const r = new Room('ACDE', { seed: 7 });
   r.join({ side: 'pilot' });
-  const first = r.recordDetonate('pilot', '1-1', ['5,10', '6,10']);
+  const first = detonate(r, '1-1', ['5,10', '6,10']);
   assert.deepEqual(first.added.sort(), ['5,10', '6,10']);
   const second = r.recordDetonate('pilot', '1-1', ['6,10', '7,10']);
   assert.deepEqual(second.added, ['7,10'], 'only genuinely new keys are broadcast');
@@ -159,13 +183,13 @@ test('mayEmit cannot be talked into yes by a prototype key', () => {
 test('hash comparison names every island that disagrees and nothing else', () => {
   const r = new Room('ACDE', { seed: 7 });
   r.join({ side: 'pilot' });
-  r.recordDetonate('pilot', '1-1', ['5,10', '6,10']);
-  r.recordDetonate('pilot', '1-2', ['1,1']);
+  detonate(r, '1-1', ['5,10', '6,10']);
+  detonate(r, '1-2', ['40,9']);
 
-  const agreeing = { '1-1': hashKeys(['6,10', '5,10']), '1-2': hashKeys(['1,1']) };
+  const agreeing = { '1-1': hashKeys(['6,10', '5,10']), '1-2': hashKeys(['40,9']) };
   assert.deepEqual(r.compareHashes(agreeing), [], 'order must not matter');
 
-  const wrong = { '1-1': hashKeys(['5,10']), '1-2': hashKeys(['1,1']) };
+  const wrong = { '1-1': hashKeys(['5,10']), '1-2': hashKeys(['40,9']) };
   const bad = r.compareHashes(wrong);
   assert.equal(bad.length, 1);
   assert.equal(bad[0].island, '1-1');
@@ -188,10 +212,10 @@ test('an island the client has never touched must still match the empty hash', (
 test('a client one broadcast behind the server is not accused of a desync', () => {
   const r = new Room('ACDE', { seed: 7 });
   r.join({ side: 'pilot' });
-  r.recordDetonate('pilot', '1-1', ['5,10'], 1000);
+  detonate(r, '1-1', ['5,10'], 1000);
   // Hashed before the crater reached it: the client still holds the empty set.
   assert.deepEqual(r.compareHashes({ '1-1': hashKeys([]) }, 1100), []);
-  r.recordDetonate('pilot', '1-1', ['6,10'], 1200);
+  detonate(r, '1-1', ['6,10'], 1200);
   assert.deepEqual(r.compareHashes({ '1-1': hashKeys(['5,10']) }, 1300), [],
     'one crater behind, mid-run, is the normal case and must be silent');
   assert.deepEqual(r.compareHashes({ '1-1': hashKeys(['5,10', '6,10']) }, 1300), []);
@@ -200,7 +224,7 @@ test('a client one broadcast behind the server is not accused of a desync', () =
 test('a state the server has never been in is caught even mid-bombing-run', () => {
   const r = new Room('ACDE', { seed: 7 });
   r.join({ side: 'pilot' });
-  r.recordDetonate('pilot', '1-1', ['5,10'], 1000);
+  detonate(r, '1-1', ['5,10'], 1000);
   const bad = r.compareHashes({ '1-1': hashKeys(['9,9']) }, 1050);
   assert.equal(bad.length, 1, 'lag is an excuse for being behind, not for being wrong');
   assert.equal(bad[0].island, '1-1');
@@ -209,7 +233,7 @@ test('a state the server has never been in is caught even mid-bombing-run', () =
 test('a replica that is still behind long after the wire went quiet IS a desync', () => {
   const r = new Room('ACDE', { seed: 7 });
   r.join({ side: 'pilot' });
-  r.recordDetonate('pilot', '1-1', ['5,10'], 1000);
+  detonate(r, '1-1', ['5,10'], 1000);
   const late = 1000 + HASH_GRACE_MS + 1;
   const bad = r.compareHashes({ '1-1': hashKeys([]) }, late);
   assert.equal(bad.length, 1, 'a crater that never arrived is exactly what this detects');
@@ -223,14 +247,14 @@ test('with no clock at all the grace window is not applied', () => {
   // in-process test wants and what the server never does.
   const r = new Room('ACDE', { seed: 7 });
   r.join({ side: 'pilot' });
-  r.recordDetonate('pilot', '1-1', ['5,10'], 1000);
+  detonate(r, '1-1', ['5,10'], 1000);
   assert.equal(r.compareHashes({ '1-1': hashKeys([]) }).length, 1);
 });
 
 test('an island the server has damaged that the client never mentions is caught', () => {
   const r = new Room('ACDE', { seed: 7 });
   r.join({ side: 'pilot' });
-  r.recordDetonate('pilot', '1-2', ['3,4'], 1000);
+  detonate(r, '1-2', ['40,9'], 1000);
   const late = 1000 + HASH_GRACE_MS + 1;
   // Silence about an island is a claim of an empty set, not an abstention: a
   // client that lost the whole island would otherwise never be caught.
@@ -270,7 +294,7 @@ test('matchState carries the whole match, which is what a reconnect is restored 
   const r = new Room('ACDE', { seed: 7 });
   const a = r.join({ side: 'pilot' });
   r.join({ side: 'mario' });
-  r.recordDetonate('pilot', '1-1', ['5,10']);
+  detonate(r, '1-1', ['5,10']);
   r.leave(a.token);
 
   const st = r.matchState();
@@ -322,7 +346,7 @@ test('a room whose players have all left is kept for the idle window, then reape
   const rooms = new Rooms({ codeGen: () => 'ACDE' });
   const r = rooms.create({ now: 0 });
   const a = r.join({ side: 'pilot' }, 0);
-  r.recordDetonate('pilot', '1-1', ['5,10'], 0);
+  detonate(r, '1-1', ['5,10'], 0);
   r.leave(a.token, 0);
 
   assert.deepEqual(rooms.reap(ROOM_IDLE_MS), [], 'not yet');
