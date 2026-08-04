@@ -203,6 +203,12 @@ test('level flight never rolls, however long it goes on', () => {
   const scene = new Scene();
   const sim = airborne();
   scene.consume(sim);
+  // Let the bank stop ringing from the climb and level-off that got the
+  // aeroplane up here first. This test is about whether LEVEL FLIGHT induces
+  // roll, not about how long the manoeuvre before it takes to damp out — and
+  // the aeroplane pulls harder now that it is quicker, so it arrives with
+  // more left to damp than it used to.
+  fly(scene, sim, 240, { pitch: 0, thrust: 1 });
   const settled = scene.roll;
   const rolls = fly(scene, sim, 120, { pitch: 0, thrust: 1 });
   for (const r of rolls) assert.ok(Math.abs(r - settled) < 1e-9, `level flight rolled to ${r}`);

@@ -198,16 +198,23 @@ test('the nose leads the hitbox', () => {
 // ---------------------------------------------------------------------------
 
 test('thrust that agrees with the heading accelerates toward level cruise', () => {
-  // Level cruise (THRUST balancing DRAG, ~2.69 px/f) is the equilibrium in
-  // level flight — MAX_SPEED is a hard clamp a dive can reach (see "climbing
-  // bleeds speed and diving builds it"), not what level thrust alone settles
-  // at, so that is what this checks approach to.
+  // Level cruise (THRUST balancing DRAG, ~5.39 px/f) is the equilibrium in
+  // level flight — MAX_SPEED is a clamp, NOT what level thrust settles at and
+  // in fact not something the aeroplane can reach at all (a vertical dive
+  // tops out at 8.16 against a clamp of 9.0), so that is what this checks
+  // approach to. sqrt(THRUST/DRAG) rather than a bare number, because those
+  // two constants are what the figure IS: hard-coding 5.39 here would let a
+  // change to either of them silently redefine cruise without failing.
   const p = createPlane({ mode: MODE.AIR, x: 0, y: 200, speed: 1, angle: 0, gear: false });
   const before = p.speed;
   for (let i = 0; i < 30; i++) stepPlane(p, { thrust: 1, pitch: 0 });
   assert.ok(p.speed > before, 'facing East, thrusting East should build speed');
   for (let i = 0; i < 3000; i++) stepPlane(p, { thrust: 1, pitch: 0 });
-  assert.ok(Math.abs(p.speed - 2.69) < 0.05, `should settle near level cruise, got ${p.speed}`);
+  // Drag is applied to the speed AFTER thrust has gone in, so the fixed point
+  // is sqrt(T/D) - T rather than sqrt(T/D): one tick of thrust always sits
+  // above the equilibrium waiting to be dragged back off.
+  const cruise = Math.sqrt(FLIGHT.THRUST / FLIGHT.DRAG) - FLIGHT.THRUST;
+  assert.ok(Math.abs(p.speed - cruise) < 0.05, `should settle near level cruise ${cruise.toFixed(2)}, got ${p.speed}`);
   assert.ok(p.speed <= FLIGHT.MAX_SPEED, 'must not exceed MAX_SPEED');
 });
 

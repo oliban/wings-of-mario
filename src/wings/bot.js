@@ -1,8 +1,9 @@
 import { TILE } from '../core/constants.js';
-import { DECK_X0, DECK_Y, SEA_Y, PLANE_W, PLANE_H, localTileToWorld } from './geo.js';
+import { DECK_X0, DECK_Y, SEA_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H, localTileToWorld } from './geo.js';
 import { MODE, FLIGHT, normalizeAngle } from './flight.js';
 import { LANDING } from './carrier.js';
-import { release, predictImpact } from './ordnance.js';
+import { release } from './ordnance.js';
+import { refineImpact } from './telegraph.js';
 import { distanceTo } from './sim.js';
 
 // Scripted pilots. Every one is a pure function of sim state, so a test that
@@ -93,19 +94,43 @@ export function flyTo(sim, x, y, budget = 6000, opts = {}) {
 // to ask "if I dropped now, where would it land," and the real round is
 // dropped by handing `drop: true` to `sim.step`, which is what actually
 // spends one from `sim.loadout`.
+// The first blocking surface in a column, in WORLD pixels, or the sea for an
+// open one. Same question `mario-overlay.js` asks for the reticle, asked of the
+// pilot's own island objects — see `aim` below for why the bot needs it.
+function surfaceOf(island) {
+  return (px) => {
+    const tx = Math.floor((px - island.originX) / TILE);
+    if (tx < 0 || tx >= island.w) return SEA_Y;
+    for (let ty = 0; ty < island.h; ty++) {
+      if (island.blocksTile(tx, ty)) return ISLAND_TOP_Y + ty * TILE;
+    }
+    return SEA_Y;
+  };
+}
+
 export function bombTile(sim, islandId, tx, ty, budget = 8000) {
   const island = sim.islandById(islandId);
   if (!island) return false;
   const corner = localTileToWorld(island.originX, tx, ty);
   const target = { x: corner.x + TILE / 2, y: corner.y + TILE / 2 };
   const cruiseY = Math.max(120, target.y - 220);
+  // Aim against the REAL terrain profile, not against a flat plane at the
+  // target's height. `predictImpact` alone answers "where would this bomb
+  // cross y=target.y", which is a different question from "where will it hit"
+  // the moment there is anything standing between the aeroplane and the
+  // target — and at the current cruise speed there usually is, because the
+  // arc is flat enough to reach a hillside first. That is exactly what
+  // `refineImpact` exists for; Mario's reticle has always used it, and the
+  // bot aiming by a cruder rule than the reticle that watches it was a bug
+  // waiting for the aeroplane to get quick enough to expose it.
+  const surface = surfaceOf(island);
 
   if (!flyTo(sim, target.x - 900, cruiseY, budget, { near: 64, floor: SEA_Y })) return false;
 
   const p = sim.plane;
   for (let i = 0; i < budget; i++) {
     if (p.mode === MODE.DOWN) return false;
-    const solution = predictImpact(release('bomb', p), target.y);
+    const solution = refineImpact(release('bomb', p), surface, SEA_Y);
     if (solution && solution.x >= target.x - TILE / 2 && Math.cos(p.angle) > 0) {
       sim.step({ ...seek(p, target.x + 4000, cruiseY, { floor: SEA_Y }), drop: true });
       return true;

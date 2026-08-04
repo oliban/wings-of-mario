@@ -4,24 +4,54 @@ import { CEILING_Y, DECK_X0, DECK_X1, DECK_Y, PLANE_W, PLANE_H, clamp } from './
 // radians per frame for rotation. Nothing reads a clock or an RNG.
 //
 // These are chosen together, not independently. THRUST against DRAG sets level
-// cruise at 2.69 px/frame. GRAVITY against THRUST is why a climb stalls and a
-// dive runs away: at full throttle a vertical climb is 0.045 - 0.06, net
+// cruise at 5.39 px/frame. GRAVITY against THRUST is why a climb stalls and a
+// dive runs away: at full throttle a vertical climb is 0.09 - 0.12, net
 // negative. TURN_RATE sets the loop at 105 ticks. ROLL_THRUST against
 // ROLL_DRAG puts rotation at tick 133, 180px down a 320px deck — half the
 // deck, so running out of it is a real mistake a player can make.
+//
+// THE AEROPLANE WAS DOUBLED IN SPEED, and MAX_SPEED alone could not do it.
+// MAX_SPEED is a clamp, and the clamp was never what the aeroplane was
+// actually hitting: DRAG is. sqrt(THRUST/DRAG) is level cruise and
+// sqrt((THRUST+GRAVITY)/DRAG) is a vertical dive, and at the old 4.5 those
+// were 2.69 and 4.08 — the aeroplane could not reach its own top speed by
+// 0.4 px/f, so raising the clamp on its own would have changed precisely
+// nothing. Doubling the aeroplane means doubling every ACCELERATION and
+// halving DRAG (drag goes as v-squared, so 2a = D'(2v)^2 gives D' = D/2),
+// which doubles every speed and — this is the point — leaves every DURATION
+// exactly where it was. Braking from cruise to zero is still ~48 ticks; a
+// vertical climb still bleeds out in ~180. The aeroplane covers twice the
+// ground in the same time rather than taking twice as long to do anything.
 export const FLIGHT = {
-  MAX_SPEED: 4.5,
-  THRUST: 0.045,
+  // Doubled, as asked. It is still the clamp rather than the limit — a
+  // vertical dive settles at 8.37 — but it sits the same 1.08x above the
+  // dive terminal that 4.5 sat above 4.08, so it goes on doing the job it
+  // was doing: catching the extreme, not defining the cruise.
+  MAX_SPEED: 9.0,
+  THRUST: 0.09,
   // Deceleration from holding the arrow AGAINST the direction of travel —
   // real thrust the other way, not a lever released. Matched to THRUST: the
-  // same engine, run backwards, decelerates a cruising aeroplane (2.69 px/f)
+  // same engine, run backwards, decelerates a cruising aeroplane (5.39 px/f)
   // to zero in about 60 ticks (~1s) — "for a while" to build speed up,
-  // roughly the same "for a while" to bring it back down.
-  BRAKE: 0.045,
-  DRAG: 0.006,
-  GRAVITY: 0.06,
+  // roughly the same "for a while" to bring it back down. Doubled with
+  // THRUST so that stays true at the new cruise.
+  BRAKE: 0.09,
+  DRAG: 0.003,
+  GRAVITY: 0.12,
   TURN_RATE: 0.06,
-  TURN_SPEED_REF: 1.6,
+  // A speed, so it doubles with the aeroplane: left at 1.6 it would have
+  // meant turn authority saturating at 29% of cruise instead of 59%, which
+  // is a different aeroplane, not a faster one.
+  TURN_SPEED_REF: 3.2,
+  // NOT doubled, and this is the one place the scaling deliberately breaks.
+  // STALL_SPEED is referenced to the LANDING envelope, not to cruise, and
+  // that envelope is absolute px/f in carrier.js (0.6 to 1.8) with no
+  // knowledge of anything here. Doubling this to 1.6 puts the stall speed
+  // INSIDE the legal landing window — every legal approach would be a
+  // stalling approach, with the nose dropping the moment you came off the
+  // brake. It stays at 0.8, below the window, where it has to be. The cost
+  // is that an accidental stall now needs 15% of cruise rather than 30%, so
+  // running out of airspeed by mistake is rarer than it was.
   STALL_SPEED: 0.8,
   STALL_PULL: 0.02,
   ROLL_THRUST: 0.03,
