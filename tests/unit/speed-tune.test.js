@@ -168,6 +168,24 @@ test('nothing at either bound is unflyable: it takes off, cruises and stays up',
   }
 });
 
+// § — the key that puts it back. Worth its own test because the default is the
+// one value stepping cannot reliably reach: the clamp at either bound silently
+// eats presses, so counting your way back from MAX does not work.
+test('reset returns the default from anywhere, including both bounds', () => {
+  for (const from of [SPEED_TUNE.MIN, SPEED_TUNE.MAX, 15.0, SPEED_TUNE.DEFAULT]) {
+    setMaxSpeed(from);
+    assert.equal(resetMaxSpeed(), SPEED_TUNE.DEFAULT, `did not come back from ${from}`);
+    assert.equal(getMaxSpeed(), SPEED_TUNE.DEFAULT);
+  }
+  // And it is a real reset, not merely the same number: a plane built after it
+  // is the standard aeroplane again, running the identical FLIGHT object the
+  // exact-tick-count tests elsewhere depend on.
+  setMaxSpeed(SPEED_TUNE.MAX);
+  resetMaxSpeed();
+  assert.equal(createPlane().maxSpeed, SPEED_TUNE.DEFAULT);
+  assert.equal(tunedFlight(createPlane()), FLIGHT);
+});
+
 test('the model stays a pure function of state and tick', () => {
   setMaxSpeed(15.0);
   const run = () => {

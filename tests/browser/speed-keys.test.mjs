@@ -92,6 +92,55 @@ test('the debug speed keys', async (t) => {
     assert.equal(out.bottom, 4.5);
   });
 
+  // § — back to the default in one press.
+  //
+  // BOTH CODES ARE ASSERTED because macOS swaps them relative to every other
+  // platform. On this machine (Swedish-Pro, an ISO layout)
+  // navigator.keyboard.getLayoutMap() reports IntlBackslash → "§" and
+  // Backquote → "<"; on Windows and Linux the same physical key left of `1`
+  // sends Backquote instead.
+  //
+  // Dispatched over CDP rather than through page.keyboard.press, which has no
+  // name for IntlBackslash at all — it maps friendly key NAMES, and this key
+  // does not have one. CDP takes the `code` directly, which is what the keymap
+  // binds, so these are real browser key events and not synthesised DOM ones.
+  const cdp = await page.context().newCDPSession(page);
+  const pressCode = async (code) => {
+    for (const type of ['keyDown', 'keyUp']) {
+      await cdp.send('Input.dispatchKeyEvent', { type, code, key: '§', windowsVirtualKeyCode: 0 });
+    }
+  };
+
+  await t.test('§ resets to the default, by either code the key can send', async () => {
+    for (const code of ['IntlBackslash', 'Backquote']) {
+      await page.evaluate(() => window.__WINGS.maxSpeed(21.0));
+      assert.equal(await maxSpeed(), 21.0);
+      await pressCode(code);
+      assert.equal(await maxSpeed(), 9.0, `${code} did not reset the aeroplane`);
+    }
+  });
+
+  await t.test('the reset is visible, and says which key did it', async () => {
+    const text = await badge();
+    assert.match(text, /MAX SPEED 9\.0/);
+    assert.match(text, /\(default\)/, 'a reset that does not say it landed on the default');
+    assert.match(text, /§ default/);
+  });
+
+  await t.test('the reset reaches the aeroplane already in the air, not just the setting', async () => {
+    const after = await page.evaluate(() => {
+      const W = window.__WINGS;
+      W.reset();
+      W.maxSpeed(27.0);
+      W.takeoff();
+      const before = W.sim.plane.maxSpeed;
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'IntlBackslash' }));
+      return { before, after: W.sim.plane.maxSpeed };
+    });
+    assert.equal(after.before, 27.0);
+    assert.equal(after.after, 9.0, 'the plane in the air kept the old maximum');
+  });
+
   // The rule added when Cmd-Shift-R stopped reloading the page: a keystroke
   // carrying a system modifier belongs to the browser, and binding the digits
   // must not have taken Cmd-1 (switch to tab 1) away from it.

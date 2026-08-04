@@ -2,9 +2,11 @@ import { bakeAll } from '../core/gfx.js';
 import { GameLoop } from '../core/loop.js';
 import { PilotRenderer } from './pilot-renderer.js';
 import { Scene } from './scene.js';
-import { WingsSim } from './sim.js';
+import { WingsSim, SQUADRON } from './sim.js';
+import { ARCHIPELAGO } from './archipelago.js';
+import { Sail } from './sail.js';
 import { takeoff, flyTo, bombTile, autoLand } from './bot.js';
-import { SPEED_TUNE, getMaxSpeed, setMaxSpeed } from './flight.js';
+import { SPEED_TUNE, getMaxSpeed, setMaxSpeed, resetMaxSpeed } from './flight.js';
 
 const HEADLESS = new URLSearchParams(location.search).has('headless');
 if (HEADLESS) document.body.classList.add('headless');
@@ -40,6 +42,30 @@ const KEYMAP = {
   // Cmd-1 (tab switching) straight back to Chrome untouched.
   Digit1: 'speedDown',
   Digit2: 'speedUp',
+  // …and § puts it back to the default, which is the one value you cannot
+  // reliably reach by tapping 1 and 2 (you have to count, and the clamp at
+  // either bound silently eats presses so counting does not even work).
+  //
+  // TWO CODES, ON PURPOSE. `event.code` is meant to be layout-independent and
+  // for this key it is not: macOS SWAPS the two ISO codes relative to every
+  // other platform. Checked on this machine, whose layout is Swedish-Pro:
+  // `navigator.keyboard.getLayoutMap()` reports IntlBackslash → "§" and
+  // Backquote → "<". On Windows and Linux the same physical key — the one
+  // immediately left of `1` — reports Backquote instead.
+  //
+  // So IntlBackslash is what the user's own § actually sends, and Backquote is
+  // there so the key in that same position works on an ANSI keyboard (where it
+  // is the backtick, and where § does not exist at all) and on a PC ISO one.
+  // The cost on a Mac ISO keyboard is that `<`, left of Z, resets the speed
+  // too. It was unbound before this, there is no text field anywhere on the
+  // pilot's page for it to be typed into, and this is a debug control — so a
+  // spare key doing the same debug thing is the cheaper half of the trade.
+  //
+  // Binding `event.key` instead would be worse, not better: it is the CHARACTER
+  // produced, so it changes with the layout and with shift, and "§" would stop
+  // matching the moment anyone played on a US keyboard.
+  IntlBackslash: 'speedReset',
+  Backquote: 'speedReset',
 };
 
 const keys = Object.create(null);
@@ -88,6 +114,16 @@ const pending = { drop: false, fire: false };
 // airframe rotation and is deliberately untouched by it.
 let mirrored = false;
 let wasTurning = false;
+
+// Hands off. What the simulation is fed for every tick of a sail — see
+// Pilot#update. `gear` is READ rather than asserted: the crossing begins with
+// the aeroplane wherever it was, and forcing the gear down at 400 feet in the
+// first half-second of the fade would be a manoeuvre nobody asked for.
+function neutral(sim) {
+  return {
+    pitch: 0, thrust: 0, drop: false, fire: false, gear: sim.plane.gear,
+  };
+}
 
 function readKeys() {
   if (scripted) return scripted;
@@ -146,7 +182,7 @@ function showSpeedBadge(value) {
   const at = value === SPEED_TUNE.DEFAULT ? '  (default)'
     : value === SPEED_TUNE.MIN ? '  (min)'
       : value === SPEED_TUNE.MAX ? '  (max)' : '';
-  speedBadge.textContent = `DEBUG  MAX SPEED ${value.toFixed(1)}${at}\n1 slower   2 faster`;
+  speedBadge.textContent = `DEBUG  MAX SPEED ${value.toFixed(1)}${at}\n1 slower   2 faster   § default`;
 }
 
 // Moves the setting AND the aeroplane currently in the air. The setting is
@@ -155,6 +191,17 @@ function showSpeedBadge(value) {
 // the change immediately rather than after a crash.
 function speedTune(sim, delta) {
   const v = setMaxSpeed(getMaxSpeed() + delta * SPEED_TUNE.STEP);
+  if (sim && sim.plane) sim.plane.maxSpeed = v;
+  showSpeedBadge(v);
+  return v;
+}
+
+// § — back to the aeroplane as shipped, in one press. Reaches the setting and
+// the aeroplane in the air by exactly the same two steps as speedTune, so a
+// reset lands as immediately as a tune does; and it shows the badge, because a
+// reset you cannot see is indistinguishable from a key that did nothing.
+function speedReset(sim) {
+  const v = resetMaxSpeed();
   if (sim && sim.plane) sim.plane.maxSpeed = v;
   showSpeedBadge(v);
   return v;
@@ -171,6 +218,14 @@ class Pilot {
     // (src/net/pilot-side.js). Null when playing offline, which is what the
     // capture tool and every pre-network test run as.
     this.onTick = null;
+    // THE CROSSING between archipelagos (src/wings/sail.js). Started by
+    // sailTo() when Mario's client says he has cleared a world, stepped on the
+    // SIMULATION clock below, and the owner of the one tick on which the ocean
+    // is replaced.
+    this.crossing = new Sail();
+    // Fired on the one tick the ocean is replaced, so the network layer can
+    // drop everything it was holding about the old one (src/net/pilot-side.js).
+    this.onSailSwap = null;
   }
 
   async boot() {
@@ -200,6 +255,7 @@ class Pilot {
   reset(opts = {}) {
     this.sim = new WingsSim({ squadron: opts.squadron, seed: opts.seed, world: opts.world });
     this.scene = new Scene();
+    this.crossing.cancel();
     gear = true;
     scripted = null;
     pending.drop = false;
@@ -243,6 +299,7 @@ class Pilot {
       if (name === 'fire') pending.fire = true;
       if (name === 'speedDown') speedTune(this.sim, -1);
       if (name === 'speedUp') speedTune(this.sim, +1);
+      if (name === 'speedReset') speedReset(this.sim);
       if (name === 'respawn' && this.sim.plane.mode === 'down') {
         this.sim.respawn();
       }
@@ -253,13 +310,24 @@ class Pilot {
   update() {
     if (this.fatal) return;
     try {
-      this.sim.step(readKeys());
+      // THE CROSSING TAKES THE CONTROLS. Once the carrier group is under way
+      // whatever the pilot was doing is over — he may be mid-sortie, in a
+      // stall turn, half way through a landing — so the stick goes neutral for
+      // the whole scene and the latched bomb and gun presses below are eaten
+      // as usual. The simulation is still STEPPED, which matters: the network
+      // pump is paced by sim.tick, and freezing it would stall the reliable
+      // channel's acks for four seconds under the black.
+      this.sim.step(this.crossing.active ? neutral(this.sim) : readKeys());
       // The tick has seen the latch; a second tick must not re-fire the same
       // press. What keeps the gun going after this is the held key itself,
       // not the latch.
       pending.drop = false;
       pending.fire = false;
       this.trackAttitude();
+      // Before the network pump, so the snapshot this tick puts on the wire is
+      // of the aeroplane on the NEW deck rather than the last position it held
+      // over the old ocean.
+      this.stepCrossing();
       // The network layer, if one attached itself (src/net/pilot-side.js).
       // Called from update() rather than from a timer so it advances at the
       // simulation's rate and is driven correctly by __WINGS.tick(n) in tests.
@@ -282,6 +350,54 @@ class Pilot {
     } catch (e) {
       this.crash(e);
     }
+  }
+
+  // MARIO CLEARED A WORLD. His client owns Mario, so his client says so and
+  // this side obeys (src/net/pilot-side.js hears the reliable `worldCleared`
+  // and calls this); the pilot never infers it from anything he can see.
+  //
+  // Refused when a crossing is already running or when `toWorld` is not ahead
+  // of where the group already is, which is what makes a resent event a no-op
+  // rather than a second sail.
+  sailTo(toWorld) {
+    const from = this.sim.archipelago.world;
+    return this.crossing.begin({
+      from,
+      to: toWorld,
+      note: `SQUADRON REPLENISHED — ${SQUADRON} AIRCRAFT ON DECK`,
+    });
+  }
+
+  // One tick of the crossing, on the simulation's clock. The swap is an EDGE
+  // reported by Sail#step and happens exactly once, under a fully opaque veil.
+  stepCrossing() {
+    if (!this.crossing.active) {
+      this.scene.sailView = null;
+      return null;
+    }
+    const f = this.crossing.step();
+    if (f.swap) {
+      // The whole of the changeover: a new ocean from the seed, a full
+      // squadron, the aeroplane respotted, and nothing left in the air.
+      this.sim.sail(this.crossing.to);
+      // Explosions and splashes from the last world would otherwise finish
+      // burning at world pixels that are now somewhere else entirely.
+      this.scene.clearFx(this.sim);
+      mirrored = false;
+      wasTurning = false;
+      gear = this.sim.plane.gear;
+      if (this.onSailSwap) {
+        try {
+          this.onSailSwap(this.crossing.to);
+        } catch (e) {
+          console.error('[pilot net]', e);
+        }
+      }
+    }
+    // Null the moment the scene ends, so a finished crossing costs the
+    // renderer nothing at all.
+    this.scene.sailView = f.done ? null : { ...f, ...this.crossing.text() };
+    return f;
   }
 
   // One completed stall turn leaves the aeroplane mirrored; two put it back.
@@ -439,6 +555,29 @@ window.__WINGS = {
     const ok = pilot.sim.respawn();
     pilot.render();
     return ok;
+  },
+
+  // THE SAIL, driven by hand. In a match this is started by Mario's client
+  // clearing a world and never by anything on this page; the scripted entry
+  // point exists so a test — and a solo player, who has no Mario to clear one
+  // — can put the group under way. `sail()` with no argument goes to the next
+  // world along.
+  sail(toWorld) {
+    const ok = pilot.sailTo(toWorld == null ? pilot.sim.archipelago.world + 1 : toWorld);
+    pilot.render();
+    return ok;
+  },
+
+  // The crossing as it stands: null when there is none. `world` is where the
+  // group is now, which after the swap is the destination.
+  crossing() {
+    const c = pilot.crossing;
+    if (!c.active) return null;
+    const f = c.frame();
+    return {
+      from: c.from, to: c.to, world: pilot.sim.archipelago.world,
+      phase: f.phase, veil: f.veil, text: f.text, elapsed: f.elapsed,
+    };
   },
 
   reset(opts) {
