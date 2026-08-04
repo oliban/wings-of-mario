@@ -55,6 +55,36 @@ test('sessions over a real socket', { timeout: 60000 }, async (t) => {
     b.session.close();
   });
 
+  await t.test("the server relays a peer's ack VERBATIM, tag and all", async () => {
+    // The end-to-end ack rests entirely on this. `server/index.js` forwards the
+    // decoded ACK object itself (`relay(msg)`) rather than rebuilding it the way
+    // it rebuilds a SNAP (`relay({ ...msg, side })`), so the `peer: true` tag
+    // survives the round trip. If anyone ever changes that relay to construct a
+    // fresh `{t, seq}`, the tag vanishes, every ack looks like a server ack and
+    // the outbox resends forever. This test is what fails first if that happens.
+    const a = makeSession(port, 'GHJK', 'mario');
+    const b = makeSession(port, 'GHJK', 'pilot');
+    await a.session.connect();
+    await b.session.connect();
+
+    const acks = [];
+    const seenRaw = b.transport._msg;
+    b.transport.onMessage((text) => {
+      const m = JSON.parse(text);
+      if (m.t === 'ack') acks.push(m);
+      seenRaw(text);
+    });
+
+    b.session.sendEvent('landed', {});
+    await spin([a.session, b.session], () => acks.some((m) => m.peer === true));
+    // Both kinds arrive on the same socket, and they must be distinguishable.
+    assert.ok(acks.some((m) => m.peer === true), 'the peer tag did not survive the relay');
+    assert.ok(acks.some((m) => m.peer === undefined), "the server's own hop ack should also be here");
+    assert.equal(b.session.pending(), 0);
+    a.session.close();
+    b.session.close();
+  });
+
   await t.test('a reliable event survives 50% packet loss', async () => {
     // Half of everything, in both directions, on both sockets. If the resend
     // logic is wrong this hangs; if it is right this costs a few resends.
@@ -109,7 +139,41 @@ test('sessions over a real socket', { timeout: 60000 }, async (t) => {
     b.session.close();
   });
 
+  await t.test('an event sent to an empty seat waits, without spinning, until someone takes it', async () => {
+    // The first player is always alone for a while. An event sent in that
+    // window must not be lost, and must not busy-loop against nobody either:
+    // the server acks it, so `reachedServer` suppresses the resend until a
+    // PEER arrives, and then it goes out at once.
+    const a = makeSession(port, 'TUVW', 'pilot');
+    await a.session.connect();
+    assert.equal(a.session.peerPresent, false, 'nobody in the other seat yet');
+
+    a.session.sendEvent('sortieStart', {});
+    await spin([a.session], () => false, 60);
+    const quiet = a.transport.stats().sent;
+    assert.equal(a.session.pending(), 1, 'still owed to whoever takes that seat');
+    await spin([a.session], () => false, 60);
+    assert.equal(a.transport.stats().sent, quiet, 'and not resent once in the meantime');
+
+    // The second player arrives.
+    const b = makeSession(port, 'TUVW', 'mario');
+    await b.session.connect();
+    const seen = [];
+    b.session.on('event', (e) => seen.push(e.type));
+    const at = await spin([a.session, b.session], () => seen.length > 0);
+    assert.ok(at > 0, 'the held event never reached the arriving player');
+    assert.deepEqual(seen, ['sortieStart']);
+    assert.equal(a.session.pending(), 0);
+    a.session.close();
+    b.session.close();
+  });
+
   await t.test('a severed wire delivers nothing, and healing it delivers the resend', async () => {
+    // THE test for end-to-end acking, and the one whose absence let the
+    // ambiguity stand. Under hop-by-hop acking this fails: the server acks
+    // `landed` the instant it relays it, b's outbox empties, and a — whose wire
+    // is severed at that moment — never sees the event at all, ever. Anyone
+    // "simplifying" the ack handling back to a single kind breaks this line.
     const a = makeSession(port, 'VWXY', 'mario');
     const b = makeSession(port, 'VWXY', 'pilot');
     const welcome = await a.session.connect();

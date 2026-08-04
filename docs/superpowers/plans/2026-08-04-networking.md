@@ -75,7 +75,7 @@ Task 6's drain loop is the single translation point between them, and it is a re
 
 ## Recorded decisions
 
-Three open questions were left to this plan by `MODS.md`. All three are settled here, and the settlements are load-bearing for Tasks 6 and 8.
+Three open questions were left to this plan by `MODS.md`. All three are settled here, and the settlements are load-bearing for Tasks 6 and 8. A fourth (D4) surfaced during Task 4 and is settled alongside them.
 
 ### D1. `applyDamage` records out-of-bounds keys; it just does not draw them
 
@@ -109,6 +109,18 @@ This kills the whole class of bug where two clients disagree about what "already
 - take a `DamageMap`'s island keys and push them into a `World` (via `applyDamage`/`replayBlast`) or an `Island` (via `applyDamage`).
 
 Neither the engine nor `src/wings/` learns about `DamageMap`; `damage-sync.js` learns about all three.
+
+### D4. A reliable event is acked end to end by the peer, not hop by hop by the server
+
+A fourth question surfaced in Task 4 and is settled here. Two different acks travel the same socket and they mean different things. The server sends `{t:'ack', seq}` the moment it *relays* an EV (`server/index.js`), which says only that the message reached the server. The peer's own ack, relayed back, says the event reached the player it was aimed at.
+
+**Decision: only the peer's ack clears the outbox.** The point of the reliable channel is that match-shaping events cannot be lost — `marioDeath`, `islandCleared`, `planeLost` and `worldCleared` each move state both players must agree on — and an ack of "the server has it" is an ack of the wrong thing. Clearing on the hop ack loses the event outright whenever the peer happens to be disconnected at that instant, which is precisely the case spec 7.4 exists for.
+
+**The mechanism is a `peer: true` tag**, added by `Session` to every ack it sends. `validate()` checks only `seq` on an ACK, so the flag rides through the decoder untouched, and `server/index.js` relays the decoded ACK object *verbatim* — unlike a SNAP, which it rebuilds as `{ ...msg, side }`. So this needs no change to `protocol.js` and none to the server. **That verbatim relay is load-bearing:** rebuilding the ACK as a fresh `{t, seq}` would drop the tag, every ack would read as a server ack, and the outbox would resend forever. `tests/net/session.test.mjs` pins it directly.
+
+**`detonate` is the one exemption, and needs no peer ack at all.** The server *consumes* a detonate rather than relaying it, so the peer never sees an EV to acknowledge; the authoritative `damage` broadcast carrying the proposal's `seq` is the end-to-end confirmation, and is what settles it. That falls straight out of D2: the broadcast is the fact, so the arrival of the fact is the receipt.
+
+Two corollaries, both tested: an event sent while the other seat is empty is **held, not resent** — once the server has acknowledged it there is nobody to relay it to, so resending is a busy loop against nobody — and it is flushed the instant a `peer{present:true}` arrives. And a session must be **reused across a reconnect** rather than reconstructed, so that its `seq` counter and its seen-set survive; a fresh session restarting at `seq` 1 would have its first events silently deduped by a peer that remembers those numbers.
 
 ---
 
