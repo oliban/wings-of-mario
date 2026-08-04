@@ -2,7 +2,9 @@ import { Transport } from './transport.js';
 import { Session } from './session.js';
 import { Interp } from './interp.js';
 import { NetOverlay } from './mario-overlay.js';
-import { roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure } from './lobby.js';
+import {
+  roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure, lobbyHeader,
+} from './lobby.js';
 import { ISLAND_TOP_Y } from '../wings/geo.js';
 import { layoutArchipelago } from '../wings/archipelago.js';
 import { DamageSync, applyToWorld } from './damage-sync.js';
@@ -429,6 +431,10 @@ async function boot() {
     banner(document, 'SOLO');
     return null;
   }
+  // Started here, before the room is minted, and told to read `joining` each
+  // time so our own room drops out of the list the moment we have one. It
+  // never throws and is never awaited: the match must not wait on the lobby.
+  lobbyHeader({ doc: document, win: window, here: () => joining });
   const code = room || (await mintRoom(location.origin));
   joining = code;
   showRoom(window, code, 'mario');

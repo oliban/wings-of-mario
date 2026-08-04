@@ -60,6 +60,10 @@ export class Room {
     this.hashHistory = new Map();
     this.sides = new Map(); // side -> { side, token, present }
     this.lastActivity = opts.now != null ? opts.now : 0;
+    // When this room came into being, kept only so a lobby list can put the
+    // newest room first — the one a player who just heard "I started a room"
+    // is looking for. Nothing in the match reads it.
+    this.createdAt = opts.now != null ? opts.now : 0;
     this.seatsMinted = 0;
   }
 
@@ -245,6 +249,31 @@ export class Room {
       sides: SIDES.filter((s) => this.sides.has(s)),
     };
   }
+
+  // What a stranger is allowed to know about this room: its code, how old it
+  // is, and which seats they could actually sit in. No seed, no tokens, no
+  // damage — a lobby listing is an invitation, not match state.
+  //
+  // The three seat states are the three answers join() will give, and they are
+  // deliberately not "present"/"absent". A seat whose player closed the tab is
+  // 'away', NOT free: leave() keeps the seat so the player can reconnect into
+  // the match they left (spec 7.4), so join() would refuse it with 'side
+  // taken'. Reporting it as open would send a clicker straight into the
+  // SEAT TAKEN banner, which is the one outcome this listing exists to avoid.
+  summary(now) {
+    const seats = {};
+    for (const side of SIDES) {
+      const seat = this.sides.get(side);
+      seats[side] = !seat ? 'open' : seat.present ? 'here' : 'away';
+    }
+    return {
+      code: this.code,
+      seats,
+      ageMs: typeof now === 'number' && Number.isFinite(now)
+        ? Math.max(0, now - this.createdAt)
+        : null,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +330,20 @@ export class Rooms {
       this.rooms.set(norm, room);
     }
     return room;
+  }
+
+  // Every live room, newest first, as summaries. Newest first because the
+  // question a player is actually asking is "which one did they just start" —
+  // and capped, because a header with thirty codes in it answers nobody.
+  //
+  // Rooms this list may show are rooms that still exist: reap() has already
+  // thrown away anything idle past ROOM_IDLE_MS, so a code here is one a
+  // client can still join into a live match rather than silently re-create.
+  list(now, { limit = 8 } = {}) {
+    const out = [];
+    for (const room of this.rooms.values()) out.push(room);
+    out.sort((a, b) => b.createdAt - a.createdAt || (a.code < b.code ? -1 : 1));
+    return out.slice(0, Math.max(0, limit)).map((r) => r.summary(now));
   }
 
   drop(code) {

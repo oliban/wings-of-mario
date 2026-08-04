@@ -1,7 +1,9 @@
 import { Transport } from './transport.js';
 import { Session } from './session.js';
 import { Interp } from './interp.js';
-import { roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure } from './lobby.js';
+import {
+  roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure, lobbyHeader,
+} from './lobby.js';
 import pilot from '../wings/pilot-main.js';
 import { DamageSync, applyToIsland } from './damage-sync.js';
 import { noteDesync } from './desync.js';
@@ -310,6 +312,10 @@ async function boot() {
     banner(document, 'SOLO');
     return null;
   }
+  // Started here, before the room is minted, and told to read `joining` each
+  // time so our own room drops out of the list the moment we have one. It
+  // never throws and is never awaited: the match must not wait on the lobby.
+  lobbyHeader({ doc: document, win: window, here: () => joining });
   const code = room || (await mintRoom(location.origin));
   joining = code;
   showRoom(window, code, 'pilot');

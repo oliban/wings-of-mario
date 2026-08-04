@@ -23,6 +23,9 @@ export async function startTestServer(opts = {}) {
     port: 0,
     rooms: new Rooms(opts.codeGen ? { codeGen: opts.codeGen } : {}),
     log,
+    // Only passed when a test says so, so every other test exercises the
+    // default the real server runs with.
+    ...(opts.lobby === undefined ? {} : { lobby: opts.lobby }),
   });
   server.logs = logs;
   return server;

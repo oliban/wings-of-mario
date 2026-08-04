@@ -40,6 +40,9 @@ export async function startServer(opts = {}) {
   const root = resolve(opts.root || REPO_ROOT);
   const rooms = opts.rooms || new Rooms();
   const log = opts.log || console;
+  // On by default: this exists so a LAN player can see the room the other one
+  // just made. `{ lobby: false }` is the whole of the off switch.
+  const lobbyEnabled = opts.lobby !== false;
 
   const http = createServer(async (req, res) => {
     if (req.url === '/healthz') {
@@ -53,6 +56,31 @@ export async function startServer(opts = {}) {
       res.writeHead(200, { 'Content-Type': 'application/json' }).end(
         JSON.stringify({ room: room.code })
       );
+      return;
+    }
+    // GET /rooms lists what is joinable right now. A GET, unlike the mint
+    // above: this one creates nothing, so a prefetch of it costs a JSON blob
+    // and nothing else.
+    //
+    // Deliberately cheap and deliberately uncached: rooms appear and fill on
+    // the timescale of someone walking to another laptop, and a cached lobby
+    // is a lobby that lies. Everything it can say about a room is in
+    // Room.summary — no seed, no tokens, no damage.
+    if (req.method === 'GET' && (req.url === '/rooms' || req.url.startsWith('/rooms?'))) {
+      if (!lobbyEnabled) {
+        // The single choke point for "should this deployment show its rooms
+        // to anyone who asks". See the exposure note in the report: on a LAN
+        // the whole point is that they are visible; on a public host this is
+        // where a gate would go, and until one exists a deployment can simply
+        // start the server with { lobby: false } and the header quietly falls
+        // back to listing nothing.
+        res.writeHead(404, { 'Content-Type': 'text/plain' }).end('not found');
+        return;
+      }
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Cache-Control': 'no-store',
+      }).end(JSON.stringify({ rooms: rooms.list(Date.now()) }));
       return;
     }
     try {
