@@ -180,21 +180,35 @@ test('the debug world jump', async (t) => {
     assert.deepEqual(await jumpedTo(4), four, 'jumping back to world 4 built a different ocean');
   });
 
-  await t.test('the speed keys still belong to the speed keys', async () => {
+  // The digits and the speed tuning shared a keyboard for about an hour, told
+  // apart by shift. They do not any more: the tuning moved to Q/W/E so a plain
+  // digit could be the obvious thing — 1 through 8 for the eight worlds. This
+  // proves the two controls stay out of each other's way, in both directions.
+  await t.test('Q, W and E tune the speed and never touch the world', async () => {
     await page.evaluate(() => {
       window.__WINGS.reset();
       window.__WINGS.maxSpeed(9.0);
     });
-    await page.keyboard.press('Digit1');
-    assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 7.5);
-    assert.equal(await worldOf(page), 1, 'plain 1 moved the archipelago');
-    // …and the shifted digit is the jump and ONLY the jump.
-    await page.keyboard.down('Shift');
+    const world = await worldOf(page);
+    await page.keyboard.press('KeyQ');
+    assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 7.5, 'Q did not slow it');
+    await page.keyboard.press('KeyW');
+    await page.keyboard.press('KeyW');
+    assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 10.5, 'W did not speed it up');
+    await page.keyboard.press('KeyE');
+    assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 9.0, 'E did not reset it');
+    assert.equal(await worldOf(page), world, 'a speed key moved the archipelago');
+  });
+
+  // Runs after the Q/W/E case on purpose: it leaves the archipelago on world 2,
+  // which is where the Cmd-shift-3 test below expects to find it.
+  await t.test('a digit jumps worlds and never touches the speed', async () => {
+    await page.evaluate(() => window.__WINGS.maxSpeed(9.0));
     await page.keyboard.press('Digit2');
-    await page.keyboard.up('Shift');
-    assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 7.5, 'shift+2 tuned the speed');
+    assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 9.0,
+      'a digit tuned the speed');
     await finishCrossing();
-    assert.equal(await worldOf(page), 2);
+    assert.equal(await worldOf(page), 2, 'a plain digit did not jump the archipelago');
   });
 
   // The rule that was added when Cmd-Shift-R stopped reloading the page. Shift

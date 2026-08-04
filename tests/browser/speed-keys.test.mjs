@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { boot, shutdown } from './helpers.mjs';
 
-// The DEBUG speed knob, keys 1 and 2 on the pilot page. The unit tests cover
+// The DEBUG speed knob, Q/W/E on the pilot page. The unit tests cover
 // what the numbers do to the aeroplane; this covers the only things they
 // cannot — that the real keyboard is wired to it, that the readout appears,
-// and that binding the digits did not steal Cmd-1 from the browser.
+// and that binding them did not steal a browser shortcut.
 test('the debug speed keys', async (t) => {
   const ctx = await boot({ path: '/pilot.html?headless', global: '__WINGS' });
   t.after(() => shutdown(ctx));
@@ -22,14 +22,14 @@ test('the debug speed keys', async (t) => {
     assert.equal(await badge(), null, 'the debug badge exists before anyone asks for it');
   });
 
-  await t.test('2 speeds the aeroplane up, 1 slows it down', async () => {
-    await page.keyboard.press('Digit2');
+  await t.test('W speeds the aeroplane up, Q slows it down', async () => {
+    await page.keyboard.press('KeyW');
     assert.equal(await maxSpeed(), 10.5);
-    await page.keyboard.press('Digit2');
+    await page.keyboard.press('KeyW');
     assert.equal(await maxSpeed(), 12.0);
-    await page.keyboard.press('Digit1');
-    await page.keyboard.press('Digit1');
-    await page.keyboard.press('Digit1');
+    await page.keyboard.press('KeyQ');
+    await page.keyboard.press('KeyQ');
+    await page.keyboard.press('KeyQ');
     assert.equal(await maxSpeed(), 7.5);
   });
 
@@ -37,8 +37,10 @@ test('the debug speed keys', async (t) => {
     const text = await badge();
     assert.match(text, /DEBUG/);
     assert.match(text, /MAX SPEED 7\.5/);
-    assert.match(text, /1 slower/);
-    assert.match(text, /2 faster/);
+    assert.match(text, /Q slower/);
+    assert.match(text, /W faster/);
+    assert.match(text, /E default/);
+    assert.match(text, /1-8 world/);
   });
 
   // Ninety ticks of level acceleration off the deck, which is far enough to
@@ -92,39 +94,26 @@ test('the debug speed keys', async (t) => {
     assert.equal(out.bottom, 4.5);
   });
 
-  // § — back to the default in one press.
+  // E — back to the default in one press.
   //
-  // BOTH CODES ARE ASSERTED because macOS swaps them relative to every other
-  // platform. On this machine (Swedish-Pro, an ISO layout)
-  // navigator.keyboard.getLayoutMap() reports IntlBackslash → "§" and
-  // Backquote → "<"; on Windows and Linux the same physical key left of `1`
-  // sends Backquote instead.
-  //
-  // Dispatched over CDP rather than through page.keyboard.press, which has no
-  // name for IntlBackslash at all — it maps friendly key NAMES, and this key
-  // does not have one. CDP takes the `code` directly, which is what the keymap
-  // binds, so these are real browser key events and not synthesised DOM ones.
-  const cdp = await page.context().newCDPSession(page);
-  const pressCode = async (code) => {
-    for (const type of ['keyDown', 'keyUp']) {
-      await cdp.send('Input.dispatchKeyEvent', { type, code, key: '§', windowsVirtualKeyCode: 0 });
-    }
-  };
-
-  await t.test('§ resets to the default, by either code the key can send', async () => {
-    for (const code of ['IntlBackslash', 'Backquote']) {
-      await page.evaluate(() => window.__WINGS.maxSpeed(21.0));
-      assert.equal(await maxSpeed(), 21.0);
-      await pressCode(code);
-      assert.equal(await maxSpeed(), 9.0, `${code} did not reset the aeroplane`);
-    }
+  // This was § until the user reported it simply did not fire for them. That
+  // key is a genuine trap: `event.code` is supposed to be layout-independent
+  // and for this one it is not, so it had to be bound as BOTH IntlBackslash
+  // and Backquote (macOS swaps them relative to every other platform), it has
+  // no Playwright key name so it needed raw CDP to test at all, and it does
+  // not exist on an ANSI keyboard. E is one key, on every keyboard, next to
+  // the Q and W that tune the speed.
+  await t.test('E resets to the default', async () => {
+    await page.evaluate(() => window.__WINGS.maxSpeed(21.0));
+    assert.equal(await maxSpeed(), 21.0);
+    await page.keyboard.press('KeyE');
+    assert.equal(await maxSpeed(), 9.0, 'E did not reset the aeroplane');
   });
 
   await t.test('the reset is visible, and says which key did it', async () => {
     const text = await badge();
     assert.match(text, /MAX SPEED 9\.0/);
     assert.match(text, /\(default\)/, 'a reset that does not say it landed on the default');
-    assert.match(text, /§ default/);
   });
 
   await t.test('the reset reaches the aeroplane already in the air, not just the setting', async () => {
@@ -134,7 +123,7 @@ test('the debug speed keys', async (t) => {
       W.maxSpeed(27.0);
       W.takeoff();
       const before = W.sim.plane.maxSpeed;
-      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'IntlBackslash' }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyE' }));
       return { before, after: W.sim.plane.maxSpeed };
     });
     assert.equal(after.before, 27.0);
@@ -143,23 +132,26 @@ test('the debug speed keys', async (t) => {
 
   // The rule added when Cmd-Shift-R stopped reloading the page: a keystroke
   // carrying a system modifier belongs to the browser, and binding the digits
-  // must not have taken Cmd-1 (switch to tab 1) away from it.
-  await t.test('Cmd-1 is left entirely to the browser', async () => {
+  // must not have taken it away from the browser.
+  // Cmd-E rather than Cmd-Q or Cmd-W: those two are now speed keys, and under
+  // Meta they are "quit the browser" and "close the tab". A test that fires
+  // them is a test that ends the run.
+  await t.test('Cmd-E is left entirely to the browser', async () => {
     await page.evaluate(() => {
-      window.__WINGS.maxSpeed(9.0);
-      window.__cmdDigitDefaultPrevented = null;
+      window.__WINGS.maxSpeed(21.0);
+      window.__cmdDefaultPrevented = null;
       window.addEventListener('keydown', (e) => {
-        if (e.code === 'Digit1') window.__cmdDigitDefaultPrevented = e.defaultPrevented;
+        if (e.code === 'KeyE') window.__cmdDefaultPrevented = e.defaultPrevented;
       });
     });
     await page.keyboard.down('Meta');
-    await page.keyboard.press('Digit1');
+    await page.keyboard.press('KeyE');
     await page.keyboard.up('Meta');
-    assert.equal(await maxSpeed(), 9.0, 'Cmd-1 moved the aeroplane');
+    assert.equal(await maxSpeed(), 21.0, 'Cmd-E reset the aeroplane');
     assert.equal(
-      await page.evaluate(() => window.__cmdDigitDefaultPrevented),
+      await page.evaluate(() => window.__cmdDefaultPrevented),
       false,
-      'Cmd-1 was swallowed instead of being handed to the browser',
+      'Cmd-E was swallowed instead of being handed to the browser',
     );
   });
 

@@ -37,35 +37,21 @@ const KEYMAP = {
   KeyJ: 'fire',
   // DEBUG, not a game control — live top-speed tuning for playtesting the
   // flight feel without a code change and a reload. See speedTune() and
-  // SPEED_TUNE in flight.js. Digits were unbound before this, and they stay
-  // out of the browser's way because the modifier guard in key() hands
-  // Cmd-1 (tab switching) straight back to Chrome untouched.
-  Digit1: 'speedDown',
-  Digit2: 'speedUp',
-  // …and § puts it back to the default, which is the one value you cannot
-  // reliably reach by tapping 1 and 2 (you have to count, and the clamp at
-  // either bound silently eats presses so counting does not even work).
+  // SPEED_TUNE in flight.js.
   //
-  // TWO CODES, ON PURPOSE. `event.code` is meant to be layout-independent and
-  // for this key it is not: macOS SWAPS the two ISO codes relative to every
-  // other platform. Checked on this machine, whose layout is Swedish-Pro:
-  // `navigator.keyboard.getLayoutMap()` reports IntlBackslash → "§" and
-  // Backquote → "<". On Windows and Linux the same physical key — the one
-  // immediately left of `1` — reports Backquote instead.
+  // Q/W/E rather than the digits, because the digits now jump worlds on their
+  // own (no shift). Three keys together under the left hand, none of them a
+  // browser shortcut, and none of them a pilot control — the aeroplane flies
+  // on the arrows, Space, X, G and R.
+  KeyQ: 'speedDown',
+  KeyW: 'speedUp',
+  KeyE: 'speedReset',
+  // § used to be the reset. It is gone: `event.code` is not layout-independent
+  // for that key — macOS swaps the two ISO codes relative to every other
+  // platform, so it had to be bound as both IntlBackslash and Backquote, and it
+  // still did not fire for the user. E is one key, on every keyboard, and it
+  // works.
   //
-  // So IntlBackslash is what the user's own § actually sends, and Backquote is
-  // there so the key in that same position works on an ANSI keyboard (where it
-  // is the backtick, and where § does not exist at all) and on a PC ISO one.
-  // The cost on a Mac ISO keyboard is that `<`, left of Z, resets the speed
-  // too. It was unbound before this, there is no text field anywhere on the
-  // pilot's page for it to be typed into, and this is a debug control — so a
-  // spare key doing the same debug thing is the cheaper half of the trade.
-  //
-  // Binding `event.key` instead would be worse, not better: it is the CHARACTER
-  // produced, so it changes with the layout and with shift, and "§" would stop
-  // matching the moment anyone played on a US keyboard.
-  IntlBackslash: 'speedReset',
-  Backquote: 'speedReset',
   // DEBUG, not a game control — step the archipelago one world back or one
   // world on. See jumpTo(). The brackets were unbound, they sit together under
   // the right hand next to the arrows, and they are not a browser shortcut on
@@ -74,15 +60,18 @@ const KEYMAP = {
   BracketRight: 'worldNext',
 };
 
-// DEBUG, not a game control — SHIFT plus a digit jumps the archipelago straight
-// to that world. This deliberately does NOT go in KEYMAP: 1 and 2 are already
-// the speed tuning, and the two controls are told apart by the shift key alone
-// (see key(), which checks this table before the KEYMAP lookup so a shifted
-// digit never reaches speedTune). Digits 3-9 were unbound entirely.
+// DEBUG, not a game control — a digit jumps the archipelago straight to that
+// world, which is the only practical way to see worlds 2-8 without playing
+// through them.
 //
-// Shift is safe to overload where Cmd/Ctrl/Alt are not — shift-plus-a-digit is
-// nobody's browser shortcut — and the modifier guard in key() still hands
-// Cmd-1 back to Chrome untouched, shift or no shift.
+// It briefly needed SHIFT, because 1 and 2 were the speed tuning at the time.
+// The tuning moved to Q/W/E precisely so the digits could be the obvious thing.
+// Shift still reaches here — a habit formed in the last hour keeps working —
+// and the modifier guard in key() runs first regardless, so Cmd-1 goes to the
+// browser untouched, shift or no shift.
+//
+// It stays out of KEYMAP because that table maps a code to a HELD action and
+// this is an edge-triggered one-shot; key() checks it before the KEYMAP lookup.
 //
 // Nine entries rather than eight: ARCHIPELAGO.WORLDS is read from the level
 // registry, so a ninth world arriving upstream should be reachable without
@@ -207,7 +196,7 @@ function showSpeedBadge(value) {
   const at = value === SPEED_TUNE.DEFAULT ? '  (default)'
     : value === SPEED_TUNE.MIN ? '  (min)'
       : value === SPEED_TUNE.MAX ? '  (max)' : '';
-  speedBadge.textContent = `DEBUG  MAX SPEED ${value.toFixed(1)}${at}\n1 slower   2 faster   § default`;
+  speedBadge.textContent = `DEBUG  MAX SPEED ${value.toFixed(1)}${at}\nQ slower   W faster   E default   1-8 world`;
 }
 
 // Moves the setting AND the aeroplane currently in the air. The setting is
@@ -221,7 +210,7 @@ function speedTune(sim, delta) {
   return v;
 }
 
-// § — back to the aeroplane as shipped, in one press. Reaches the setting and
+// E — back to the aeroplane as shipped, in one press. Reaches the setting and
 // the aeroplane in the air by exactly the same two steps as speedTune, so a
 // reset lands as immediately as a tune does; and it shows the badge, because a
 // reset you cannot see is indistinguishable from a key that did nothing.
@@ -363,11 +352,12 @@ class Pilot {
       if (!down && held) keys[held] = false;
       return;
     }
-    // DEBUG. Shift plus a digit, checked BEFORE the keymap so that shift-1 is a
-    // world jump and plain 1 is still the speed tuning. Handled and returned
-    // here, so nothing below ever sees a shifted digit and the two debug
-    // controls cannot both fire on one press.
-    if (e.shiftKey && WORLD_KEYS[e.code]) {
+    // DEBUG. A plain digit jumps the archipelago to that world. It needed shift
+    // while 1 and 2 were the speed tuning; the tuning moved to Q/W/E precisely
+    // so the digits could be what they obviously should be — 1 through 8 for
+    // the eight worlds. Shift still works, so a habit formed in the last hour
+    // does not break.
+    if (WORLD_KEYS[e.code]) {
       e.preventDefault();
       if (down) this.jumpTo(WORLD_KEYS[e.code]);
       return;
