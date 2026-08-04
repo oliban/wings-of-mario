@@ -436,7 +436,11 @@ export class Scene {
   }
 
   drawIslands(ctx, sim, cam, f) {
-    for (const isle of sim.islands) drawLandmass(ctx, isle, cam, f.vw, f.vh, this.tick, SEA_Y);
+    // The zoom goes in as well: the tile art drops ornament as the world
+    // shrinks, and it cannot know how small it is being drawn without it.
+    for (const isle of sim.islands) {
+      drawLandmass(ctx, isle, cam, f.vw, f.vh, this.tick, SEA_Y, f.scale);
+    }
   }
 
   // Ordnance in the air, each round pointed along its own velocity — which is

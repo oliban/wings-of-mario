@@ -182,6 +182,56 @@ export const LAND = {
   shadow: 'rgba(6,26,48,0.35)',
 };
 
+// ---------------------------------------------------------------------------
+// The island's TILE palette — Super Mario Bros., not "generic terrain".
+//
+// LAND above is a landscape palette: earth, sand, scrub, chosen so a landmass
+// reads as land from a mile up. It is still what the surf and the coastline
+// use. But the blocks standing on that land are not landscape — they are the
+// most recognisable graphics in the medium, and they are recognisable by their
+// COLOUR RELATIONSHIPS as much as by their shapes: one orange for ground and
+// brick, one gold for the question block, one green for pipe and bush and
+// hill, and a near-black outline around every one of them.
+//
+// So this is a second, deliberately narrow palette, matched to the overworld's
+// NES colours rather than to the sea and sky. Three notes on the choices:
+//
+//   ONE ORANGE, TWO ROLES. Ground and brick share `orange` in the original —
+//   they are told apart by pattern (speckle vs mortar), never by hue. Giving
+//   them separate colours here would be easier to read and instantly wrong.
+//
+//   THE OUTLINE IS WARM, NOT BLACK. #1a0f04 rather than #000000. Against a
+//   bright cyan sea a pure black grid buzzes; a very dark brown reads as the
+//   same hard line and sits in the same family as the blocks it surrounds.
+//
+//   THE GOLD IS THE BRIGHTEST THING ON THE ISLAND, on purpose. A question
+//   block is a target, and at 5 screen pixels the only thing that survives of
+//   it is that it is brighter and yellower than everything around it.
+// ---------------------------------------------------------------------------
+export const SMB = {
+  ink: '#1a0f04',
+  orange: '#c84c0c',
+  orangeLit: '#e39b48',
+  orangeDark: '#8b3a0e',
+  mortar: '#3d1c07',
+  gold: '#f0a01c',
+  goldLit: '#fbd66b',
+  goldDark: '#a85c08',
+  green: '#00a800',
+  greenLit: '#5cd44c',
+  greenDark: '#00680c',
+  white: '#fcfcfc',
+  cloudShade: '#94d0f4',
+  stone: '#b4b4bc',
+  stoneLit: '#e0e0e8',
+  stoneDark: '#6c6c78',
+  iron: '#3c3c48',
+  ironLit: '#787888',
+  lava: '#e05010',
+  lavaLit: '#fca044',
+  lavaDark: '#8b2408',
+};
+
 export const ORD = {
   steel: '#aab6c4',
   steelLit: '#eef4fb',
