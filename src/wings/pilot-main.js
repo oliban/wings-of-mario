@@ -134,6 +134,30 @@ class Pilot {
   }
 
   key(e, down) {
+    // A system modifier means the keystroke belongs to the browser, not to the
+    // aeroplane: leave it entirely alone — no handling and, above all, no
+    // preventDefault. R is bound to `respawn`, so Cmd-Shift-R matched the
+    // keymap and was swallowed before Chrome ever saw it, and the user could
+    // not hard-reload the page they were playtesting.
+    //
+    // The rule is general on purpose rather than a special case for R: it
+    // rescues Cmd-R, Cmd-T, Cmd-W, Ctrl-Shift-I and every other shortcut at
+    // once, and the next binding that collides with one will not need a second
+    // fix. Mario's own Pad has the same preventDefault pattern and has never
+    // shown the bug only because its maps happen to claim no key a browser
+    // wants.
+    //
+    // SHIFT IS NOT ON THIS LIST. Shift-plus-a-game-key is not a browser
+    // shortcut, and shift is a plausible binding of its own one day.
+    if (e.metaKey || e.ctrlKey || e.altKey) {
+      // One thing still has to happen: a key going UP has to be released.
+      // Otherwise reaching for Cmd mid-hold — or the browser withholding the
+      // keyup for a key released while Cmd is down, which macOS does — leaves
+      // the aeroplane holding full aileron forever.
+      const held = KEYMAP[e.code];
+      if (!down && held) keys[held] = false;
+      return;
+    }
     const name = KEYMAP[e.code];
     if (!name) return;
     e.preventDefault();

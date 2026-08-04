@@ -358,6 +358,74 @@ test('bombs, islands and the stall-turn roll', { timeout: 120000 }, async (t) =>
     assert.ok(r.bombs > 0 && r.rockets > 0, 'a fresh sortie should launch with stores aboard');
   });
 
+  // The page must never swallow a browser shortcut. R is bound to `respawn`,
+  // so Cmd-Shift-R matched the keymap and was preventDefault()ed before Chrome
+  // saw it — the user could not hard-reload the page they were playtesting.
+  await t.test('a keystroke carrying a system modifier is left entirely to the browser', async () => {
+    await fly({ x: 900, y: 250, speed: 2.5 });
+    // Record whether the page cancels the event, from the page's own side.
+    await page.evaluate(() => {
+      window.__prevented = [];
+      window.addEventListener('keydown', (e) => {
+        window.__prevented.push([e.code, e.metaKey, e.ctrlKey, e.altKey, e.shiftKey, e.defaultPrevented]);
+      });
+    });
+
+    const before = await page.evaluate(() => ({ ...window.__WINGS.state(), loadout: { ...window.__WINGS.sim.loadout } }));
+    for (const combo of ['Meta+Shift+KeyR', 'Meta+KeyR', 'Control+Shift+KeyR', 'Alt+KeyR', 'Meta+Space', 'Control+KeyX', 'Meta+ArrowDown']) {
+      await page.keyboard.press(combo);
+    }
+    await page.evaluate(() => window.__WINGS.tick(5));
+    const after = await page.evaluate(() => ({ ...window.__WINGS.state(), loadout: { ...window.__WINGS.sim.loadout } }));
+    const seen = await page.evaluate(() => window.__prevented);
+
+    assert.ok(seen.length >= 7, `only ${seen.length} modified keystrokes reached the page`);
+    for (const [code, meta, ctrl, alt, , prevented] of seen) {
+      if (!(meta || ctrl || alt)) continue;
+      assert.equal(prevented, false, `${code} with a system modifier was preventDefault()ed — the browser shortcut is swallowed`);
+    }
+    // And none of them flew the aeroplane or spent ammunition.
+    assert.deepEqual(after.loadout, before.loadout, 'a modified keystroke fired a weapon');
+    assert.equal(after.squadron, before.squadron);
+    assert.equal(after.mode, before.mode);
+  });
+
+  await t.test('but plain R still puts the next aeroplane on the deck', async () => {
+    const r = await page.evaluate(() => {
+      const W = window.__WINGS;
+      W.reset();
+      const p = W.sim.plane;
+      p.mode = 'air';
+      p.gear = false;
+      p.y = 700; // straight into the sea on the next tick
+      W.tick(1);
+      return { mode: W.state().mode, squadron: W.state().squadron };
+    });
+    assert.equal(r.mode, 'down', 'the aeroplane did not crash as set up');
+    await page.keyboard.press('KeyR');
+    await page.evaluate(() => window.__WINGS.tick(1));
+    const after = await page.evaluate(() => window.__WINGS.state());
+    assert.equal(after.mode, 'deck', 'plain R no longer respawns');
+    assert.equal(after.squadron, r.squadron, 'respawning cost another aeroplane');
+  });
+
+  await t.test('a game key released while a modifier is held does not stay stuck down', async () => {
+    // macOS withholds keyup for a key released while Cmd is down, and reaching
+    // for Cmd mid-hold would otherwise leave full aileron on forever.
+    await fly({ x: 900, y: 250, speed: 2.5 });
+    await page.keyboard.down('ArrowRight');
+    await page.evaluate(() => window.__WINGS.tick(2));
+    await page.keyboard.down('Meta');
+    await page.keyboard.up('ArrowRight');
+    await page.keyboard.up('Meta');
+    const throttleAfter = await page.evaluate(() => {
+      const W = window.__WINGS;
+      W.tick(1);
+      return W.state().throttle;
+    });
+    assert.equal(throttleAfter, 0, 'the aeroplane is still holding thrust after the key was released under Cmd');
+  });
+
   await t.test('no uncaught page errors', () => {
     assert.deepEqual(ctx.errors, []);
   });
