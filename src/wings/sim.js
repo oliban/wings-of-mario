@@ -1,3 +1,4 @@
+import { TILE } from '../core/constants.js';
 import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds, layoutIslands } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import { landingVerdict, hitsHull, arrest, spotOnDeck } from './carrier.js';
@@ -105,11 +106,16 @@ export class WingsSim {
     if (!this.shots.length) return;
     for (const s of this.shots) {
       if (s.dead) continue;
+      // Where it was before this tick. stepShot mutates in place, so the
+      // segment has to be captured first — and the segment is the whole point:
+      // see impact().
+      const fromX = s.x;
+      const fromY = s.y;
       stepShot(s);
       // Old age, out over open water somewhere: no bang, it just stops being
       // simulated. Only a shot that reached SOMETHING detonates.
       if (s.dead) continue;
-      this.impact(s);
+      this.impact(s, fromX, fromY);
     }
     this.shots = this.shots.filter((s) => !s.dead);
   }
@@ -117,10 +123,42 @@ export class WingsSim {
   // ordnance.js deliberately knows nothing about terrain, so the decision that
   // a shot has hit something is made here. Land first, then the sea: a bomb
   // dropped on a beach is on the beach.
-  impact(s) {
-    const isle = this.islandAt(s.x, s.y);
-    if (isle && isle.blocksAt(s.x, s.y)) return this.burst(s, isle, false);
-    if (s.y >= SEA_Y) return this.burst(s, null, true);
+  //
+  // SWEPT, not sampled at the tick boundary. A bomb off the ceiling arrives at
+  // about eleven pixels a tick, so a point test at the new position finds it
+  // already up to eleven pixels INSIDE the hillside, and a blast disc centred
+  // a few pixels deeper covers a different set of tiles — measured, that was
+  // worth up to three tiles of crater, varying with impact speed and therefore
+  // with the height it was dropped from. A weapon's crater should be a
+  // property of the weapon.
+  //
+  // So the segment from where it was to where it now is gets walked in
+  // sub-tile steps and the shot detonates at the first blocking point on it —
+  // the SURFACE. That also makes tunnelling impossible by construction rather
+  // than by luck: nothing today moves fast enough to skip a 16px tile (the
+  // fastest round in the game manages 11.5px a tick), but nothing about that
+  // is guaranteed by anything except the current constants.
+  impact(s, fromX, fromY) {
+    const dx = s.x - fromX;
+    const dy = s.y - fromY;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / (TILE / 4)));
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const x = fromX + dx * t;
+      const y = fromY + dy * t;
+      const isle = this.islandAt(x, y);
+      if (isle && isle.blocksAt(x, y)) {
+        // Detonate where it made contact, not where the tick happened to end.
+        s.x = x;
+        s.y = y;
+        return this.burst(s, isle, false);
+      }
+      if (y >= SEA_Y) {
+        s.x = x;
+        s.y = SEA_Y;
+        return this.burst(s, null, true);
+      }
+    }
     return null;
   }
 
