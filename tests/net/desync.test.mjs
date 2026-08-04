@@ -49,7 +49,9 @@ test('the desync detector', { timeout: 30000 }, async (t) => {
   // that has lost something.
   await t.test('a client short a crater is handed it back, and then goes quiet', async () => {
     const { mario, pilot } = await pair(port, 'VWXY');
-    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-4', keys: ['2,9'] } });
+    // Column 40, not column 2: the tiles around a level's spawn are the
+    // sanctuary (src/wings/sanctuary.js) and never enter the damage map at all.
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-4', keys: ['40,9'] } });
     await mario.ofType(MSG.DAMAGE);
     // Past the grace window, so "still in flight" is not an available excuse.
     await quiet(3100);
@@ -57,12 +59,12 @@ test('the desync detector', { timeout: 30000 }, async (t) => {
     const since = mario.inbox.length;
     mario.send({ t: MSG.HASH, tick: 300, h: { '1-4': hashKeys([]) } });
     const repair = await mario.ofType(MSG.DAMAGE, 3000, since);
-    assert.deepEqual(repair.keys, ['2,9'], 'the server hands back what this client is missing');
+    assert.deepEqual(repair.keys, ['40,9'], 'the server hands back what this client is missing');
     assert.equal(repair.cx, undefined, 'a repair carries no geometry: it must not re-run a blast');
 
     // Having applied it, this client agrees — and the alarm never fires. A
     // repair that still ended in a DESYNC would be no repair at all.
-    mario.send({ t: MSG.HASH, tick: 360, h: { '1-4': hashKeys(['2,9']) } });
+    mario.send({ t: MSG.HASH, tick: 360, h: { '1-4': hashKeys(['40,9']) } });
     await quiet();
     assert.equal(mario.inbox.some((m) => m.t === MSG.DESYNC), false,
       'a client that took the repair is not desynced');

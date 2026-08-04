@@ -11,6 +11,7 @@ import { DamageSync, applyToWorld } from './damage-sync.js';
 import { noteDesync } from './desync.js';
 import { MatchVerdict, MarioEvents, applyWire, mayEmitFrom } from './match-events.js';
 import { marioSnapshot } from './reach.js';
+import { guardWorld } from '../wings/sanctuary.js';
 
 // Mario's half of the match. Like src/wings/debug-panel.js, this file talks to
 // the game ONLY through window.__GAME and builds any DOM it needs itself, so
@@ -154,6 +155,7 @@ export class MarioNet {
     // Installed on connect rather than at module load: __GAME is assigned by a
     // module with a top-level await and is not reliably there before this.
     this.installLevelHook();
+    this.installSanctuaryGuard();
     // Whatever level is already loaded gets its share at once, rather than
     // waiting for Mario to leave and come back.
     this._syncedLevel = null;
@@ -205,6 +207,12 @@ export class MarioNet {
     // exactly once per bomb.
     const live = originX != null && !m.replay
       && typeof m.cx === 'number' && typeof m.cy === 'number' && typeof m.r === 'number';
+
+    // Idempotent, and repeated here because `connect()` runs before __GAME is
+    // guaranteed to have a world: a live blast that arrived through an
+    // unguarded destroyTiles would crater the spawn floor on this client and
+    // on no other, which is a divergence nothing detects.
+    this.installSanctuaryGuard();
 
     if (live) {
       // Into the level-local frame Mario's engine works in.
@@ -277,6 +285,16 @@ export class MarioNet {
       return prev(id, areaId, merged);
     };
     return true;
+  }
+
+  // THE SANCTUARY on this side. The server never sends a protected key, so this
+  // is not about the wire: it is about `world.blast()`, which Mario's client
+  // runs itself for a live detonation and which computes its own key list from
+  // the blast centre. Wrapping the world instance's destroyTiles() — never
+  // editing src/game/world.js — puts the shared predicate in front of every
+  // path the engine has to remove a tile. See src/wings/sanctuary.js.
+  installSanctuaryGuard() {
+    return guardWorld(this.game && this.game.world);
   }
 
   // The safety net, run once a frame. The hook above covers every load that

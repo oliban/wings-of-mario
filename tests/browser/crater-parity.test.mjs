@@ -29,6 +29,15 @@
 // ISLAND_TOP_Y — so the coordinate conversion is compared too, not just the
 // predicate.
 //
+// THE SPAWN SANCTUARY is the third implementation this has to keep honest.
+// The tiles around a level's spawn are never destructible (src/wings/
+// sanctuary.js): Mario's side gets that through guardWorld(), which wraps the
+// world INSTANCE's destroyTiles(), and the pilot's through
+// Island.destructibleTile(). Both call the same predicate, and this file
+// installs the guard exactly as src/net/mario-side.js does — so every sweep
+// below is also 4,128 blasts' worth of evidence that neither side craters a
+// spawn and that they still agree tile for tile everywhere else.
+//
 // TWO KNOWN DIVERGENCES are marked `todo` at the bottom of this file. They are
 // asserted, not excluded: they fail, they say exactly what disagrees, and they
 // do not redden the suite while they are open. See
@@ -76,18 +85,28 @@ test('crater parity: World and Island destroy the same tiles', { timeout: 300000
   // The in-page harness. Installed once; every subtest below calls into it.
   // ---------------------------------------------------------------------
   await page.evaluate(async () => {
-    const [islandMod, blastMod, levelsMod, geoMod, constMod] = await Promise.all([
+    const [islandMod, blastMod, levelsMod, geoMod, constMod, sanctMod] = await Promise.all([
       import('/src/wings/island.js'),
       import('/src/wings/blast.js'),
       import('/src/data/levels/index.js'),
       import('/src/wings/geo.js'),
       import('/src/core/constants.js'),
+      import('/src/wings/sanctuary.js'),
     ]);
     const { Island } = islandMod;
     const { blastTiles } = blastMod;
     const { getLevel, getArea, LEVELS } = levelsMod;
     const { ISLAND_TOP_Y } = geoMod;
     const TILE = constMod.TILE;
+    // THE SPAWN SANCTUARY. Mario's client protects the tiles around a level's
+    // spawn by wrapping the world instance's destroyTiles() — src/game/world.js
+    // is engine and is never edited — and src/net/mario-side.js installs
+    // exactly this call on connect. Installing it here is what makes the
+    // comparison below a comparison of the two REAL crater pipelines: without
+    // it, this test would compare a World that has no sanctuary against an
+    // Island that does, and report the rule itself as a divergence.
+    const { guardWorld, protectedKeys } = sanctMod;
+    guardWorld(window.__GAME.world);
 
     // A non-zero, non-round origin, so a dropped or mistaken offset in either
     // direction shows up as a divergence instead of cancelling out.
@@ -229,11 +248,26 @@ test('crater parity: World and Island destroy the same tiles', { timeout: 300000
         // the caller asserts on these.
         const destroyed = new Set();
         const survived = new Set();
+        // Tiles that survived BECAUSE they are in the spawn sanctuary, kept
+        // apart from the ones that survived for no reason at all: the first is
+        // the rule working, the second is the sweep failing to reach them.
+        const sanctuaryChars = new Set();
+        const safe = protectedKeys(level);
+        let sanctuaryTiles = 0;
+        let sanctuaryDestroyed = 0;
         for (let ty = 0; ty < level.tiles.length; ty++) {
           for (let tx = 0; tx < level.width; tx++) {
+            const key = `${tx},${ty}`;
             const ch = level.tiles[ty][tx];
+            const isSafe = safe.has(key);
+            const gone = world.damage.has(key);
+            if (isSafe) {
+              sanctuaryTiles++;
+              if (gone) sanctuaryDestroyed++;
+            }
             if (ch === '.' || ch === ' ' || ch == null) continue;
-            (world.damage.has(`${tx},${ty}`) ? destroyed : survived).add(ch);
+            if (isSafe) sanctuaryChars.add(ch);
+            else (gone ? destroyed : survived).add(ch);
           }
         }
         return {
@@ -245,6 +279,10 @@ test('crater parity: World and Island destroy the same tiles', { timeout: 300000
           islandKeys: island.destroyed.size,
           destroyedChars: [...destroyed].sort().join(''),
           survivedChars: [...survived].sort().join(''),
+          sanctuaryChars: [...sanctuaryChars].sort().join(''),
+          sanctuaryTiles,
+          sanctuaryDestroyed,
+          islandSanctuaryDestroyed: island.keys().filter((k) => safe.has(k)).length,
         };
       },
 
@@ -369,6 +407,10 @@ test('crater parity: World and Island destroy the same tiles', { timeout: 300000
       `World and Island disagree on ${r.level}:\n${JSON.stringify(r.divergences, null, 2)}`
     );
     assert.equal(r.worldKeys, r.islandKeys, `${r.level}: destroyed-key COUNTS differ`);
+    // The sanctuary, swept over from every direction by every blast above.
+    assert.ok(r.sanctuaryTiles > 0, `${r.level}: no sanctuary tiles at all`);
+    assert.equal(r.sanctuaryDestroyed, 0, `${r.level}: Mario's World cratered its own spawn`);
+    assert.equal(r.islandSanctuaryDestroyed, 0, `${r.level}: the pilot's Island cratered the spawn`);
     return r;
   };
 
@@ -409,7 +451,10 @@ test('crater parity: World and Island destroy the same tiles', { timeout: 300000
 
   await t.test('every shipped tile character is covered by the swept areas', async () => {
     const shape = await page.evaluate(() => window.__PARITY.levelDataShape());
-    const covered = new Set([...swept.flatMap((r) => (r.destroyedChars + r.survivedChars).split('')), '.', ' ']);
+    const covered = new Set([
+      ...swept.flatMap((r) => (r.destroyedChars + r.survivedChars + r.sanctuaryChars).split('')),
+      '.', ' ',
+    ]);
     const missed = shape.chars.split('').filter((c) => !covered.has(c));
     assert.deepEqual(
       missed,

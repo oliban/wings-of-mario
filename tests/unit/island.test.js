@@ -4,6 +4,7 @@ import { TILE } from '../../src/core/constants.js';
 import { getLevel } from '../../src/data/levels/index.js';
 import { ISLAND_TOP_Y, localTileToWorld } from '../../src/wings/geo.js';
 import { Island } from '../../src/wings/island.js';
+import { protectedKeys } from '../../src/wings/sanctuary.js';
 
 const ORIGIN = 3000;
 // Rows 13-14 of 1-1 are the solid ground shelf; row 12 is open air/decor.
@@ -103,11 +104,23 @@ test('destructibleTile is true for every non-air tile including coins, decor and
 
 test('destructible is a wider set than blocking: every blocking tile is destructible', () => {
   const isl = new Island(getLevel('1-1'), ORIGIN);
+  // Except the spawn sanctuary, which is the one place a tile both blocks and
+  // survives — a bomb still detonates against it, it simply leaves no crater.
+  // See src/wings/sanctuary.js.
+  const safe = protectedKeys(getLevel('1-1'));
+  let protectedBlockers = 0;
   for (let ty = 0; ty < isl.h; ty++) {
     for (let tx = 0; tx < isl.w; tx++) {
-      if (isl.blocksTile(tx, ty)) assert.ok(isl.destructibleTile(tx, ty), `${tx},${ty}`);
+      if (!isl.blocksTile(tx, ty)) continue;
+      if (safe.has(`${tx},${ty}`)) {
+        protectedBlockers++;
+        assert.ok(!isl.destructibleTile(tx, ty), `${tx},${ty} is in the sanctuary`);
+      } else {
+        assert.ok(isl.destructibleTile(tx, ty), `${tx},${ty}`);
+      }
     }
   }
+  assert.ok(protectedBlockers > 0, '1-1 has no solid ground inside its sanctuary at all');
 });
 
 test('damage survives rebuilding the island from its keys', () => {

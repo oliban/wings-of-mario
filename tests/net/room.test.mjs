@@ -117,12 +117,14 @@ test('two clients, one room', { timeout: 30000 }, async (t) => {
       t: MSG.EV,
       seq: 1,
       type: 'detonate',
-      d: { island: '1-1', keys: ['3,11', ' 3,11', '0x3,2', '1e1,2', '0', '', 7, null, '03,11'] },
+      d: { island: '1-1', keys: ['30,11', ' 30,11', '0x3,2', '1e1,2', '0', '', 7, null, '030,11'] },
     });
     const dmg = await mario.ofType(MSG.DAMAGE);
-    // '03,11' survives on purpose: parseTileKey documents a leading zero as an
-    // alias, not a forgery. Everything else is not a `<int>,<int>` at all.
-    assert.deepEqual(dmg.keys, ['3,11', '03,11'], 'only plain `<int>,<int>` keys survive');
+    // '030,11' survives on purpose: parseTileKey documents a leading zero as
+    // an alias, not a forgery. Everything else is not a `<int>,<int>` at all.
+    // (Column 30 rather than 3: column 3 of 1-1 is inside the spawn sanctuary,
+    // which is filtered before this — see tests/net/sanctuary.test.mjs.)
+    assert.deepEqual(dmg.keys, ['30,11', '030,11'], 'only plain `<int>,<int>` keys survive');
     await mario.close();
     await pilot.close();
   });

@@ -10,6 +10,7 @@ import {
 } from './protocol.js';
 import { DamageMap, hashKeys } from '../wings/damage.js';
 import { parseTileKey } from '../wings/blast.js';
+import { filterProtectedForIsland } from '../wings/sanctuary.js';
 
 // How long an empty room is kept before it is thrown away. Long enough that a
 // tab crash, a laptop lid or a train tunnel reconnects into the same match
@@ -156,7 +157,16 @@ export class Room {
     // those here rather than at the client: a key that reached the map would
     // be broadcast to a peer that cannot parse it, and the two would then
     // disagree forever with no way to tell which one was right.
-    const clean = keys.filter((k) => parseTileKey(k) !== null);
+    // THE SANCTUARY, enforced here and not merely on the pilot's client: this
+    // function is the sole author of the destroyed set (D2), so a buggy or
+    // hostile client that proposes the tiles under Mario's feet must be
+    // refused HERE or the server would dutifully broadcast the death loop to
+    // both players. Dropped silently rather than rejecting the whole detonate:
+    // the rest of that bomb's crater is legitimate and belongs on both maps.
+    const clean = filterProtectedForIsland(
+      islandId,
+      keys.filter((k) => parseTileKey(k) !== null)
+    );
     // The state we are about to leave, remembered BEFORE the change and only
     // when there is a change, so a client still holding it is recognised as
     // one broadcast behind rather than accused of a desync.

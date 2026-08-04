@@ -2,6 +2,7 @@ import { TILE } from '../core/constants.js';
 import { tileForChar, CHAR_TO_TILE } from '../data/tiles.js';
 import { blastTiles, tileKey, parseTileKey } from './blast.js';
 import { ISLAND_TOP_Y, worldToLocalTile } from './geo.js';
+import { isProtected } from './sanctuary.js';
 
 // An unmodified upstream level placed in the ocean as a 15-row band whose
 // bottom row sits at sea level. The pilot never loads a Mario World: an
@@ -70,7 +71,13 @@ export class Island {
   // `rec.name !== 'air' || rec.unknown` — and the two must stay identical or
   // the pilot's crater and Mario's crater diverge, which is how the
   // multiplayer desync hash ends up firing forever.
+  //
+  // Minus the sanctuary: the tiles around Mario's spawn are not destructible
+  // at all (src/wings/sanctuary.js). That exception is NOT re-implemented
+  // here — Mario's side and the server import the very same predicate, which
+  // is the only reason the two craters can be trusted to match.
   destructibleTile(tx, ty) {
+    if (isProtected(this.level, tx, ty)) return false;
     const ch = this.charAt(tx, ty);
     if (this._unknown(ch)) return true;
     return tileForChar(ch).name !== 'air';
