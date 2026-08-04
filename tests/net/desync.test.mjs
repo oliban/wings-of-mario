@@ -14,6 +14,62 @@ test('the desync detector', { timeout: 30000 }, async (t) => {
   t.after(() => server.close());
   const { port } = server;
 
+  // THE REGRESSION. A `detonate` is reliable and is resent until it is
+  // settled, but the thing that settles it is the DAMAGE carrying its seq —
+  // and DAMAGE is a one-shot broadcast that nothing acks and nothing resends.
+  // So a single dropped broadcast used to leave that client permanently short
+  // a crater, and the retry D4 promises could not put it back: the server
+  // answered a resent detonate with DamageMap.add()'s newly-added keys, which
+  // on a resend is EMPTY. The retry settled the proposer's outbox and
+  // delivered nothing. Two players then stood on different ground forever.
+  await t.test('a resent detonate re-delivers the crater, not an empty list', async () => {
+    const { mario, pilot } = await pair(port, 'RTVW');
+    const ev = { t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10', '6,10'] } };
+    pilot.send(ev);
+    const first = await mario.ofType(MSG.DAMAGE);
+    assert.deepEqual([...first.keys].sort(), ['5,10', '6,10']);
+
+    // Byte-identical resend, exactly as Session.pump would put it back on the
+    // wire when the broadcast that should have settled it never arrived.
+    const since = mario.inbox.length;
+    pilot.send(ev);
+    const again = await mario.ofType(MSG.DAMAGE, 3000, since);
+    assert.deepEqual([...again.keys].sort(), ['5,10', '6,10'],
+      'the resend must carry the crater again, or a lost broadcast is lost for good');
+    assert.equal(again.seq, 1, 'and still settle the proposal it belongs to');
+    await mario.close();
+    await pilot.close();
+  });
+
+  // The other half of the same hole: the peer's copy. The proposer's resend
+  // cannot help a client whose broadcast was dropped once the proposer has
+  // been settled, so the server repairs from the one place that knows the
+  // truth (decision D2) — it already hears every client's hashes once a
+  // second, and a mismatch that has outlived the grace window IS a client
+  // that has lost something.
+  await t.test('a client short a crater is handed it back, and then goes quiet', async () => {
+    const { mario, pilot } = await pair(port, 'VWXY');
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-4', keys: ['2,9'] } });
+    await mario.ofType(MSG.DAMAGE);
+    // Past the grace window, so "still in flight" is not an available excuse.
+    await quiet(3100);
+
+    const since = mario.inbox.length;
+    mario.send({ t: MSG.HASH, tick: 300, h: { '1-4': hashKeys([]) } });
+    const repair = await mario.ofType(MSG.DAMAGE, 3000, since);
+    assert.deepEqual(repair.keys, ['2,9'], 'the server hands back what this client is missing');
+    assert.equal(repair.cx, undefined, 'a repair carries no geometry: it must not re-run a blast');
+
+    // Having applied it, this client agrees — and the alarm never fires. A
+    // repair that still ended in a DESYNC would be no repair at all.
+    mario.send({ t: MSG.HASH, tick: 360, h: { '1-4': hashKeys(['2,9']) } });
+    await quiet();
+    assert.equal(mario.inbox.some((m) => m.t === MSG.DESYNC), false,
+      'a client that took the repair is not desynced');
+    await mario.close();
+    await pilot.close();
+  });
+
   await t.test('an agreeing hash gets no reply at all', async () => {
     const { mario, pilot } = await pair(port, 'ACDE');
     pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10', '6,10'] } });
@@ -66,8 +122,13 @@ test('the desync detector', { timeout: 30000 }, async (t) => {
     const { mario, pilot } = await pair(port, 'FGHJ');
     pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10', '6,10'] } });
     await mario.ofType(MSG.DAMAGE);
-    // A state this room has never been in, so lag is no excuse for it.
+    // A state this room has never been in, so lag is no excuse for it. The
+    // first answer is the authoritative set; only a client still disagreeing
+    // after that is called desynced.
+    const since = mario.inbox.length;
     mario.send({ t: MSG.HASH, tick: 60, h: { '1-1': hashKeys(['9,9']) } });
+    await mario.ofType(MSG.DAMAGE, 3000, since);
+    mario.send({ t: MSG.HASH, tick: 120, h: { '1-1': hashKeys(['9,9']) } });
     const d = await mario.ofType(MSG.DESYNC);
     assert.equal(d.island, '1-1');
     assert.equal(d.server, hashKeys(['5,10', '6,10']));
@@ -100,7 +161,18 @@ test('the desync detector', { timeout: 30000 }, async (t) => {
 
   await t.test('a client claiming damage on an island the server never touched is caught', async () => {
     const { mario, pilot } = await pair(port, 'KMNP');
+    // A client that INVENTED damage is the one case a repair cannot fix: the
+    // sets are append-only, so handing it the server's (empty) set for 4-2
+    // cannot take a key away again. It is offered the truth once anyway —
+    // the server cannot tell "invented a key" from "lost one" out of a hash —
+    // and escalates on the next hash when it is still wrong.
     mario.send({ t: MSG.HASH, tick: 60, h: { '4-2': hashKeys(['1,1']) } });
+    const repair = await mario.ofType(MSG.DAMAGE);
+    assert.equal(repair.island, '4-2');
+    assert.deepEqual(repair.keys, [], "the server's set for an untouched island is empty");
+    assert.equal(repair.seq, undefined, 'a repair is not a detonate and settles nobody');
+
+    mario.send({ t: MSG.HASH, tick: 120, h: { '4-2': hashKeys(['1,1']) } });
     const d = await mario.ofType(MSG.DESYNC);
     assert.equal(d.island, '4-2');
     assert.equal(d.server, hashKeys([]));
@@ -130,7 +202,18 @@ test('the desync detector', { timeout: 30000 }, async (t) => {
     await mario.ofType(MSG.DAMAGE);
     // Past the grace window, so the crater cannot still be in flight.
     await quiet(3100);
+    // Silence about 1-2 is a claim that it is undamaged, so the server hands
+    // back the crater this client is missing. This is the REPAIR path proper:
+    // a client short a key is exactly what a dropped broadcast produces, and
+    // re-applying an append-only set puts it right.
+    const since = mario.inbox.length;
     mario.send({ t: MSG.HASH, tick: 300, h: { '1-1': hashKeys([]) } });
+    const repair = await mario.ofType(MSG.DAMAGE, 3000, since);
+    assert.equal(repair.island, '1-2');
+    assert.deepEqual(repair.keys, ['3,4'], 'the repair carries the authoritative set');
+
+    // Still silent about it on the next hash, so the repair did not take.
+    mario.send({ t: MSG.HASH, tick: 360, h: { '1-1': hashKeys([]) } });
     const d = await mario.ofType(MSG.DESYNC);
     assert.equal(d.island, '1-2');
     assert.equal(d.client, null, 'null says it never mentioned the island at all');

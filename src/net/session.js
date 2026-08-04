@@ -34,6 +34,13 @@ export class Session {
     // its ack arrives, so the same event arrives several times routinely — and
     // acting on `detonate` twice would be a double crater.
     this.seen = new Set();
+    // Every DAMAGE seq already delivered. The authoritative broadcast is now
+    // re-sent whenever the proposer resends its detonate, so the same crater
+    // legitimately arrives more than once — and the geometry it carries is
+    // what Mario's client resolves a KILL against. Applying the keys twice is
+    // harmless (the sets are append-only); running the blast twice would kill
+    // Mario a second time for one bomb.
+    this.seenDamage = new Set();
     this._listeners = new Map();
     this._lastSnapTick = -Infinity;
     this._lastHashTick = -Infinity;
@@ -259,7 +266,15 @@ export class Session {
         // is the ONLY thing that can: the server consumes a detonate rather
         // than relaying it, so the peer never sees an EV to ack. Once the
         // craters are recorded the proposal is done.
-        if (typeof msg.seq === 'number') this._outbox.delete(msg.seq);
+        if (typeof msg.seq === 'number') {
+          this._outbox.delete(msg.seq);
+          // A repeat of a crater already applied: the keys still go in, but
+          // this is a catch-up and not a live detonation. A repair frame from
+          // the server carries no seq and no geometry at all, so it is
+          // silent for the same reason without needing to be marked.
+          if (this.seenDamage.has(msg.seq)) msg.replay = true;
+          else this.seenDamage.add(msg.seq);
+        }
         this._emit('damage', msg);
         return;
 

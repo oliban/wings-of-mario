@@ -359,8 +359,18 @@ test('two browsers in one room', { timeout: 180000 }, async (t) => {
     // asserts their absence, which is only meaningful if the detector can fire
     // at all. 'ffffffff' is a state this room has never been in, so the grace
     // window that forgives a client one broadcast behind cannot excuse it.
+    //
+    // Twice, because a disagreement is answered with the authoritative set
+    // for the island before it is called a desync — a client short a crater
+    // is repairable and gets repaired, and only one that is STILL wrong after
+    // being handed the truth is desynced. A forged hash cannot be repaired by
+    // anything, so the second one escalates.
     await mario.page.evaluate(() => {
       window.__NET.session.sendHash(999999, { '1-1': 'ffffffff' });
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    await mario.page.evaluate(() => {
+      window.__NET.session.sendHash(1000000, { '1-1': 'ffffffff' });
     });
     await mario.page.waitForFunction(() => window.__NET.desyncs().length > 0, null, { timeout: 10000 });
     const d = await mario.page.evaluate(() => window.__NET.desyncs());

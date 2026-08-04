@@ -196,7 +196,12 @@ export class MarioNet {
     const world = this.game && this.game.world;
     if (!world || !m.island || m.island !== this.islandId()) return;
     const originX = this.originOf(m.island);
-    const live = originX != null
+    // `m.replay` marks a crater this client has already applied once, arriving
+    // again because the pilot resent the detonate it proposed it with. The
+    // keys below are re-applied regardless — that is a no-op on an append-only
+    // set — but the blast is NOT re-run: the kill is the half that must happen
+    // exactly once per bomb.
+    const live = originX != null && !m.replay
       && typeof m.cx === 'number' && typeof m.cy === 'number' && typeof m.r === 'number';
 
     if (live) {

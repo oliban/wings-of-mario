@@ -220,11 +220,18 @@ export async function bootRoom(opts = {}) {
   const room = opts.room || 'ACDE';
   const serverErrors = [];
   await acquireLock();
+  const rooms = new Rooms();
+  // The archipelago seed is normally minted at random, which is right for a
+  // real match and wrong for a test that compares one run against another: the
+  // seed decides where the islands are, so it decides how long a sortie to
+  // island 3 takes. Pinning it is what makes "the same sortie, three times, on
+  // three different networks" a comparison rather than three anecdotes.
+  if (opts.seed != null) rooms.getOrCreate(room, { now: Date.now(), seed: opts.seed });
   const server = await startServer({
     // Port 0: the OS picks a free one. Never a fixed port — 8123, 4322 and
     // 8199 all belong to somebody else on this machine.
     port: 0,
-    rooms: new Rooms(),
+    rooms,
     log: {
       info() {},
       warn() {},
@@ -262,6 +269,23 @@ export async function bootRoom(opts = {}) {
     await pilot.page.waitForFunction(
       () => window.__WINGS.net && window.__WINGS.net.state().connected, null, { timeout: 20000 }
     );
+
+    // Faults last, so the handshake itself is never the thing being tested:
+    // a client that cannot get its HELLO through has not exercised the netcode,
+    // it has failed to boot. Injected on the CLIENT transports rather than on
+    // the server, so both directions of both sockets are affected and the
+    // server stays a plain, fast relay — the fault under test is the network.
+    if (opts.latency || opts.loss) {
+      const faults = { latency: opts.latency || 0, loss: opts.loss || 0 };
+      await mario.page.evaluate(({ latency, loss }) => {
+        if (latency) window.__NET.latency(latency);
+        if (loss) window.__NET.drop(loss);
+      }, faults);
+      await pilot.page.evaluate(({ latency, loss }) => {
+        if (latency) window.__WINGS.net.latency(latency);
+        if (loss) window.__WINGS.net.drop(loss);
+      }, faults);
+    }
 
     return { server, browser, base, room, mario, pilot };
   } catch (err) {

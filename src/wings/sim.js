@@ -8,10 +8,12 @@ import { Radar } from './radar.js';
 
 export const SQUADRON = 5;
 
-// The two-island ocean the bot tests fly in. The real default is now a seeded
-// four-island archipelago (see archipelago.js); this is what you pass as
-// `opts.islands` when you want a small fixed ocean instead.
-export const ISLAND_LEVELS = ['1-1', '2-1'];
+// One archipelago is one SMB world: four islands (spec 2.1). This is the
+// explicit, unseeded list you pass as `opts.islands` when you want a fixed
+// ocean rather than the seeded layout archipelago.js builds by default — the
+// default is already world 1's four levels, so this now says the same thing
+// without the gaps depending on a seed.
+export const ISLAND_LEVELS = ['1-1', '1-2', '1-3', '1-4'];
 
 // The whole flight sim, with no canvas anywhere in it: the renderer reads
 // this, never the other way round. That keeps every rule in here reachable

@@ -161,9 +161,21 @@ test('two clients, one room', { timeout: 30000 }, async (t) => {
     // Agreement first, then a lie about a second island in the same message.
     // If agreement produced a DESYNC too, the island below would not be the
     // first one back.
+    const since = mario.inbox.length;
     mario.send({
       t: MSG.HASH,
       tick: 60,
+      h: { '1-1': hashKeys(['5,10', '6,10']), '1-2': 'deadbeef' },
+    });
+    // The first answer to a disagreement is the authoritative set, not an
+    // alarm — and only for the island that disagrees.
+    const repair = await mario.ofType(MSG.DAMAGE, 3000, since);
+    assert.equal(repair.island, '1-2', 'only the island that disagrees is repaired');
+
+    // Unmoved on the next hash, so the repair did not take and this is real.
+    mario.send({
+      t: MSG.HASH,
+      tick: 120,
       h: { '1-1': hashKeys(['5,10', '6,10']), '1-2': 'deadbeef' },
     });
     const bad = await mario.ofType(MSG.DESYNC);

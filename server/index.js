@@ -75,6 +75,15 @@ export async function startServer(opts = {}) {
     let room = null;
     let seat = null;
 
+    // islandId -> the server hash this socket has already been repaired to.
+    // The destroyed-set is the server's (decision D2), so a client that
+    // disagrees is simply wrong and gets told what the truth is before it is
+    // accused of anything. Keyed on the SERVER's hash rather than a bare flag
+    // so a second, later divergence on the same island is repaired too, and
+    // only a client that is still wrong AFTER being handed the authoritative
+    // set for that exact state counts as a desync.
+    const repairedTo = new Map();
+
     // Every open socket sitting in the other seat of this room. Normally one;
     // a reconnect can briefly leave a stale socket on the same side, and
     // sending to both is harmless where picking the wrong one is not.
@@ -153,7 +162,11 @@ export async function startServer(opts = {}) {
             // The server's added-key list is the fact (decision D2). It goes
             // to BOTH clients, including the one that proposed it, so every
             // client's set is written by exactly one code path.
-            const dmg = { t: MSG.DAMAGE, island: msg.d.island, keys: rec.added, seq: msg.seq };
+            // `rec.keys`, not `rec.added`: a resent detonate adds nothing but
+            // is still responsible for the same crater, and broadcasting the
+            // empty add-list settled the pilot's outbox without delivering a
+            // single key. See Room.recordDetonate.
+            const dmg = { t: MSG.DAMAGE, island: msg.d.island, keys: rec.keys, seq: msg.seq };
             // The blast's centre, carried through untouched. The server does
             // not simulate and does not check it against the keys: it is the
             // pilot's statement about his own bomb (spec 7.1), and Mario's
@@ -188,6 +201,34 @@ export async function startServer(opts = {}) {
           // Room.compareHashes and HASH_GRACE_MS.
           const bad = room.compareHashes(msg.h, Date.now());
           for (const m of bad) {
+            // REPAIR BEFORE ALARM. The authoritative DAMAGE broadcast is a
+            // one-shot: nothing acks it and nothing resends it, so a single
+            // dropped frame used to leave a client permanently short a crater
+            // with no mechanism anywhere that could put it back. This is that
+            // mechanism, and it costs no new timer or message type — the
+            // client already tells us its hashes once a second, and a
+            // mismatch that has outlived the grace window is precisely a
+            // client that has lost something.
+            //
+            // Idempotent (the client's set is append-only, so re-applying the
+            // whole island is a no-op when it is already right) and
+            // self-healing (a repair frame that is itself dropped is simply
+            // sent again on the next hash a second later). No geometry on it:
+            // a repair must never re-run a blast that already killed someone.
+            if (repairedTo.get(m.island) !== m.server) {
+              repairedTo.set(m.island, m.server);
+              log.warn(
+                `[REPAIR] room=${room.code} side=${seat.side} island=${m.island} ` +
+                  `client=${m.client == null ? 'not-mentioned' : m.client} -> server=${m.server} ` +
+                  `(${m.n} keys)`
+              );
+              send(ws, { t: MSG.DAMAGE, island: m.island, keys: room.damage.keys(m.island) });
+              continue;
+            }
+            // Still disagreeing after being handed this exact state. That is
+            // not a client that is behind, it is a client holding something
+            // the server's set cannot account for — a real desync.
+            //
             // Loudly, in real play — spec 8.4. This is the whole point of the
             // detector: it must be impossible to miss in a server log. The
             // count and the sample are what makes it worth reading: a client

@@ -24,8 +24,9 @@ export const ROOM_IDLE_MS = 10 * 60 * 1000;
 // switched off inside a day.
 //
 // Three seconds is far past any RTT worth playing over and is paid for by
-// nothing: a desync is permanent by construction — the sets do not repair
-// themselves — so a real one is still shouted about on the next quiet second.
+// nothing: a set that is genuinely wrong stays wrong until the server repairs
+// it, so it is still caught on the next quiet second. What the window costs is
+// three seconds of delay before that repair goes out, never the repair itself.
 export const HASH_GRACE_MS = 3000;
 
 // How many past states are kept per island. A hash is 8 bytes of string; this
@@ -158,7 +159,19 @@ export class Room {
     const before = this.damage.hash(islandId);
     const added = this.damage.add(islandId, clean);
     if (added.length) this._rememberState(islandId, before, now);
-    return { ok: true, added };
+    // What this detonate is authoritatively responsible for: every key it
+    // proposed that is in fact destroyed. On first delivery that is exactly
+    // `added`; on a RESEND `added` is empty and this is still the whole
+    // crater.
+    //
+    // The difference is the whole point. `detonate` is a reliable event, and
+    // the proposer's outbox is settled by the DAMAGE carrying its seq — so
+    // broadcasting `added` on a resend settled the retry while delivering an
+    // EMPTY key list, and the retry that D4 promises would repair a dropped
+    // crater instead guaranteed it stayed lost. Re-delivering the full set is
+    // safe because every client's set is append-only.
+    const authoritative = clean.filter((k) => this.damage.has(islandId, k));
+    return { ok: true, added, keys: authoritative };
   }
 
   _rememberState(islandId, hash, until) {

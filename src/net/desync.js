@@ -6,10 +6,12 @@ import { banner } from './lobby.js';
 // Both sides run this identical function, and it is a plain function over a
 // plain array so it can be tested in Node with no browser and no game.
 
-// Once per island, not once per second. A desync is PERMANENT by construction
-// — nothing in this design repairs a diverged set — so the hash timer would
-// otherwise reprint the same line every second until the tab is closed and
-// bury every other message in the console, including whatever caused it.
+// Once per island, not once per second. A DESYNC now only reaches a client
+// after the server has already sent it the authoritative set for that island
+// and been disagreed with anyway, so it is a state nothing is going to fix on
+// its own; the hash timer would otherwise reprint the same line every second
+// until the tab is closed and bury every other message in the console,
+// including whatever caused it.
 export function firstForIsland(list, island) {
   return !list.some((d) => d.island === island);
 }
