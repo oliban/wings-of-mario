@@ -1,0 +1,170 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { MSG } from '../../src/net/protocol.js';
+import { hashKeys } from '../../src/wings/damage.js';
+import { startTestServer, pair } from './helpers.mjs';
+
+// The desync detector end to end: a real server, real sockets, no browser and
+// no game. Most of this file asserts the ABSENCE of an alarm, which is the
+// half that decides whether anybody will still be listening to it next week.
+const quiet = (ms = 200) => new Promise((r) => setTimeout(r, ms));
+
+test('the desync detector', { timeout: 30000 }, async (t) => {
+  const server = await startTestServer({ captureLogs: true });
+  t.after(() => server.close());
+  const { port } = server;
+
+  await t.test('an agreeing hash gets no reply at all', async () => {
+    const { mario, pilot } = await pair(port, 'ACDE');
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10', '6,10'] } });
+    await mario.ofType(MSG.DAMAGE);
+    // Deliberately the other order: the hash sorts its own input, so two
+    // clients that cratered the same tiles in a different order agree.
+    mario.send({ t: MSG.HASH, tick: 60, h: { '1-1': hashKeys(['6,10', '5,10']) } });
+    await quiet();
+    assert.equal(mario.inbox.some((m) => m.t === MSG.DESYNC), false);
+    await mario.close();
+    await pilot.close();
+  });
+
+  await t.test('sixty agreeing intervals produce sixty silences', async () => {
+    // The false positive case, hammered. A detector that fires once an hour
+    // for no reason is a detector nobody reads.
+    const { mario, pilot } = await pair(port, 'CDEF');
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10'] } });
+    await mario.ofType(MSG.DAMAGE);
+    for (let i = 0; i < 60; i++) {
+      mario.send({ t: MSG.HASH, tick: 60 * (i + 1), h: { '1-1': hashKeys(['5,10']) } });
+      pilot.send({ t: MSG.HASH, tick: 60 * (i + 1), h: { '1-1': hashKeys(['5,10']) } });
+    }
+    await quiet(300);
+    assert.equal(mario.inbox.some((m) => m.t === MSG.DESYNC), false);
+    assert.equal(pilot.inbox.some((m) => m.t === MSG.DESYNC), false);
+    await mario.close();
+    await pilot.close();
+  });
+
+  await t.test('a client one crater behind mid-bombing-run is not accused', async () => {
+    // THE RACE THIS DETECTOR HAS TO SURVIVE. The client's replica is written
+    // by the server's own broadcast, so between the tick the server records a
+    // crater and the tick that broadcast lands, the client is legitimately
+    // behind — and its hash timer knows nothing about when bombs fall.
+    const { mario, pilot } = await pair(port, 'DEFG');
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10'] } });
+    await mario.ofType(MSG.DAMAGE);
+    pilot.send({ t: MSG.EV, seq: 2, type: 'detonate', d: { island: '1-1', keys: ['6,10'] } });
+    // Hashed from the state before that second crater, without waiting for it.
+    mario.send({ t: MSG.HASH, tick: 120, h: { '1-1': hashKeys(['5,10']) } });
+    await quiet();
+    assert.equal(mario.inbox.some((m) => m.t === MSG.DESYNC), false,
+      'being one broadcast behind is the normal case, not a fault');
+    await mario.close();
+    await pilot.close();
+  });
+
+  await t.test('a disagreeing hash comes back named, with both values', async () => {
+    const { mario, pilot } = await pair(port, 'FGHJ');
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10', '6,10'] } });
+    await mario.ofType(MSG.DAMAGE);
+    // A state this room has never been in, so lag is no excuse for it.
+    mario.send({ t: MSG.HASH, tick: 60, h: { '1-1': hashKeys(['9,9']) } });
+    const d = await mario.ofType(MSG.DESYNC);
+    assert.equal(d.island, '1-1');
+    assert.equal(d.server, hashKeys(['5,10', '6,10']));
+    assert.equal(d.client, hashKeys(['9,9']));
+    assert.equal(d.n, 2, 'the count is half the diagnosis');
+    assert.deepEqual(d.sample, ['5,10', '6,10'], 'and a sample is the other half');
+    await mario.close();
+    await pilot.close();
+  });
+
+  await t.test('and exactly once, not once per island in the room', async () => {
+    const seen = server.logs.filter(
+      ([level, line]) => level === 'error' && line.includes('[DESYNC]') && line.includes('room=FGHJ')
+    );
+    assert.equal(seen.length, 1);
+  });
+
+  await t.test('the server logs it loudly', async () => {
+    const shouted = server.logs.filter(
+      ([level, line]) => level === 'error' && line.includes('[DESYNC]')
+    );
+    assert.ok(shouted.length > 0, 'a desync must be impossible to miss in the server log');
+    const line = shouted.find((l) => l[1].includes('room=FGHJ'))[1];
+    assert.match(line, /room=FGHJ/);
+    assert.match(line, /island=1-1/);
+    assert.match(line, /side=mario/);
+    assert.match(line, /serverKeys=2/);
+    assert.match(line, /sample=5,10 6,10/);
+  });
+
+  await t.test('a client claiming damage on an island the server never touched is caught', async () => {
+    const { mario, pilot } = await pair(port, 'KMNP');
+    mario.send({ t: MSG.HASH, tick: 60, h: { '4-2': hashKeys(['1,1']) } });
+    const d = await mario.ofType(MSG.DESYNC);
+    assert.equal(d.island, '4-2');
+    assert.equal(d.server, hashKeys([]));
+    assert.equal(d.n, 0);
+    await mario.close();
+    await pilot.close();
+  });
+
+  await t.test('an island a client has never loaded is not reported against it', async () => {
+    // Mario is on 1-1 and has never seen 1-2; the pilot cratered neither. The
+    // detector must have nothing to say about an island nobody has touched,
+    // or every match would open with an alarm.
+    const { mario, pilot } = await pair(port, 'MNPQ');
+    mario.send({ t: MSG.HASH, tick: 60, h: { '1-1': hashKeys([]) } });
+    await quiet();
+    assert.equal(mario.inbox.some((m) => m.t === MSG.DESYNC), false);
+    await mario.close();
+    await pilot.close();
+  });
+
+  await t.test('a client that never mentions a cratered island is still caught', async () => {
+    // Silence about an island is a claim that it is undamaged. A client that
+    // lost 1-2's craters entirely would otherwise be invisible to a detector
+    // that only ever compares what it was told about.
+    const { mario, pilot } = await pair(port, 'NPQR');
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-2', keys: ['3,4'] } });
+    await mario.ofType(MSG.DAMAGE);
+    // Past the grace window, so the crater cannot still be in flight.
+    await quiet(3100);
+    mario.send({ t: MSG.HASH, tick: 300, h: { '1-1': hashKeys([]) } });
+    const d = await mario.ofType(MSG.DESYNC);
+    assert.equal(d.island, '1-2');
+    assert.equal(d.client, null, 'null says it never mentioned the island at all');
+    assert.equal(d.n, 1);
+    await mario.close();
+    await pilot.close();
+  });
+
+  await t.test('the out-of-bounds case decision D1 exists for', async () => {
+    // A key no client can place on its own map must STILL be hashed, or the
+    // client that could not place it reports desync forever. This is exactly
+    // what world.applyDamage's recorded-but-not-drawn key guarantees.
+    const { mario, pilot } = await pair(port, 'QRTU');
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10', '99999,99999'] } });
+    const dmg = await mario.ofType(MSG.DAMAGE);
+    assert.deepEqual([...dmg.keys].sort(), ['5,10', '99999,99999']);
+    mario.send({ t: MSG.HASH, tick: 60, h: { '1-1': hashKeys(['5,10', '99999,99999']) } });
+    await quiet();
+    assert.equal(mario.inbox.some((m) => m.t === MSG.DESYNC), false,
+      'the wide key must be in both sets');
+    await mario.close();
+    await pilot.close();
+  });
+
+  await t.test('a malformed key is in nobody set, so hashing without it agrees', async () => {
+    // The server drops keys parseTileKey rejects before they ever reach the
+    // map, so a client that never heard of them hashes the same set.
+    const { mario, pilot } = await pair(port, 'RTUV');
+    pilot.send({ t: MSG.EV, seq: 1, type: 'detonate', d: { island: '1-1', keys: ['5,10', ' 3,11', ''] } });
+    await mario.ofType(MSG.DAMAGE);
+    mario.send({ t: MSG.HASH, tick: 60, h: { '1-1': hashKeys(['5,10']) } });
+    await quiet();
+    assert.equal(mario.inbox.some((m) => m.t === MSG.DESYNC), false);
+    await mario.close();
+    await pilot.close();
+  });
+});

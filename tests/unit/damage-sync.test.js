@@ -174,3 +174,27 @@ test('an island and a sync that saw the same keys agree on the hash', () => {
   s.record('1-1', keys);
   assert.equal(s.hashes()['1-1'], hashKeys(isle.keys()));
 });
+
+test('hashes are memoised on the set size, because they are taken every second', () => {
+  const sync = new DamageSync();
+  sync.record('1-1', ['5,10']);
+  const first = sync.hashes();
+  let hashed = 0;
+  const real = sync.map.hash.bind(sync.map);
+  sync.map.hash = (id) => { hashed++; return real(id); };
+  assert.deepEqual(sync.hashes(), first, 'an unchanged set hashes the same');
+  assert.equal(hashed, 0, 'and is not re-hashed to find that out');
+  sync.record('1-1', ['6,10']);
+  assert.notEqual(sync.hashes()['1-1'], first['1-1'], 'a changed set must not be stale');
+  assert.equal(hashed, 1);
+});
+
+test('the hashed set is the replica, including islands nothing is loaded for', () => {
+  const sync = new DamageSync();
+  sync.record('1-1', ['5,10']);
+  sync.record('4-2', ['99999,99999']);
+  const h = sync.hashes();
+  assert.deepEqual(Object.keys(h), ['1-1', '4-2']);
+  assert.equal(h['4-2'], hashKeys(['99999,99999']),
+    'a key no tile map on earth could place is still part of the agreement');
+});

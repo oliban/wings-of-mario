@@ -17,6 +17,12 @@ import { parseTileKey } from '../wings/blast.js';
 export class DamageSync {
   constructor(map) {
     this.map = map || new DamageMap();
+    // islandId -> { size, hash }. The desync detector hashes every island once
+    // a second for the whole match, and a set that has not changed cannot have
+    // changed its hash. Keyed on size because these sets are append-only —
+    // nothing anywhere removes a destroyed tile — so a size that has not moved
+    // is a set that has not moved.
+    this._hashCache = new Map();
   }
 
   // Decision D2: the newly-added keys this returns are the fact. Note there
@@ -48,10 +54,27 @@ export class DamageSync {
 
   // One hash per island we have heard of, including islands with an empty set:
   // a client that invented damage the server never saw must still be caught.
+  //
+  // THIS IS THE SET THE DESYNC DETECTOR COMPARES, and it is deliberately this
+  // one rather than anything read back out of a loaded World or Island. It is
+  // the replica of the server's map (decision D1): it holds keys for islands
+  // nobody has loaded, and keys no local tile map could place. A hash taken
+  // off what this client managed to DRAW would differ from the server's for
+  // reasons that are not desyncs, and the alarm would be ignored within a day.
   hashes() {
     const out = Object.create(null);
-    for (const id of this.islands()) out[id] = this.map.hash(id);
+    for (const id of this.islands()) out[id] = this.hash(id);
     return out;
+  }
+
+  hash(islandId) {
+    const set = this.map.islands.get(islandId);
+    const size = set ? set.size : 0;
+    const hit = this._hashCache.get(islandId);
+    if (hit && hit.size === size) return hit.hash;
+    const hash = this.map.hash(islandId);
+    this._hashCache.set(islandId, { size, hash });
+    return hash;
   }
 
   toJSON() {

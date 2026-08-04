@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Room, Rooms, ROOM_IDLE_MS } from '../../src/net/room.js';
+import { Room, Rooms, ROOM_IDLE_MS, HASH_GRACE_MS } from '../../src/net/room.js';
 import { hashKeys } from '../../src/wings/damage.js';
 import { isRoomCode } from '../../src/net/protocol.js';
 
@@ -176,6 +176,87 @@ test('an island the client has never touched must still match the empty hash', (
   const r = new Room('ACDE', { seed: 7 });
   assert.deepEqual(r.compareHashes({ '3-4': hashKeys([]) }), []);
   assert.equal(r.compareHashes({ '3-4': 'ffffffff' }).length, 1);
+});
+
+// THE FALSE POSITIVE THIS DETECTOR LIVES OR DIES BY. A client's replica is
+// written by the server's own DAMAGE broadcast, so between the tick the server
+// records a crater and the tick that broadcast lands, the client is legitimately
+// one state behind — and it hashes once a second regardless. Accusing it then
+// would fire the alarm on every bombing run, and an alarm that cries wolf is
+// worse than no alarm at all. So the room remembers the states it has recently
+// been in, and a client sitting in one of them is simply behind, not diverged.
+test('a client one broadcast behind the server is not accused of a desync', () => {
+  const r = new Room('ACDE', { seed: 7 });
+  r.join({ side: 'pilot' });
+  r.recordDetonate('pilot', '1-1', ['5,10'], 1000);
+  // Hashed before the crater reached it: the client still holds the empty set.
+  assert.deepEqual(r.compareHashes({ '1-1': hashKeys([]) }, 1100), []);
+  r.recordDetonate('pilot', '1-1', ['6,10'], 1200);
+  assert.deepEqual(r.compareHashes({ '1-1': hashKeys(['5,10']) }, 1300), [],
+    'one crater behind, mid-run, is the normal case and must be silent');
+  assert.deepEqual(r.compareHashes({ '1-1': hashKeys(['5,10', '6,10']) }, 1300), []);
+});
+
+test('a state the server has never been in is caught even mid-bombing-run', () => {
+  const r = new Room('ACDE', { seed: 7 });
+  r.join({ side: 'pilot' });
+  r.recordDetonate('pilot', '1-1', ['5,10'], 1000);
+  const bad = r.compareHashes({ '1-1': hashKeys(['9,9']) }, 1050);
+  assert.equal(bad.length, 1, 'lag is an excuse for being behind, not for being wrong');
+  assert.equal(bad[0].island, '1-1');
+});
+
+test('a replica that is still behind long after the wire went quiet IS a desync', () => {
+  const r = new Room('ACDE', { seed: 7 });
+  r.join({ side: 'pilot' });
+  r.recordDetonate('pilot', '1-1', ['5,10'], 1000);
+  const late = 1000 + HASH_GRACE_MS + 1;
+  const bad = r.compareHashes({ '1-1': hashKeys([]) }, late);
+  assert.equal(bad.length, 1, 'a crater that never arrived is exactly what this detects');
+  assert.equal(bad[0].server, hashKeys(['5,10']));
+  assert.equal(bad[0].client, hashKeys([]));
+});
+
+test('with no clock at all the grace window is not applied', () => {
+  // room.js never asks what time it is; `now` is always handed in. A caller
+  // that hands in nothing gets the strict comparison, which is what every
+  // in-process test wants and what the server never does.
+  const r = new Room('ACDE', { seed: 7 });
+  r.join({ side: 'pilot' });
+  r.recordDetonate('pilot', '1-1', ['5,10'], 1000);
+  assert.equal(r.compareHashes({ '1-1': hashKeys([]) }).length, 1);
+});
+
+test('an island the server has damaged that the client never mentions is caught', () => {
+  const r = new Room('ACDE', { seed: 7 });
+  r.join({ side: 'pilot' });
+  r.recordDetonate('pilot', '1-2', ['3,4'], 1000);
+  const late = 1000 + HASH_GRACE_MS + 1;
+  // Silence about an island is a claim of an empty set, not an abstention: a
+  // client that lost the whole island would otherwise never be caught.
+  const bad = r.compareHashes({ '1-1': hashKeys([]) }, late);
+  assert.equal(bad.length, 1);
+  assert.equal(bad[0].island, '1-2');
+  assert.equal(bad[0].client, null, 'null says it never mentioned the island at all');
+  // ...but not while the broadcast that would tell it could still be in flight.
+  assert.deepEqual(r.compareHashes({ '1-1': hashKeys([]) }, 1100), []);
+});
+
+test('an island nobody has damaged is never reported against a silent client', () => {
+  const r = new Room('ACDE', { seed: 7 });
+  r.join({ side: 'pilot' });
+  // Every filtered-out key: the island exists in the map with an empty set.
+  r.recordDetonate('pilot', '4-2', ['not a key'], 1000);
+  assert.deepEqual(r.compareHashes({}, 1000 + HASH_GRACE_MS + 1), [],
+    'a client that has never heard of an undamaged island agrees about it');
+});
+
+test('the state history cannot grow without bound', () => {
+  const r = new Room('ACDE', { seed: 7 });
+  r.join({ side: 'pilot' });
+  for (let i = 0; i < 5000; i++) r.recordDetonate('pilot', '1-1', [`${i},1`], 1000 + i);
+  const held = r.hashHistory.get('1-1').length;
+  assert.ok(held > 0 && held <= 64, `history should stay bounded, held ${held}`);
 });
 
 test('compareHashes survives junk instead of a hash map', () => {

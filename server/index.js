@@ -182,15 +182,30 @@ export async function startServer(opts = {}) {
           return;
 
         case MSG.HASH: {
-          const bad = room.compareHashes(msg.h);
+          // Real time, and the only place the desync detector uses it: a
+          // client is allowed to be one broadcast behind, and how long that
+          // is is a question about the wire, not about ticks. See
+          // Room.compareHashes and HASH_GRACE_MS.
+          const bad = room.compareHashes(msg.h, Date.now());
           for (const m of bad) {
             // Loudly, in real play — spec 8.4. This is the whole point of the
-            // detector: it must be impossible to miss in a server log.
+            // detector: it must be impossible to miss in a server log. The
+            // count and the sample are what makes it worth reading: a client
+            // that is short one crater and a client that is short a hundred
+            // are different bugs.
             log.error(
               `[DESYNC] room=${room.code} side=${seat.side} island=${m.island} ` +
-                `server=${m.server} client=${m.client}`
+                `server=${m.server} client=${m.client == null ? 'not-mentioned' : m.client} ` +
+                `serverKeys=${m.n} sample=${m.sample.join(' ')}`
             );
-            send(ws, { t: MSG.DESYNC, island: m.island, server: m.server, client: m.client });
+            send(ws, {
+              t: MSG.DESYNC,
+              island: m.island,
+              server: m.server,
+              client: m.client,
+              n: m.n,
+              sample: m.sample,
+            });
           }
           return;
         }

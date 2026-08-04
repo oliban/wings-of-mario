@@ -5,6 +5,7 @@ import { roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure } from
 import { ISLAND_TOP_Y } from '../wings/geo.js';
 import pilot from '../wings/pilot-main.js';
 import { DamageSync, applyToIsland } from './damage-sync.js';
+import { noteDesync } from './desync.js';
 import { MatchVerdict, pilotWireEvent, applyWire, mayEmitFrom } from './match-events.js';
 
 // The pilot's half of the match. It reaches into the game only through the
@@ -116,10 +117,7 @@ export class PilotNet {
     });
     this.session.on('event', (m) => this.onPeerEvent(m));
     this.session.on('damage', (m) => this.onDamage(m));
-    this.session.on('desync', (m) => {
-      this.desyncs.push(m);
-      console.error('[DESYNC]', m.island, 'server', m.server, 'client', m.client);
-    });
+    this.session.on('desync', (m) => this.onDesync(m));
 
     const welcome = await this.session.connect();
     this.seed = welcome.seed;
@@ -189,6 +187,23 @@ export class PilotNet {
     applyToIsland(sim.islandById(m.island), m.keys);
   }
 
+  // ---- the alarm -----------------------------------------------------------
+
+  // This side counts in simulation ticks, Mario's side in its own rAF counter.
+  // A desync record says when it happened in the terms of the side that saw it.
+  tickCount() {
+    const sim = this.host.sim;
+    return sim ? sim.tick : 0;
+  }
+
+  onDesync(m) {
+    noteDesync(this.desyncs, m, {
+      keys: this.damage.keys(m.island),
+      tick: this.tickCount(),
+      doc: typeof document === 'undefined' ? null : document,
+    });
+  }
+
   // ---- our own news --------------------------------------------------------
 
   // The pilot's client owns the aeroplane, so it is the one that announces what
@@ -227,6 +242,13 @@ export class PilotNet {
     });
     this.emitOwnEvents();
     this.session.pump(sim.tick);
+
+    // Spec 8.4, and the same set for the same reason as Mario's side: the
+    // replica of the server's map, not this client's Islands. The Islands
+    // crater OPTIMISTICALLY the moment a bomb lands, a round trip before the
+    // server has confirmed anything, so hashing them would report a desync
+    // against our own bomb on every bombing run.
+    this.session.maybeSendHash(sim.tick, () => this.damage.hashes());
 
     // Mario's snapshot is in LEVEL-LOCAL pixels. Convert once, here, so the
     // renderer only ever deals in world coordinates.
@@ -334,6 +356,9 @@ window.__WINGS.net = {
   disconnect: () => (net.transport ? net.transport.disconnect() : false),
   reconnect: () => (net.transport ? net.transport.reconnect() : false),
   desyncs: () => net.desyncs.map((d) => ({ ...d })),
+  // Exactly what goes on the wire once a second. Two clients in the same match
+  // must return deeply equal objects; that is the whole invariant.
+  hashes: () => net.damage.hashes(),
 };
 
 export default net;

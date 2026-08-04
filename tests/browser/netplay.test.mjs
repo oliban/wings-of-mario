@@ -324,6 +324,17 @@ test('two browsers in one room', { timeout: 180000 }, async (t) => {
     assert.equal(verdicts[0].squadron, 0);
   });
 
+  await t.test('both clients hash identically after a real bombing run', async () => {
+    // The invariant the whole detector exists to protect, checked against two
+    // real browsers that have actually cratered a level between them.
+    const [mh, ph] = await Promise.all([
+      mario.page.evaluate(() => window.__NET.hashes()),
+      pilot.page.evaluate(() => window.__WINGS.net.hashes()),
+    ]);
+    assert.deepEqual(mh, ph, 'the two clients hash different destroyed-tile sets');
+    assert.ok(Object.keys(mh).length > 0, 'nothing was bombed, so this proves nothing');
+  });
+
   await t.test('a peer that leaves is announced and stops being drawn', async () => {
     await pilot.page.evaluate(() => window.__WINGS.net.session.close());
     await mario.page.waitForFunction(() => window.__NET.state().peer === false, null, { timeout: 10000 });
@@ -334,12 +345,41 @@ test('two browsers in one room', { timeout: 180000 }, async (t) => {
     assert.equal(remote, null, 'the plane must not hang in the sky after the pilot leaves');
   });
 
+  // Everything above this line played a whole match with the detector running
+  // at 1Hz on both clients, so this is the false-positive assertion, made
+  // against real traffic rather than a scripted one.
   await t.test('the server logged no desyncs or faults', () => {
     assert.deepEqual(ctx.server.serverErrors, []);
   });
 
+  // ...and everything below it deliberately breaks that, so it must come last.
+  await t.test('the detector fires when the sets are forced apart', async () => {
+    // Corrupt one client's claim and prove the machinery notices. This is the
+    // only place in the suite that manufactures a desync; everywhere else
+    // asserts their absence, which is only meaningful if the detector can fire
+    // at all. 'ffffffff' is a state this room has never been in, so the grace
+    // window that forgives a client one broadcast behind cannot excuse it.
+    await mario.page.evaluate(() => {
+      window.__NET.session.sendHash(999999, { '1-1': 'ffffffff' });
+    });
+    await mario.page.waitForFunction(() => window.__NET.desyncs().length > 0, null, { timeout: 10000 });
+    const d = await mario.page.evaluate(() => window.__NET.desyncs());
+    assert.equal(d[0].island, '1-1');
+    assert.equal(d[0].client, 'ffffffff');
+    assert.notEqual(d[0].server, 'ffffffff');
+    assert.ok(d[0].n > 0, 'the server key count is what makes the report diagnosable');
+    // And the server shouted about it.
+    assert.ok(
+      ctx.server.serverErrors.some((l) => l.includes('[DESYNC]')),
+      'the server must log a desync loudly'
+    );
+  });
+
   await t.test('no uncaught page errors on either side', () => {
-    assert.deepEqual(ctx.mario.errors, []);
-    assert.deepEqual(ctx.pilot.errors, []);
+    // The subtest above deliberately provokes the client's own alarm, which is
+    // a console.error by design. That one line is expected; nothing else is.
+    const real = (errs) => errs.filter((e) => !e.includes('[DESYNC]'));
+    assert.deepEqual(real(ctx.mario.errors), []);
+    assert.deepEqual(real(ctx.pilot.errors), []);
   });
 });

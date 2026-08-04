@@ -1,6 +1,6 @@
 import {
   MSG, PROTOCOL_VERSION, RELIABLE_TYPES,
-  SNAPSHOT_INTERVAL_TICKS, RESEND_INTERVAL_TICKS,
+  SNAPSHOT_INTERVAL_TICKS, RESEND_INTERVAL_TICKS, HASH_INTERVAL_TICKS,
   encode, decode,
 } from './protocol.js';
 
@@ -36,6 +36,7 @@ export class Session {
     this.seen = new Set();
     this._listeners = new Map();
     this._lastSnapTick = -Infinity;
+    this._lastHashTick = -Infinity;
     this._welcome = null;
 
     this.transport.onMessage((text) => this._onMessage(text));
@@ -121,6 +122,19 @@ export class Session {
   sendHash(tick, hashes) {
     this._requireConnected();
     this._send({ t: MSG.HASH, tick, h: hashes });
+    return true;
+  }
+
+  // The desync detector's clock, driven by the tick counter like everything
+  // else here. `buildHashes` is a callback rather than a value so the hash is
+  // computed only on the tick it is actually sent — FNV-1a over every
+  // destroyed key, sixty times a second, for one useful frame in sixty, is
+  // real work for nothing.
+  maybeSendHash(tick, buildHashes) {
+    if (!this.connected) return false;
+    if (tick - this._lastHashTick < HASH_INTERVAL_TICKS) return false;
+    this._lastHashTick = tick;
+    this.sendHash(tick, buildHashes());
     return true;
   }
 

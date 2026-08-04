@@ -6,6 +6,7 @@ import { roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure } from
 import { ISLAND_TOP_Y } from '../wings/geo.js';
 import { layoutArchipelago } from '../wings/archipelago.js';
 import { DamageSync, applyToWorld } from './damage-sync.js';
+import { noteDesync } from './desync.js';
 import { MatchVerdict, MarioEvents, applyWire, mayEmitFrom } from './match-events.js';
 
 // Mario's half of the match. Like src/wings/debug-panel.js, this file talks to
@@ -134,10 +135,7 @@ export class MarioNet {
         this.overlay.draw();
       }
     });
-    this.session.on('desync', (m) => {
-      this.desyncs.push(m);
-      console.error('[DESYNC]', m.island, 'server', m.server, 'client', m.client);
-    });
+    this.session.on('desync', (m) => this.onDesync(m));
     this.session.on('event', (m) => this.onPeerEvent(m));
     this.session.on('damage', (m) => this.onDamage(m));
 
@@ -215,6 +213,24 @@ export class MarioNet {
     // blast — because a second pass over the same crater must not be a second
     // chance to kill anything standing in it.
     applyToWorld(world, m.keys);
+  }
+
+  // ---- the alarm -----------------------------------------------------------
+
+  // The two sides count ticks in different places — Mario's is this class's own
+  // rAF counter, the pilot's is the simulation's — so a desync record says when
+  // it happened in this side's own terms rather than in a shared one that does
+  // not exist.
+  tickCount() {
+    return this.tick;
+  }
+
+  onDesync(m) {
+    noteDesync(this.desyncs, m, {
+      keys: this.damage.keys(m.island),
+      tick: this.tickCount(),
+      doc: typeof document === 'undefined' ? null : document,
+    });
   }
 
   // ---- craters made while Mario was somewhere else -------------------------
@@ -323,6 +339,15 @@ export class MarioNet {
     this.emitOwnEvents();
     this.syncLevelDamage();
     this.session.pump(this.tick);
+
+    // Spec 8.4: the detector runs in real play, not only under test. What is
+    // hashed is THE REPLICA of the server's set, never world.damage. The
+    // replica holds keys for islands Mario has not walked into and keys his
+    // tile map could not place (decision D1), and world.damage holds neither —
+    // so a hash taken off what this client managed to draw would differ from
+    // the server's for reasons that are not desyncs, and an alarm that cries
+    // wolf is worse than no alarm at all.
+    this.session.maybeSendHash(this.tick, () => this.damage.hashes());
 
     // The pilot's snapshot is in WORLD pixels. Convert into this island's local
     // frame, which is the frame Mario's camera lives in.
@@ -456,6 +481,9 @@ window.__NET = {
   disconnect: () => (net.transport ? net.transport.disconnect() : false),
   reconnect: () => (net.transport ? net.transport.reconnect() : false),
   desyncs: () => net.desyncs.map((d) => ({ ...d })),
+  // Exactly what goes on the wire once a second. Two clients in the same match
+  // must return deeply equal objects; that is the whole invariant.
+  hashes: () => net.damage.hashes(),
 };
 
 export default net;

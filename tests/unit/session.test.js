@@ -315,3 +315,23 @@ test('sequence numbers keep counting across a reconnect', async () => {
   // deduped, and the second one would be silently swallowed.
   assert.equal(s.sendEvent('planeLost', { reason: 'sea' }), 2);
 });
+
+test('hashes go out once a second and are computed only when sent', async () => {
+  const { s, transport } = await connected();
+  let built = 0;
+  const build = () => {
+    built++;
+    return { '1-1': 'deadbeef' };
+  };
+  for (let tick = 0; tick < 181; tick++) s.maybeSendHash(tick, build);
+  assert.equal(transport.countOf(MSG.HASH), 4, 'ticks 0, 60, 120 and 180');
+  assert.equal(built, 4, 'the hash must not be computed on the 177 ticks it is not sent');
+  assert.deepEqual(transport.lastOf(MSG.HASH).h, { '1-1': 'deadbeef' });
+});
+
+test('a disconnected session neither sends a hash nor builds one', () => {
+  const { s } = makeSession();
+  let built = 0;
+  assert.equal(s.maybeSendHash(60, () => { built++; return {}; }), false);
+  assert.equal(built, 0, 'hashing an unsendable set is pure waste');
+});
