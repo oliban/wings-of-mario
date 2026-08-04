@@ -49,6 +49,13 @@ export class MarioNet {
     this.onDeath = null;
     this.onCleared = null;
     this.onMatchOver = null;
+    // Which level our retained craters have been pushed into, and how much
+    // damage that level held when we did it. `world.damage` is CLEARED by
+    // world.loadLevel on every load, sub-areas included, so a shrinking set is
+    // how this side notices a level has been rebuilt under it.
+    this._syncedLevel = null;
+    this._syncedSize = 0;
+    this._prevLoadLevel = null;
   }
 
   get matchStatus() {
@@ -143,6 +150,13 @@ export class MarioNet {
     for (const [island, keys] of Object.entries(welcome.damage || {})) {
       this.damage.record(island, keys);
     }
+    // Installed on connect rather than at module load: __GAME is assigned by a
+    // module with a top-level await and is not reliably there before this.
+    this.installLevelHook();
+    // Whatever level is already loaded gets its share at once, rather than
+    // waiting for Mario to leave and come back.
+    this._syncedLevel = null;
+    this.syncLevelDamage();
     this.overlay.attach();
     return welcome;
   }
@@ -203,6 +217,70 @@ export class MarioNet {
     applyToWorld(world, m.keys);
   }
 
+  // ---- craters made while Mario was somewhere else -------------------------
+
+  // THE PRE-BOMBED ISLAND. The pilot can crater 1-2 an hour before Mario walks
+  // into it, and that is the strategy the archipelago exists for — so damage
+  // for an island he is not on must be RETAINED and applied when he arrives,
+  // never dropped because no level was loaded to take it.
+  //
+  // The server holds the whole archipelago's map and Mario holds one level, so
+  // arrival is the moment the rest of it becomes his. This takes over
+  // Game#loadLevel to hand the craters in through the options bag the engine
+  // already has for exactly this — `world.loadLevel` subtracts `opts.damage`
+  // after the tile map is built and BEFORE the decor, the contents, the
+  // landmarks, the player and the entities read it, so a bombed cloud stops
+  // drawing and a bombed flagpole stands at the right height. Applying it a
+  // frame later, as the safety net below has to, gets the tiles right and
+  // leaves those snapshots stale.
+  //
+  // Taking over an instance method rather than editing one: the same technique
+  // src/wings/match-host.js uses on world.onLevelComplete, and it touches no
+  // file under src/game.
+  installLevelHook() {
+    const game = this.game && this.game.game;
+    if (!game || typeof game.loadLevel !== 'function' || this._prevLoadLevel) return false;
+    const prev = game.loadLevel.bind(game);
+    this._prevLoadLevel = prev;
+    game.loadLevel = (id, areaId = null, opts = {}) => {
+      // Islands only, and never into a sub-area: a coin room is a different
+      // tile map, and 1-1's craters punched into it would be holes in the
+      // wrong wall.
+      const keys = areaId == null ? this.damage.keys(id) : [];
+      const merged = keys.length
+        ? { ...opts, damage: [...(opts.damage || []), ...keys] }
+        : opts;
+      return prev(id, areaId, merged);
+    };
+    return true;
+  }
+
+  // The safety net, run once a frame. The hook above covers every load that
+  // goes through the game object, but `world.damage` is cleared by EVERY
+  // world.loadLevel — including paths that reach it directly — and a level that
+  // came back without its craters is a level where Mario is standing on ground
+  // the pilot destroyed and the two clients disagree about the map.
+  syncLevelDamage() {
+    const world = this.game && this.game.world;
+    const island = this.islandId();
+    if (!world || !world.damage || !island) return 0;
+    const size = world.damage.size;
+    if (island === this._syncedLevel && size >= this._syncedSize) {
+      // Nothing was rebuilt; a live crater arriving only ever grows the set.
+      this._syncedSize = size;
+      return 0;
+    }
+    const missing = this.damage.keys(island).filter((k) => !world.damage.has(k));
+    // SILENT — applyDamage, not destroyTiles and certainly not blast. These
+    // craters were made minutes ago and somewhere else: replaying them must not
+    // be a second chance to kill whatever is standing in them now, and a level
+    // must not open with a hundred simultaneous explosions.
+    if (missing.length) applyToWorld(world, missing);
+    this._syncedLevel = island;
+    this._syncedSize = world.damage.size;
+    return missing.length;
+  }
+
   // ---- our own news --------------------------------------------------------
 
   // Mario's client owns Mario, so it is the one that announces what happened to
@@ -243,6 +321,7 @@ export class MarioNet {
       });
     }
     this.emitOwnEvents();
+    this.syncLevelDamage();
     this.session.pump(this.tick);
 
     // The pilot's snapshot is in WORLD pixels. Convert into this island's local
