@@ -8,6 +8,7 @@ import { layoutArchipelago } from '../wings/archipelago.js';
 import { DamageSync, applyToWorld } from './damage-sync.js';
 import { noteDesync } from './desync.js';
 import { MatchVerdict, MarioEvents, applyWire, mayEmitFrom } from './match-events.js';
+import { marioSnapshot } from './reach.js';
 
 // Mario's half of the match. Like src/wings/debug-panel.js, this file talks to
 // the game ONLY through window.__GAME and builds any DOM it needs itself, so
@@ -327,15 +328,13 @@ export class MarioNet {
     if (!this.session || !this.session.connected) return;
     this.tick++;
     const world = this.game && this.game.world;
-    const p = world && world.player;
-    if (p) {
-      this.session.sendSnapshot(this.tick, {
-        island: this.islandId(),
-        x: p.x, y: p.y, vx: p.vx, vy: p.vy,
-        facing: p.facing, power: p.power, state: p.state,
-        grounded: p.grounded ? 1 : 0, lives: world.lives,
-      });
-    }
+    // Mario's client owns Mario, so it is this side that says whether he is
+    // somewhere the aeroplane could reach — down a pipe, in a coin room or in
+    // a warp zone, he goes out of the snapshot's position entirely rather than
+    // being projected into a place on the island he is not standing on. See
+    // src/net/reach.js for the signal and why the decision lives here.
+    const snap = marioSnapshot(world, this.islandId());
+    if (snap) this.session.sendSnapshot(this.tick, snap);
     this.emitOwnEvents();
     this.syncLevelDamage();
     this.session.pump(this.tick);
@@ -473,6 +472,10 @@ window.__NET = {
   get transport() { return net.transport; },
   state: () => net.state(),
   remote: () => (net.remote ? { ...net.remote } : null),
+  // Exactly what the next snapshot would put on the wire, reachability flag
+  // and all. Built fresh rather than remembered: pump() builds its own from
+  // the same function, so there is only ever one answer to this question.
+  snapshot: () => marioSnapshot(net.game && net.game.world, net.islandId()),
   pump: () => net.pump(),
   winner: () => net.winner(),
   damage: (island) => net.damage.keys(island),

@@ -53,6 +53,15 @@ export class Radar {
           y: fix.y + rng.range(-RADAR.FUZZ_Y_PX, RADAR.FUZZ_Y_PX),
           at: this.ticks,
         };
+      } else {
+        // The antenna swept and found nothing, so the tube shows nothing.
+        // Aging a fix out over FADE_TICKS is right for a contact that is
+        // merely stale; it is wrong for one the sweep positively failed to
+        // find, which is what a Mario down a pipe (src/net/reach.js) or a
+        // peer who has left looks like. Five more seconds of blip there is
+        // not fuzz, it is a lie the pilot can fly to and bomb. The fade below
+        // stays as the backstop for a fix nothing has refreshed at all.
+        this.fix = null;
       }
     }
     if (this.fix && this.ticks - this.fix.at > RADAR.FADE_TICKS) this.fix = null;

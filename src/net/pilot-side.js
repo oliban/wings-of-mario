@@ -2,11 +2,11 @@ import { Transport } from './transport.js';
 import { Session } from './session.js';
 import { Interp } from './interp.js';
 import { roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure } from './lobby.js';
-import { ISLAND_TOP_Y } from '../wings/geo.js';
 import pilot from '../wings/pilot-main.js';
 import { DamageSync, applyToIsland } from './damage-sync.js';
 import { noteDesync } from './desync.js';
 import { MatchVerdict, pilotWireEvent, applyWire, mayEmitFrom } from './match-events.js';
+import { contactFrom, REACH_SNAP } from './reach.js';
 
 // The pilot's half of the match. It reaches into the game only through the
 // `pilot` instance that pilot-main.js already exports, exactly as
@@ -26,6 +26,11 @@ import { MatchVerdict, pilotWireEvent, applyWire, mayEmitFrom } from './match-ev
 // places on the two screens — the pilot bombing empty sea while Mario stands
 // somewhere else entirely. The pilot's own sim IS that layout, so this file
 // reads the origins straight off it rather than recomputing them.
+//
+// The conversion itself is src/net/reach.js#contactFrom, which is also where
+// it refuses to run: the contract holds for the island's own tile map and for
+// nothing else, so a Mario in a pipe, a coin room or a warp zone has no world
+// position at all and is drawn nowhere.
 
 export class PilotNet {
   constructor(opts = {}) {
@@ -34,7 +39,7 @@ export class PilotNet {
     this.transport = null;
     // Mario's discrete fields must never be interpolated into a blend.
     this.marioInterp = new Interp({
-      snap: ['island', 'anim', 'facing', 'power', 'lives', 'state'],
+      snap: ['island', 'anim', 'facing', 'power', 'lives', 'state', ...REACH_SNAP],
     });
     this.remote = null;
     this.lastEvent = null;
@@ -251,21 +256,12 @@ export class PilotNet {
     this.session.maybeSendHash(sim.tick, () => this.damage.hashes());
 
     // Mario's snapshot is in LEVEL-LOCAL pixels. Convert once, here, so the
-    // renderer only ever deals in world coordinates.
+    // renderer only ever deals in world coordinates. A snapshot that says he
+    // is out of reach converts to null and nothing is drawn anywhere: no
+    // contact in the world view, and a dark tube on the next sweep. The
+    // decision is Mario's client's; this side only obeys it (src/net/reach.js).
     const s = this.marioInterp.sampleLocal(sim.tick);
-    if (!s) {
-      this.remote = null;
-    } else {
-      const originX = this.originOf(s.island);
-      this.remote = originX == null
-        ? null // an island this pilot has not laid out; nothing to draw
-        : {
-          x: originX + s.x,
-          y: ISLAND_TOP_Y + s.y,
-          facing: s.facing,
-          island: s.island,
-        };
-    }
+    this.remote = s ? contactFrom(s, this.originOf(s.island)) : null;
     this.host.scene.remoteMario = this.remote;
     // The radar's true contact (spec 3): the tube does its own timing and
     // fuzzing, and simply wants to be told where he really is.
