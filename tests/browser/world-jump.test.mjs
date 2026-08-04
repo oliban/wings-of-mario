@@ -58,7 +58,7 @@ test('the debug world jump', async (t) => {
     assert.match(text, /WORLD 5 of 8/);
     assert.match(text, /\[ back/);
     assert.match(text, /\] on/);
-    assert.match(text, /shift\+1\.\.8 jump/);
+    assert.match(text, /1\.\.8 jump/);
   });
 
   await t.test('it is the real sail, not a teleport', async () => {
@@ -275,7 +275,7 @@ test('the debug world jump is refused in a match', async (t) => {
       return el ? el.textContent : null;
     });
     assert.match(text, /WORLD 1 of 8/);
-    assert.match(text, /REFUSED — MULTIPLAYER/);
+    assert.match(text, /REFUSED — MARIO IS HERE/);
   });
 
   await t.test('neither client faulted', async () => {

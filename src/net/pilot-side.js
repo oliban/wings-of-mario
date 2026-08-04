@@ -398,6 +398,8 @@ async function boot() {
   net.session.on('peer', (m) => say(m.present));
   // One pump per simulation tick, driven by the game loop rather than a timer.
   pilot.onTick = () => net.pump();
+  // So the debug world jump can tell 'in a room alone' from 'Mario is here'.
+  pilot.peerThere = () => !!(net.session && net.session.peerPresent);
   // The moment the archipelago is replaced, half way through the sail.
   pilot.onSailSwap = () => net.onSailSwap();
   return welcome;

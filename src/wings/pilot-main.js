@@ -253,7 +253,7 @@ function showWorldBadge(world, note = '') {
   const tail = note ? `\n${note}` : '';
   worldBadge.textContent =
     `DEBUG  ARCHIPELAGO  WORLD ${world} of ${ARCHIPELAGO.WORLDS}\n`
-    + '[ back   ] on   shift+1..8 jump'
+    + '[ back   ] on   1..8 jump'
     + tail;
 }
 
@@ -275,6 +275,8 @@ class Pilot {
     // (src/net/pilot-side.js). Null when playing offline, which is what the
     // capture tool and every pre-network test run as.
     this.onTick = null;
+    // Set by the net layer alongside onTick — see hasPeer().
+    this.peerThere = null;
     // THE CROSSING between archipelagos (src/wings/sail.js). Started by
     // sailTo() when Mario's client says he has cleared a world, stepped on the
     // SIMULATION clock below, and the owner of the one tick on which the ocean
@@ -450,6 +452,15 @@ class Pilot {
     return !!this.onTick;
   }
 
+  // Is there actually a MARIO on the other end? Being in a room is not the same
+  // thing: the pilot mints the room and flies alone in it until somebody joins,
+  // which is most of a playtest. The net layer sets this the same way it sets
+  // onTick, so this file still knows nothing about sessions; null means nobody
+  // is there, which is also the honest answer offline.
+  hasPeer() {
+    return !!(this.peerThere && this.peerThere());
+  }
+
   // ---------------------------------------------------------------------------
   // DEBUG — jump the archipelago to any world. [ ] and shift+1..8.
   // ---------------------------------------------------------------------------
@@ -479,8 +490,12 @@ class Pilot {
   // both players, and that path is untouched by any of this.
   jumpTo(toWorld) {
     const from = this.sim.archipelago.world;
-    if (this.connected()) {
-      showWorldBadge(from, 'REFUSED — MULTIPLAYER, MARIO WOULD BE LEFT BEHIND');
+    // Refused only when a MARIO is actually on the other end. Being in a room
+    // alone is the normal state of a playtest — the pilot mints the room and
+    // flies in it until somebody joins — and refusing there made the tool
+    // unusable for exactly the person it was built for.
+    if (this.hasPeer()) {
+      showWorldBadge(from, 'REFUSED — MARIO IS HERE AND WOULD BE LEFT BEHIND');
       return false;
     }
     // Clamped rather than rejected, so holding ] at world 8 parks there instead
