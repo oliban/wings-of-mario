@@ -1,7 +1,7 @@
 import { Transport } from './transport.js';
 import { Session } from './session.js';
 import { Interp } from './interp.js';
-import { roomFromLocation, wsUrl, mintRoom, showRoom, banner } from './lobby.js';
+import { roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure } from './lobby.js';
 import { ISLAND_TOP_Y } from '../wings/geo.js';
 import pilot from '../wings/pilot-main.js';
 
@@ -145,6 +145,11 @@ export class PilotNet {
 
 const net = new PilotNet();
 
+// The room we were trying to join when a boot failed. Held out here because
+// the catch below needs it to tell the player which code to hand the other
+// player, and it is minted inside boot().
+let joining = null;
+
 async function boot() {
   await window.__WINGS.ready;
   const { room, solo } = roomFromLocation(location.search);
@@ -153,6 +158,7 @@ async function boot() {
     return null;
   }
   const code = room || (await mintRoom(location.origin));
+  joining = code;
   showRoom(window, code, 'pilot');
   banner(document, `ROOM ${code} — PILOT`);
   const welcome = await net.connect({ room: code, side: 'pilot', location });
@@ -166,12 +172,15 @@ async function boot() {
 }
 
 const ready = boot().catch((e) => {
-  // A warning, not an error. The commonest cause by far is this page being
-  // served by a plain static server with no room endpoint — the capture tool,
-  // the older browser tests — and in that case falling back to one-player is
-  // the correct behaviour, not a fault worth reddening a console over.
+  // A warning, not an error, whichever cause this was. The commonest by far is
+  // this page being served by a plain static server with no room endpoint — the
+  // capture tool, the older browser tests — and in that case falling back to
+  // one-player is the correct behaviour, not a fault worth reddening a console
+  // over. The refusals the server can actually name say so on the banner
+  // instead of hiding behind OFFLINE; see bootFailure.
+  const fail = bootFailure(e, { room: joining, side: 'pilot' });
   console.warn('[pilot net] offline:', e && e.message ? e.message : e);
-  banner(document, 'OFFLINE');
+  banner(document, fail.text);
   return null;
 });
 

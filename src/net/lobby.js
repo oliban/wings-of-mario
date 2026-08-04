@@ -44,6 +44,47 @@ export function showRoom(win, code, side) {
   return url.toString();
 }
 
+// Why the boot failed, in the player's terms. The banner used to read OFFLINE
+// for every failure alike, which told a player holding the pilot seat in
+// another tab nothing at all about the tab they were staring at.
+//
+// Only the causes the WIRE can tell apart get a diagnosis. The server refuses a
+// hello with exactly three reasons this page can hit — 'side taken' and
+// 'room full' from Room.join, 'bad room code' from an unparseable code — and
+// they arrive as the message of the error the session rejects with. Everything
+// else (no server, no /room endpoint, a socket that never opened) is
+// indistinguishable from the ordinary one-player case and stays OFFLINE.
+//
+// Note what is NOT here: an expired room. The server joins by getOrCreate, so a
+// code whose room was reaped or lost to a restart quietly becomes a new empty
+// room and the client is welcomed into it. There is nothing on the wire to
+// report, and inventing one would be a guess.
+const OTHER_SEAT = { pilot: 'mario', mario: 'pilot' };
+const SEAT_PAGE = { pilot: '/pilot.html', mario: '/' };
+
+export function bootFailure(err, { room, side } = {}) {
+  const reason = err && err.message ? String(err.message) : '';
+  const here = room ? `ROOM ${room} — ` : '';
+  const other = OTHER_SEAT[side];
+
+  if (reason === 'side taken' && other) {
+    const go = room
+      ? `AT ${SEAT_PAGE[other]}?room=${room}`
+      : 'ON THE OTHER PAGE';
+    return {
+      diagnosed: true,
+      text: `${here}${side.toUpperCase()} SEAT TAKEN — ${other.toUpperCase()} JOINS ${go}`,
+    };
+  }
+  if (reason === 'room full') {
+    return { diagnosed: true, text: `${here}FULL — BOTH SEATS ARE TAKEN` };
+  }
+  if (reason === 'bad room code') {
+    return { diagnosed: true, text: `${here}NO SUCH ROOM — START A FRESH ROOM` };
+  }
+  return { diagnosed: false, text: 'OFFLINE' };
+}
+
 // The banner. Built here rather than in either page's markup, so index.html —
 // an upstream file — gains nothing at all and pilot.html gains one script tag.
 export function banner(doc, text) {
