@@ -17,10 +17,6 @@ import {
   enemyMaxFall,
 } from './index.js';
 
-// Apex of the egg's single bounce, in pixels. The impulse is solved from it
-// against the shared enemy gravity rather than hard-coded.
-const EGG_BOUNCE_RISE = 13;
-
 // 0 outline  1 shell dark  2 shell mid  3 shell lit  4 shell spec
 // 5 face      6 eye/mouth   7 foot
 const SPINY_PAL = [
@@ -117,7 +113,6 @@ export default class Spiny extends Entity {
     this.facing = opts.facing || -1;
     this.speed = opts.speed == null ? walkSpeed() : opts.speed;
     this.isEgg = !!(opts.egg || opts.form === 'egg');
-    this.bounced = false;
     if (this.isEgg) {
       this.vx = opts.vx == null ? 0 : opts.vx;
       this.vy = opts.vy == null ? 0 : opts.vy;
@@ -136,20 +131,16 @@ export default class Spiny extends Entity {
     enemyBump(this);
   }
 
+  // The egg cracks open on the frame it LANDS. LandEnemyInitState
+  // (smbdis.asm:12555-12563) clears the enemy state the moment the egg touches
+  // down — "note this will also turn spiny's egg into spiny" — with no bounce in
+  // between. The bounce this used to take was ours and it bought the player an
+  // extra ~40 frames of warning that the original never gave.
   _eggStep() {
     this.applyGravity(enemyGravity(), enemyMaxFall());
     const col = this.moveAndCollide();
     if (col.hitLeft || col.hitRight) this.vx = -this.vx;
     if (!col.hitBottom) return;
-    if (!this.bounced) {
-      // One lively bounce before it cracks open.
-      this.bounced = true;
-      this.vy = -Math.sqrt(2 * enemyGravity() * EGG_BOUNCE_RISE);
-      this.grounded = false;
-      sfx(this.world, 'bump');
-      fx(this.world, 'landingDust', this.centerX, this.y + this.h, 0.8);
-      return;
-    }
     this._hatch();
   }
 

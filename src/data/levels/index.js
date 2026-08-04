@@ -44,6 +44,7 @@ import L81 from './8-1.js';
 import L82 from './8-2.js';
 import L83 from './8-3.js';
 import L84 from './8-4.js';
+import H1 from './h-1.js';
 
 export const LEVELS = {
   '1-1': L11,
@@ -78,10 +79,11 @@ export const LEVELS = {
   '8-2': L82,
   '8-3': L83,
   '8-4': L84,
+  'h-1': H1,
 };
 
-export { ORDER } from './roster.js';
-import { ORDER } from './roster.js';
+export { ORDER, HARRY } from './roster.js';
+import { ORDER, HARRY } from './roster.js';
 
 function normalize(id) {
   if (id == null) return null;
@@ -120,11 +122,16 @@ export function getArea(id, areaId) {
   return (lvl.areas && lvl.areas[areaId]) || null;
 }
 
+// Harry's levels are their own sequence, so finishing one leads to the next of
+// HIS and not back into world 1. Past the last of either sequence there is no
+// next level, which is the signal main.js reads as "the run is over".
 export function nextLevel(id) {
   const key = normalize(id);
   if (!key) return null;
-  const i = ORDER.indexOf(key);
-  return i >= 0 && i + 1 < ORDER.length ? ORDER[i + 1] : null;
+  const seq = ORDER.includes(key) ? ORDER : HARRY.includes(key) ? HARRY : null;
+  if (!seq) return null;
+  const i = seq.indexOf(key);
+  return i >= 0 && i + 1 < seq.length ? seq[i + 1] : null;
 }
 
 export function firstLevel() {

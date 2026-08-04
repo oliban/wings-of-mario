@@ -16,6 +16,7 @@ import {
   bonusPagesFor,
   bonusReturn,
   skyReturn,
+  waterReturn,
   waterRoomSource,
 } from './smb-build.mjs';
 
@@ -160,9 +161,13 @@ ${entsBlock(L.entities)}
   const sp = findSpawn(rows);
   const wp = L.meta.warpPipe;
   const vine = L.meta.vine;
-  const out = landingNear(rows, wp.x + 26);
+  // The return column is DATA, not a search: WaterArea1's own row-$0e record
+  // names EntrancePage 7 for world 5, column 115, and a pipe is standing at 115.
+  // landingNear walked past it to bare floor, so the exit played a pipe
+  // emergence in thin air.
+  const out = waterReturn(L.meta, 5) || { col: landingNear(rows, wp.x + 26), top: 12 };
   const body = `
-${waterRoomSource('5-2b', 'WORLD 5-2', out)}
+${waterRoomSource('5-2b', 'WORLD 5-2', out.col, out.top)}
 ${skyAreaSource('5-2c', 'WORLD 5-2', skyReturn(5, 'GroundArea12'))}
 export default {
   id: '5-2',
@@ -183,7 +188,7 @@ ${contentsBlock(L.contents)}
 ${entsBlock(L.entities)}
   ],
   warps: [
-    { from: { x: ${wp.x}, y: ${wp.top} }, dir: 'down', to: { area: '5-2b', x: 3.5, y: 12, exit: 'down' } },
+    { from: { x: ${wp.x}, y: ${wp.top} }, dir: 'down', to: { area: '5-2b', x: 2.5, y: 0, exit: 'none' } },
   ],
   areas: { '5-2b': WATERROOM, '5-2c': SKY },
   flagpole: { x: ${L.meta.flagpole.x} },

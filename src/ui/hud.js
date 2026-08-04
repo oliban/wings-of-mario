@@ -151,6 +151,120 @@ export function glyphSet(palette) {
   return set;
 }
 
+/* --------------------------------------------------------- outlined glyphs */
+//
+// The strip is painted over the live scene, not over the NES's solid black status
+// bar, so white letters are only as legible as whatever happens to be behind
+// them. Over a water level's foam crests — pure #ffffff — the contrast ratio is
+// literally 1.0 and the score, VÄRLD and TID vanish. The font's own drop shadow
+// does not save it: that shadow only runs along the right and bottom edges, so
+// the top-left flank of every stroke still meets the scene bare.
+//
+// The fix is a 1px halo on all eight sides, in the font's own shadow tone. It is
+// the cheapest thing that restores the original's black-behind-white reading
+// without repainting a status bar over the play field, and being dark it also
+// disappears against the night sky in 6-1 rather than drawing a box around the
+// text.
+//
+// It is baked, not blitted nine times: the halo is computed once per glyph as a
+// 10x10 sprite with one pixel of padding, so drawing a character stays a single
+// drawImage the way the rest of this file assumes. The padding is why the sprite
+// is drawn at (x-1, y-1) — the advance is still GLYPH_W.
+
+const OUTLINE_PAD = 1;
+const OUTLINE_SLOT = 'e'; // a palette slot the 4-colour font sets never use
+
+// Grow the glyph's opaque footprint by one pixel in every direction. The halo
+// wraps the drop shadow as well as the letter, so the ring is uniform all round
+// instead of thickening where the font already had ink.
+function outlineRows(rows) {
+  const w = rows[0].length;
+  const h = rows.length;
+  const ow = w + OUTLINE_PAD * 2;
+  const oh = h + OUTLINE_PAD * 2;
+  const solid = (x, y) => {
+    if (x < 0 || y < 0 || x >= w || y >= h) return false;
+    const c = rows[y][x];
+    return c !== '.' && c !== ' ';
+  };
+  const out = [];
+  for (let oy = 0; oy < oh; oy++) {
+    let row = '';
+    for (let ox = 0; ox < ow; ox++) {
+      const x = ox - OUTLINE_PAD;
+      const y = oy - OUTLINE_PAD;
+      if (solid(x, y)) {
+        row += rows[y][x];
+        continue;
+      }
+      let near = false;
+      for (let dy = -1; dy <= 1 && !near; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (solid(x + dx, y + dy)) {
+            near = true;
+            break;
+          }
+        }
+      }
+      row += near ? OUTLINE_SLOT : '.';
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+const OUTLINE_COLOR = FONT_PAL_WHITE[0]; // the font's own shadow tone
+
+// Pad a 4-entry font palette out to the outline slot.
+function outlinePalette(pal) {
+  const out = pal.slice();
+  while (out.length < 14) out.push(null);
+  out[14] = OUTLINE_COLOR;
+  return out;
+}
+
+const OUTLINED = new Map();
+
+// One outlined glyph set per palette, cached the same way GlyphSet caches its
+// recolours — a palette swap must not cost more than a lookup.
+function outlinedGlyph(ch, palette) {
+  const key = setKey(palette);
+  let set = OUTLINED.get(key);
+  if (!set) {
+    set = Object.create(null);
+    OUTLINED.set(key, set);
+  }
+  const hit = set[ch];
+  if (hit !== undefined) return hit;
+  const base = baseGlyph(ch);
+  let out = null;
+  if (base) {
+    const pal = typeof palette === 'string' ? TEXT_PAL[palette] : palette;
+    out = makeSprite(outlineRows(base.rows), outlinePalette(pal || FONT_PAL_WHITE), {
+      name: `text.outline.${key}.${ch}`,
+    });
+  }
+  set[ch] = out;
+  return out;
+}
+
+/**
+ * `drawText` with a 1px dark halo, for text painted over the play field.
+ * Same signature, same advance, same 8px grid — only the ring is added.
+ */
+export function drawTextOutlined(ctx, str, x, y, palette) {
+  if (str == null) return 0;
+  const s = String(str);
+  let cx = x | 0;
+  const cy = y | 0;
+  for (let i = 0; i < s.length; i++) {
+    const g = outlinedGlyph(s[i], palette);
+    if (g) ctx.drawImage(g.canvas, cx - OUTLINE_PAD, cy - OUTLINE_PAD);
+    cx += GLYPH_W;
+  }
+  return cx - (x | 0);
+}
+
 /* ------------------------------------------------------------ text drawing */
 
 export function textWidth(str) {
@@ -407,9 +521,9 @@ export class Hud {
     const d = data || DEFAULT_STATE;
     const t = this.tick;
 
-    drawText(ctx, d.name || tr('mario'), L.marioX, L.rowLabel);
-    drawText(ctx, tr('world'), L.worldX, L.rowLabel);
-    drawText(ctx, tr('time'), L.timeX, L.rowLabel);
+    drawTextOutlined(ctx, d.name || tr('mario'), L.marioX, L.rowLabel);
+    drawTextOutlined(ctx, tr('world'), L.worldX, L.rowLabel);
+    drawTextOutlined(ctx, tr('time'), L.timeX, L.rowLabel);
 
     // Score. While a big award rolls in the digits sit in the gold palette so
     // the eye is pulled to them, then settle back to white.
@@ -418,19 +532,19 @@ export class Hud {
     if (digits.length < L.scoreDigits) digits = pad(digits, L.scoreDigits);
     else if (digits.length > 8) digits = '99999999';
     const scorePal = this.rolling ? (t & 4 ? 'gold' : 'amber') : null;
-    drawText(ctx, digits, L.scoreX, L.rowValue, scorePal);
+    drawTextOutlined(ctx, digits, L.scoreX, L.rowValue, scorePal);
 
     // Coin counter.
     const coinSprite = COIN_CYCLE[(t >> 3) % COIN_CYCLE.length];
     coinSprite.draw(ctx, L.coinIconX, L.rowValue);
-    drawText(ctx, '×', L.coinTimesX, L.rowValue);
+    drawTextOutlined(ctx, '×', L.coinTimesX, L.rowValue);
     const coins = Math.max(0, Math.min(99, d.coins | 0));
-    drawText(ctx, pad(coins, 2), L.coinNumX, L.rowValue);
+    drawTextOutlined(ctx, pad(coins, 2), L.coinNumX, L.rowValue);
 
     // World label, centred inside the WORLD field.
     const label = String(d.label || DEFAULT_STATE.label);
     const lx = L.worldX + Math.floor((L.worldFieldW - label.length * GLYPH_W) / 2);
-    drawText(ctx, label, lx, L.rowValue);
+    drawTextOutlined(ctx, label, lx, L.rowValue);
 
     // Timer. Below 100 the digits alternate white/amber; the moment it crosses
     // the threshold they strobe twice as fast for ~44 frames.
@@ -442,11 +556,11 @@ export class Hud {
       const period = this.timeWarn > 0 ? 4 : time < 50 ? 8 : 16;
       timePal = t % period < period / 2 ? 'amber' : null;
     }
-    drawText(ctx, pad(time, 3), L.timeValueX, L.rowValue, timePal);
+    drawTextOutlined(ctx, pad(time, 3), L.timeValueX, L.rowValue, timePal);
 
     if (this.showLives) {
       GLYPH.marioHead.draw(ctx, L.livesX, L.rowLabel - 8);
-      drawText(ctx, '×' + Math.max(0, Math.min(99, d.lives | 0)), L.livesX + 8, L.rowLabel - 8);
+      drawTextOutlined(ctx, '×' + Math.max(0, Math.min(99, d.lives | 0)), L.livesX + 8, L.rowLabel - 8);
     }
 
     if (this.paused) {

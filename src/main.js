@@ -636,6 +636,31 @@ window.__GAME = {
     return true;
   },
 
+  // The same two calls for Luigi's pad. Without these there is no way to drive
+  // the second brother from a probe, so every co-op rule was untestable through
+  // this API and the bugs that only bite player two stayed invisible — a brother
+  // who could not break a brick survived a full visual sweep and a playthrough.
+  // `hold()` above is deliberately left alone: it still drives player one only.
+  hold2(map) {
+    game.scripted = true;
+    pad2.force({
+      left: !!map.left,
+      right: !!map.right,
+      up: !!map.up,
+      down: !!map.down,
+      jump: !!map.jump,
+      run: !!map.run,
+      start: !!map.start,
+      select: !!map.select,
+    });
+    return true;
+  },
+
+  release2() {
+    pad2.release();
+    return true;
+  },
+
   tick(n = 1) {
     for (let i = 0; i < n; i++) {
       game.update();

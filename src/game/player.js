@@ -247,10 +247,13 @@ const approach =
 // horizontal speed at takeoff. physics.js's jumpVelocityFor(speed) returns that whole
 // row as { vy0, gHold, gFall } — never a bare number, so it is consumed directly here
 // rather than through the numeric resolver. The row is latched for the whole jump.
+// Thresholds are the ROM's, $09/$10/$19/$1c over 16 — see the table in
+// physics.js for the derivation. The third is 1.5625 ($19, exactly maxWalk),
+// not 2.3125; this copy must not drift from that one.
 const FALLBACK_JUMP_ROWS = [
   { at: 0.0, vy0: -4.0, gHold: 0.125, gFall: 0.4375 },
   { at: 1.0, vy0: -4.0, gHold: 0.1171875, gFall: 0.375 },
-  { at: 2.3125, vy0: -5.0, gHold: 0.15625, gFall: 0.5625 },
+  { at: 1.5625, vy0: -5.0, gHold: 0.15625, gFall: 0.5625 },
 ];
 
 function fallbackJumpRow(speed) {
@@ -575,6 +578,12 @@ const LEDGE_SNAP = 5;
 // $20 foot adder), so the bottom of the body never catches on a ledge face.
 const SIDE_FOOT_SKIP = 8;
 
+// ImpedePlayerMove moves Mario ONE PIXEL away from a wall he is pressed into
+// every frame the side collision lasts (smbdis.asm:12318-12351), which is what
+// stops the original ever leaving him embedded in solid geometry. Player-only:
+// the ROM routine is, and resolveX is shared with every enemy.
+const SIDE_EJECT = 1;
+
 // ---------------------------------------------------------------------------
 
 export default class Player extends EntityBase {
@@ -626,6 +635,11 @@ export default class Player extends EntityBase {
     this.starTick = 0;
     this.starChain = 0;
     this.stompChain = 0;
+    // StompTimer ($0791). Set when a stomp is absorbed, decremented once per
+    // frame like every other frame timer, and read by the collision loop to
+    // turn what would be an injury into another stomp — see update() and
+    // world._playerEntityCollisions.
+    this.stompTimer = 0;
 
     this.throwTimer = 0;
     this.fireCooldown = 0;
@@ -637,6 +651,7 @@ export default class Player extends EntityBase {
     this.autoCorpse = false;
     this.persistent = true;
     this.colOpts.footSkip = SIDE_FOOT_SKIP;
+    this.colOpts.ejectX = SIDE_EJECT;
 
     this.walkPhase = 0;
     this.animPhase = 0;
@@ -666,6 +681,16 @@ export default class Player extends EntityBase {
   // -------------------------------------------------------------------------
   // public surface
   // -------------------------------------------------------------------------
+
+  // Entity's base getter answers this by comparing against `world.player`, which
+  // in co-op names only ONE of the two brothers. Every consumer of it asks "is
+  // this A player" — may it break a brick, skip it in the axe hazard sweep, keep
+  // it safe from despawn — and Luigi answering false to all three made him a
+  // second-class brother who could not open a brick wall. `world.player` keeps
+  // its own meaning (the primary/camera brother); this is a different question.
+  get isPlayer() {
+    return true;
+  }
 
   get big() {
     return this.power !== POWER.SMALL;
@@ -734,6 +759,7 @@ export default class Player extends EntityBase {
     this.starFrames = 0;
     this.stompChain = 0;
     this.starChain = 0;
+    this.stompTimer = 0;
     this.fireballs.length = 0;
     this.controlsLocked = false;
     this._clip = null;
@@ -767,10 +793,29 @@ export default class Player extends EntityBase {
     if (this.landSquash > 0) this.landSquash--;
     if (this.stretch > 0) this.stretch--;
     if (this.invulnFrames > 0) this.invulnFrames--;
+    // StompTimer is $0791, offset $11 into Timers ($0780), which is inside the
+    // frame-timer range DecTimers walks (`ldx #$14`, asm:788-799) — so it ticks
+    // down every frame, not on an interval. DecTimers runs at the top of the
+    // main loop, BEFORE GameEngine and therefore before the enemy collision
+    // pass; decrementing it here, in the roster update that world.js runs ahead
+    // of _playerEntityCollisions (world.js:1709 then :1742), reproduces that
+    // order. The effect is that a stomp keeps the timer live for the remainder
+    // of the frame that set it, which is exactly the window in which a second
+    // enemy standing next to the first is still being walked by the loop.
+    if (this.stompTimer > 0) this.stompTimer--;
     this._updateStar();
     this._pruneFireballs();
 
     this._checkVines();
+
+    // JumpspringAnimCtrl, consumed once per frame. A springboard re-asserts it
+    // on every frame it animates (SpringBoard.update, which runs after the
+    // roster — world.js:1642 then :1651), so reading it here and dropping it
+    // means it can never outlive the board that set it. A latch the board had
+    // to clear would strand the player unable to jump for good the moment he
+    // rode one through a level change, a warp or a death.
+    this._springLock = this.springAnim;
+    this.springAnim = false;
 
     switch (this.state) {
       case 'normal':
@@ -894,6 +939,17 @@ export default class Player extends EntityBase {
     if (this.jumpBuffer > 0) this.jumpBuffer--;
     if (this.grounded) this.coyote = P.coyote;
     else if (this.coyote > 0) this.coyote--;
+
+    // CheckForJumping (smbdis.asm:6064-6066) reads JumpspringAnimCtrl BEFORE it
+    // reads the A button and skips the whole jump routine while a jumpspring is
+    // animating; the vertical collision path does the same at asm:12007-12008,
+    // branching away from LandPlyr. Ours has to say it out loud because
+    // SpringBoard.snap() holds a rider `grounded` for the entire compress, so
+    // the fresh press the boost is keyed to is also a legal ordinary jump and
+    // _doJump() fires on it — Mario hops under his own power mid-compress. The
+    // buffer goes with it: the original has none, and a press that survived the
+    // animation would only fire the jump on the frame the spring let go.
+    if (this._springLock) this.jumpBuffer = 0;
 
     if (this.inWater) {
       if (this.jumpBuffer > 0) {
@@ -1400,7 +1456,14 @@ export default class Player extends EntityBase {
     const ex = entity ? entity.x + (entity.w || 16) / 2 : this.x + this.w / 2;
     const ey = entity ? entity.y : this.y + this.h;
     const fixed = stompPointsOf(entity);
-    const score = fixed ? this._awardFixed(ex, ey, fixed) : this._awardChain(ex, ey, 'stompChain');
+    // HandleStompedShellE builds the floatey number as StompChainCounter PLUS
+    // StompTimer (asm:11502-11506), so every enemy already taken this frame
+    // pushes the next one an extra rung up the ladder: two goombas in one
+    // landing pay 100 then 400, not 100 then 200. A single stomp has the timer
+    // at zero and is unaffected, which is why the ordinary ladder is unchanged.
+    const score = fixed
+      ? this._awardFixed(ex, ey, fixed)
+      : this._awardChain(ex, ey, 'stompChain', this.stompTimer | 0);
     sfx(this.world, 'stomp', 'squish');
     // Deliberately no freeze() here — see world._onStompLanded. The stomp was
     // being frozen twice (3 + 2 frames), which is what desynced chain-stomps.
@@ -1445,20 +1508,28 @@ export default class Player extends EntityBase {
     return score;
   }
 
-  _awardChain(x, y, field) {
+  // `bonus` is the ROM's StompTimer, added to the chain counter to pick the
+  // floatey number (asm:11503-11506). It shifts what is PAID without moving the
+  // counter itself — the counter still advances by exactly one per enemy, the
+  // way `inc StompChainCounter` does.
+  _awardChain(x, y, field, bonus = 0) {
     const i = this[field];
-    const last = STOMP_SCORES.length - 1; // index 9 -> 8000
-    // Saturate the counter: past the 1-UP step the chain keeps paying the top
-    // value, it does not keep minting lives.
-    this[field] = Math.min(i + 1, STOMP_SCORES.length + 1);
-    if (i === STOMP_SCORES.length) {
-      // exactly one 1-UP per chain
+    // Saturate the counter ON the 1-UP step, not past it. FloateyNumbersRoutine
+    // (smbdis.asm:1286-1289) clamps FloateyNum_Control at $0b and $0b IS the 1-UP
+    // entry of ScoreUpdateData (asm:1278-1281, `inc NumberofLives` asm:1300), so
+    // once a chain reaches the top EVERY further enemy pays another life — it does
+    // not fall back to 8000. entities/index.js:shellChainScore models the same
+    // clamp for a kicked shell's chain; these two must not disagree. The same
+    // clamp catches an index the bonus pushed past the end.
+    const idx = Math.min(i + (bonus | 0), STOMP_SCORES.length);
+    this[field] = Math.min(i + 1, STOMP_SCORES.length);
+    if (idx >= STOMP_SCORES.length) {
       callAny(this.world, ['addLife', 'oneUp', 'gainLife', 'addLives'], 1);
       sfx(this.world, '1up', 'oneup');
       fx(this.world, 'powerupSparkle', x, y);
       return 0;
     }
-    const score = STOMP_SCORES[Math.min(i, last)];
+    const score = STOMP_SCORES[idx];
     callAny(this.world, ['addScore', 'score', 'addPoints'], score, x, y);
     return score;
   }
@@ -1937,7 +2008,7 @@ export default class Player extends EntityBase {
         this.state = 'done';
         this.hidden = true;
         this.climbVine = null;
-        if (typeof this.world.warp === 'function') this.world.warp(v.warp);
+        if (typeof this.world.warp === 'function') this.world.warp(v.warp, this);
         return;
       }
       this.y = v.y + 2;
@@ -1967,7 +2038,7 @@ export default class Player extends EntityBase {
     const wdef = p.warp;
     const to = wdef && wdef.to;
     if (hasAny(this.world, ['warp', 'doWarp', 'takeWarp', 'enterWarp'])) {
-      callAny(this.world, ['warp', 'doWarp', 'takeWarp', 'enterWarp'], wdef);
+      callAny(this.world, ['warp', 'doWarp', 'takeWarp', 'enterWarp'], wdef, this);
     } else if (to && hasAny(this.world, ['loadArea', 'gotoArea', 'loadLevel'])) {
       callAny(this.world, ['loadArea', 'gotoArea', 'loadLevel'], to.area, to.x, to.y);
     } else {

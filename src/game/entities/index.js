@@ -16,6 +16,7 @@
 import { makeSprite, Anim } from '../../core/gfx.js';
 import { entityRegistry } from '../entity.js';
 import { PHYS } from '../physics.js';
+import { groundTile, tileSolid, tilePlatform } from '../collision.js';
 
 import Goomba from './goomba.js';
 import Koopa from './koopa.js';
@@ -258,6 +259,19 @@ export function enemyDie(e, style, by, score) {
   return true;
 }
 
+// Is there floor under the enemy's own CENTRE? This is the ledge test, and it is
+// deliberately not a look-ahead: ChkForRedKoopa (smbdis.asm:12572-12576) is only
+// reached from NoEToBGCollision — when ChkUnderEnemy (asm:12707) found nothing —
+// and that probe uses offset $15, the BOTTOM MIDDLE (8,18) of the enemy. A red
+// koopa therefore keeps walking until its own centre clears the lip, visibly
+// overhanging the gap, and turns only then. Probing past its leading edge instead
+// turned it about ten pixels early, so it never stepped out over the edge at all.
+// One-way platforms count as floor, exactly as hasGroundAhead has always had it.
+function groundUnderCentre(e) {
+  const t = groundTile(e.world, e, 2);
+  return tileSolid(t) || tilePlatform(t);
+}
+
 // One tick of ground patrol: gravity, tile resolve, turn at walls and
 // (optionally) at ledges. Returns the collision result.
 export function walkStep(e, opts) {
@@ -267,7 +281,7 @@ export function walkStep(e, opts) {
     o.gravity == null ? PHYS.enemyGravity : o.gravity,
     o.maxFall == null ? PHYS.enemyMaxFall : o.maxFall
   );
-  if (o.turnAtLedge && e.grounded && !e.groundAhead(e.facing, 2)) e.facing = -e.facing;
+  if (o.turnAtLedge && e.grounded && !groundUnderCentre(e)) e.facing = -e.facing;
   e.vx = speed * e.facing;
   const col = e.moveAndCollide();
   if (col.hitLeft || col.hitRight) {

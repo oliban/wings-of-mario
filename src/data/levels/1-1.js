@@ -17,7 +17,7 @@
 // the walk-off can reach the door, and the sprite is drawn one tile right.
 // ---------------------------------------------------------------------------
 
-import { ORDER } from './roster.js';
+import { ORDER, HARRY } from './roster.js';
 
 const TILES = [
   '..................................................................................................................................................................................................................',
@@ -178,6 +178,70 @@ function buildWarpZone(order) {
 
 const WARP = buildWarpZone(ORDER);
 
+// HARRY'S WARP ZONE — the SECOND pipe in the game, the one at column 38.
+//
+// Same room, one floor: there are only ever a handful of Harry levels, so they
+// all fit on the ground and the upper ledge the debug zone needs is pointless
+// here. The room is held at 20 columns wide even with one pipe in it, because a
+// room narrower than the 16-tile screen has nothing for the camera to do and
+// reads as broken.
+function buildHarryZone(order) {
+  const first = 6;
+  const step = 4;
+  const floor = 12;
+  const width = Math.max(20, first + order.length * step + 3);
+
+  const g = [];
+  for (let y = 0; y < 15; y++) g.push(new Array(width).fill('.'));
+  const put = (x, y, ch) => {
+    if (x >= 0 && x < width && y >= 0 && y < 15) g[y][x] = ch;
+  };
+
+  for (let x = 0; x < width; x++) {
+    put(x, 0, '#');
+    put(x, 1, '#');
+    put(x, 13, '#');
+    put(x, 14, '#');
+  }
+  for (let y = 2; y < 13; y++) {
+    put(0, y, '#');
+    put(width - 1, y, '#');
+  }
+  for (let x = 1; x < width - 1; x++) put(x, floor, '#');
+
+  // The pipe you drop out of. Lip only — a body hanging into row 2 would put
+  // big Mario's head inside it.
+  put(2, 1, '[');
+  put(3, 1, ']');
+
+  const signs = [{ x: 1.5, y: 4, text: 'HARRY' }];
+  const warps = [];
+  order.forEach((id, i) => {
+    const c = first + i * step;
+    put(c, floor, '[');
+    put(c + 1, floor, ']');
+    signs.push({ x: c + 0.25, y: floor - 1, text: id.toUpperCase() });
+    warps.push({ from: { x: c, y: floor }, dir: 'down', to: { level: id } });
+  });
+
+  return {
+    id: '1-1h',
+    name: 'HARRY ZONE',
+    theme: 'underground',
+    // his own tune starts the moment you drop in, so the room announces itself
+    music: 'harry-lava',
+    width,
+    height: 15,
+    spawn: { x: 2, y: 3 },
+    tiles: g.map((r) => r.join('')),
+    entities: [],
+    signs,
+    warps,
+  };
+}
+
+const HARRY_ZONE = buildHarryZone(HARRY);
+
 export default {
   id: '1-1',
   name: 'WORLD 1-1',
@@ -214,8 +278,10 @@ export default {
     { from: { x: 57, y: 9 }, dir: 'down', to: { area: '1-1b', x: 2.5, y: 3, exit: 'down' } },
     // The first pipe in the game is the tester's door into every other level.
     { from: { x: 28, y: 11 }, dir: 'down', to: { area: '1-1w', x: 2.5, y: 3, exit: 'down' } },
+    // The second pipe is the door into Harry's levels.
+    { from: { x: 38, y: 10 }, dir: 'down', to: { area: '1-1h', x: 2.5, y: 3, exit: 'down' } },
   ],
-  areas: { '1-1b': BONUS, '1-1w': WARP },
+  areas: { '1-1b': BONUS, '1-1w': WARP, '1-1h': HARRY_ZONE },
   flagpole: { x: 198 },
   castle: { x: 203 },
 };

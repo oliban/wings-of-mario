@@ -63,6 +63,12 @@ const MID_H = 24;
 const LOW_H = 16;
 const HEIGHTS = [FULL_H, MID_H, LOW_H, LOW_H];
 
+// ChkFootMTile (asm:12009-12015) lands Mario on the metatile under his feet
+// only when the low nybble of his vertical position is under 5 — within 5px of
+// the tile top. Deeper than that and it jumps to ImpedePlayerMove instead: he
+// is beside the block, not on it.
+const LAND_SLACK = 5;
+
 export default class SpringBoard extends Entity {
   static type = 'springboard';
 
@@ -173,7 +179,24 @@ export default class SpringBoard extends Entity {
         // Jumpspring_Y_PosData is $08,$10,$08,$00 (asm:6625-6626): dip, deepest,
         // dip, flush -- it springs back before it launches.
         this.setStage([2, 3, 2, 0][step]);
-        if (step >= 1) this._sampleBoost();
+        // DEVIATION: the original does NOT check the A button on the first
+        // animation step. `tay / dey` makes Y = JumpspringAnimCtrl - 1
+        // (asm:6631-6633) and the check is gated on `cpy #$01 / bcc BounceJS`,
+        // so step 0's four frames are dead: a player who taps the instant he
+        // lands -- the most natural input there is -- earns nothing, and the
+        // real window is 4 + 4 + 1 = 9 frames.
+        //
+        // Measured here at exactly that: frames 3-11 after contact boosted to
+        // 12.44 tiles, 0-2 and 12+ gave the plain 4.37. Faithful, and reported
+        // twice as not working. The user chose to widen it rather than keep a
+        // mechanic he could not trigger, so the check now runs from contact to
+        // launch, ~13 frames with no dead zone.
+        //
+        // The RULE is untouched: still a FRESH press, never a held button
+        // (_sampleBoost, asm:6648-6656), so holding jump from the approach jump
+        // still gives the small hop and the choice between the two bounces
+        // survives. Only the window moved.
+        this._sampleBoost();
         for (const r of this.riders) this.snap(r.player);
         if (step >= 3) {
           this.phase = 'release';
@@ -205,6 +228,17 @@ export default class SpringBoard extends Entity {
       default:
         break;
     }
+
+    // JumpspringAnimCtrl. While it is set the player's own jump routine is
+    // skipped (asm:6064-6066) and so is the landing routine (asm:12007-12008) —
+    // snap() otherwise leaves a rider looking grounded for the whole compress,
+    // so the fresh press the boost is keyed to doubles as an ordinary jump and
+    // he hops off the plate under his own power. Re-asserted every animating
+    // frame rather than latched: player.update() consumes it, so a rider
+    // carried off by a level change, a warp or a death is never left unable to
+    // jump. JumpspringHandler clears it on the frame it writes Player_Y_Speed
+    // (asm:6657-6661), which is the frame this stops setting it.
+    if (this.phase !== 'idle') for (const r of this.riders) r.player.springAnim = true;
   }
 
   launch(player, boost) {
@@ -227,8 +261,42 @@ export default class SpringBoard extends Entity {
     fx(this.world, 'landingDust', this.x + 8, this.baseline - 2, 0.8);
   }
 
+  // The original's jumpspring is not merely something to stand on. The level
+  // object writes the metatiles $67 (top) and $68 (bottom) into the block
+  // buffer, and CheckForSolidMTiles (asm:12355-12360) calls everything from
+  // $61 up in that group SOLID — so the board blocks Mario from the side and he
+  // has to step up onto it. Ours was a pass-through platform, and a player
+  // arriving at any speed slid straight through the plate and jammed against
+  // whatever stood beyond it. In 2-1 that is the ten-tile wall the spring
+  // exists to clear, one column to the right: the plate was unreachable in
+  // ordinary play and the spring looked broken.
+  //
+  // The metatiles do not move. Only the sprite dips through
+  // Jumpspring_Y_PosData, so the solid box is always the full two tiles from
+  // the baseline up, never the compressed height.
+  _impede(player) {
+    const top = this.baseline - FULL_H;
+    if (player.y + player.h <= top + LAND_SLACK) return; // above it: he clears the block
+    if (player.y >= this.baseline) return;
+    const outLeft = player.x + player.w - this.x;
+    const outRight = this.x + this.w - player.x;
+    if (outLeft <= 0 || outRight <= 0) return;
+    // ImpedePlayerMove (asm:12318-12345) nulls Player_X_Speed and walks him
+    // back off the block; push to the nearer face, never deeper in.
+    if (outLeft < outRight) {
+      player.x = Math.min(player.x, this.x - player.w);
+      if (player.vx > 0) player.vx = 0;
+    } else {
+      player.x = Math.max(player.x, this.x + this.w);
+      if (player.vx < 0) player.vx = 0;
+    }
+  }
+
   onPlayerTouch(player) {
-    if (!this.standing(player) || player.vy < 0) return;
+    if (!this.standing(player) || player.vy < 0) {
+      if (!this._riderOf(player)) this._impede(player);
+      return;
+    }
     // Latch him here too: the collision pass runs after update(), so a brother
     // who arrives a frame late is caught before the plate can drop out from
     // under him.

@@ -499,6 +499,104 @@ const TRACK_LIST = [
     },
   },
 
+  // -- HARRY'S LAVA — the song for the levels built from Harry's paintings --
+  //
+  // Written for h-1 and whatever follows it: an underground level whose floor
+  // is a lava lake. It has to sound HOT rather than merely dark, so it is not a
+  // variation on the cave tune:
+  //
+  //   * D minor, and the phrase falls i - VI - III - V (Dm - Bb - F - A). The
+  //     major V at the end of every four bars is the hook — it keeps lifting,
+  //     so the tune stays an adventure instead of a dirge. This is a level a
+  //     six-year-old drew and should be fun to die to.
+  //   * the triangle plays a slow, heavy two-note lurch with an octave kick on
+  //     the offbeat: molten, sluggish, moving whether you are or not.
+  //   * section B abandons the key and walks down in semitones, then climbs the
+  //     whole chromatic scale back up in one bar. That is the "you are over the
+  //     lava now" section.
+  //   * the noise channel is mostly high ticks with a snare on the third beat,
+  //     and opens out to hats at the end of a phrase — bubbling, not marching.
+  //
+  // Slower than the cave (144 against 150) because the level is a jumping
+  // puzzle: the beat lands where you take off.
+  {
+    name: 'harry-lava',
+    bpm: 144,
+    stepsPerBeat: 4,
+    // 0.88, not 1: five busy channels put this 15% hotter on peak than the
+    // loudest existing track. Measured against all four level tunes rather than
+    // guessed — see scratchpad/hear.mjs.
+    vol: 0.88,
+    order: ['a', 'a', 'b', 'a'],
+    loopIndex: 0,
+    patterns: {
+      a: {
+        p1: {
+          s: 'd5:2 f5:2 a5:3 f5 d5:2 a4:2 d5:4 | a#4:2 d5:2 f5:3 d5 a#4:2 f4:2 a#4:4 |' +
+             'c5:2 f5:2 a5:3 g5 f5:2 c5:2 f5:4 | e5:2 a5:2 c#6:2 a5:2 g5:2 e5:2 a5:4',
+          duty: D50,
+          vol: 0.2,
+          gate: 0.84,
+        },
+        p2: {
+          s: '-:2 f4:2 -:2 a4:2 -:2 d5:2 -:2 a4:2 | -:2 d4:2 -:2 f4:2 -:2 a#4:2 -:2 f4:2 |' +
+             '-:2 a4:2 -:2 c5:2 -:2 f5:2 -:2 c5:2 | -:2 c#5:2 -:2 e5:2 -:2 a5:2 -:2 e5:2',
+          duty: D125,
+          vol: 0.085,
+          gate: 0.55,
+        },
+        tri: {
+          s: 'd2:4 d2:2 a2:2 d2:4 f2:4 | a#1:4 a#1:2 f2:2 a#1:4 d2:4 |' +
+             'f2:4 f2:2 c3:2 f2:4 a2:4 | a2:4 a2:2 e3:2 a2:4 c#3:4',
+          vol: 0.32,
+          gate: 0.88,
+        },
+        noise: {
+          s: '-:2 h:2 -:2 h:2 s:4 -:2 h:2 | -:2 h:2 -:2 h:2 s:4 -:2 h:2 |' +
+             '-:2 h:2 -:2 h:2 s:4 -:2 h:2 | -:2 h:2 -:2 h:2 s:4 o:2 o:2',
+          vol: 0.9,
+        },
+        dpcm: {
+          s: 'k:4 k:4 k:2 -:2 k:4 | k:4 k:4 k:2 -:2 k:4 |' +
+             'k:4 k:4 k:2 -:2 k:4 | k:4 k:4 k:2 k:2 s:4',
+          vol: 0.18,
+        },
+      },
+      b: {
+        p1: {
+          s: 'a5:2 g#5:2 g5:2 f#5:2 f5:4 -:4 | f5:2 e5:2 d#5:2 d5:2 c#5:4 -:4 |' +
+             'd5 d#5 e5 f5 f#5 g5 g#5 a5 a#5:2 a5:2 g5:2 f5:2 | d5:4 a4:4 d5:2 f5:2 a5:4',
+          duty: D25,
+          vol: 0.2,
+          gate: 0.9,
+        },
+        p2: {
+          s: '-:2 c#5:2 -:2 c#5:2 -:2 c5:2 -:2 c5:2 | -:2 b4:2 -:2 b4:2 -:2 a#4:2 -:2 a#4:2 |' +
+             '-:4 a4:4 -:4 a4:4 | -:2 a4:2 -:2 f4:2 -:2 d4:2 -:4',
+          duty: D125,
+          vol: 0.085,
+          gate: 0.6,
+        },
+        tri: {
+          s: 'a2:2 a2:2 g#2:2 g#2:2 g2:2 g2:2 f#2:2 f#2:2 |' +
+             'f2:2 f2:2 e2:2 e2:2 d#2:2 d#2:2 d2:2 d2:2 |' +
+             'a#2:4 a2:4 g2:4 f2:4 | d2:4 d2:4 a1:4 d2:4',
+          vol: 0.32,
+          gate: 0.9,
+        },
+        noise: {
+          s: 'h:2*6 s:4 | h:2*6 s:4 | h:2*6 s:4 | h:2*4 s:4 x:4',
+          vol: 0.9,
+        },
+        dpcm: {
+          s: 'k:2 -:2 k:2 -:2 k:4 k:4 | k:2 -:2 k:2 -:2 k:4 k:4 |' +
+             'k:2 -:2 k:2 -:2 k:4 k:4 | k:4 k:4 k:4 x:4',
+          vol: 0.18,
+        },
+      },
+    },
+  },
+
   // -- driving chromatic march --------------------------------------------
   {
     name: 'castle',
@@ -909,6 +1007,10 @@ const TRACK_ALIASES = {
   overworld: 'overworld',
   underground: 'underground',
   castle: 'castle',
+  // Harry's levels ask for their music by any of these
+  harry: 'harry-lava',
+  lava: 'harry-lava',
+  'harry-lava': 'harry-lava',
   athletic: 'athletic',
   title: 'title',
   'level-complete': 'level-complete',

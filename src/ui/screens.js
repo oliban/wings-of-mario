@@ -914,7 +914,7 @@ export class LevelIntroCard {
     ctx.save();
     ctx.globalAlpha = a;
 
-    drawTextCentered(ctx, 'WORLD ' + this.label, 88);
+    drawTextCentered(ctx, t('world') + ' ' + this.label, 88);
 
     // [head]  x  N   — head, gap, times sign, gap, digits, centred as one unit.
     const lives = String(Math.max(0, Math.min(99, this.lives | 0)));
@@ -1142,7 +1142,7 @@ export class LevelCompleteTally {
     if (this.showHud) hud.draw(ctx, this.world);
 
     drawTextCentered(ctx, t('courseClear'), 72, 'gold');
-    drawTextCentered(ctx, 'WORLD ' + this.label, 90);
+    drawTextCentered(ctx, t('world') + ' ' + this.label, 90);
 
     if (this.phase !== 'intro') {
       drawTextCentered(ctx, 'TIME ' + pad(this.time, 3) + ' × 50', 130);

@@ -73,7 +73,12 @@ export default class Lakitu extends Entity {
     // World x past which he abandons the chase (SMB hands Lakitu off at a
     // fixed point in the level). Null means he follows until outrun.
     this.leaveX = opts.leaveX == null ? null : opts.leaveX;
-    this.period = opts.period == null ? 170 : opts.period;
+    // LakituAndSpinyHandler (smbdis.asm:9600-9604) sets FrenzyEnemyTimer to $80.
+    // That is $078f, below the frame/interval cut at offset $14 (asm:786-799), so
+    // it decrements every frame: an egg every 128 frames. The wind-up below is
+    // ours — the original creates the spiny the instant the timer expires — so the
+    // throw clock runs THROUGH the wind-up and release-to-release stays 128.
+    this.period = opts.period == null ? 128 : opts.period;
     this.throwT = Math.floor(this.period * 0.5);
     this.windT = -1;
     this.passT = 0;
@@ -124,6 +129,7 @@ export default class Lakitu extends Entity {
       this.passT--;
     }
 
+    this.throwT++;
     if (this.windT >= 0) {
       this.windT++;
       if (this.windT === RELEASE_AT) this._release(p);
@@ -131,7 +137,6 @@ export default class Lakitu extends Entity {
       return;
     }
 
-    this.throwT++;
     if (this.throwT >= this.period && this.onScreen(cam, 8)) {
       this.throwT = 0;
       this.windT = 0;

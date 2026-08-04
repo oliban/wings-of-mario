@@ -678,9 +678,30 @@ export function returnColumnFor(world, { area = 'UndergroundArea3', page = null,
 // record, leaving the caller to fall back to its terrain search.
 export function bonusReturn(meta, world, bonusPage) {
   const col = returnColumnFor(world, { page: bonusPage });
-  if (col == null) return null;
+  return col == null ? null : { col, top: pipeTopAt(meta, col) };
+}
+
+// The same pairing for the water rooms, read out of THEIR area's stream.
+// WaterArea1 is a whole area rather than a 32-column window onto a page, so like
+// skyReturn it passes no page and the world match alone decides; its stream
+// carries one row-$0e record for world 5 and one for world 6, and both name
+// EntrancePage 7.
+//
+// The offset is 3, not skyReturn's 2: you leave a water room through a SIDE
+// pipe, and SideExitPipeEntry sets AltEntranceControl to 2 (asm:5706-5710), so
+// PlayerStarting_X_Pos is read at index 2 = $38 = three columns and a half. The
+// caller appends the half.
+export function waterReturn(meta, world) {
+  const col = returnColumnFor(world, { area: 'WaterArea1', offset: 3 });
+  return col == null ? null : { col, top: pipeTopAt(meta, col) };
+}
+
+// The top of the pipe standing in that column, so an exit names a real pipe
+// mouth rather than a bare floor tile. 12 is floor level, and a return that
+// carries it is a return no pipe was found for.
+function pipeTopAt(meta, col) {
   const pipe = (meta.pipes || []).find((p) => p.x <= col && col <= p.x + 1);
-  return { col, top: pipe ? pipe.top : 12 };
+  return pipe ? pipe.top : 12;
 }
 
 // A coin heaven does not put you back through a pipe at all, which is why no
@@ -801,12 +822,33 @@ ${g.map((r) => `    '${r.join('')}',`).join('\n')}
 }
 
 // The underwater bonus room, WaterArea1 — 5-2 and 6-2 each have a pipe into it.
-// You drop in at the left, swim right, and leave by the water pipe.
-export function waterRoomSource(id, name, back) {
+// You drop in at the top left, swim right, and leave by the water pipe.
+//
+// The drop-in is NOT the coin rooms' emergence out of a ceiling, and the room
+// has no ceiling to emerge from: rows 0 and 1 are open water. Coming down a pipe
+// into a sub-area leaves AltEntranceControl at 0 (PlayerRdy clears it,
+// asm:5546-5547; only SideExitPipeEntry sets 2 and CloudExit 3), so PlayerEntrance
+// takes neither pipe branch — it reads `ldy Player_Y_Position / cpy #$30 / bcc
+// AutoControlPlayer` (asm:5498-5501) and simply lets him sink under no control
+// until he is past $30. Position comes from index 0 of both tables: X =
+// PlayerStarting_X_Pos[0] = $28 = column 2.5, and Y = PlayerStarting_Y_Pos
+// [PlayerEntranceCtrl] where WaterArea1's header byte 0 is $41, so
+// (($41 & %00111000) >> 3) = 0 = $00 (asm:2801-2807 for the header bits,
+// 2850-2858 for the lookup) — the very top of the screen, row 0.
+//
+// Hence `spawn: { x: 2, y: 0 }` and callers warping in with `exit: 'none'`: no
+// pipe animation, because the original plays none here.
+export function waterRoomSource(id, name, back, backTop) {
   const b = buildArea('WaterArea1', { theme: 'water' });
-  const rows = b.tiles.map((r) => {
+  // The surface band is the top two ROWS, exactly as emitLevel floods a water
+  // level (`r[x] = y <= 1 ? '~' : '_'`). This once read `x < 2`, the same rule
+  // with the axis swapped, which put the waterline down the left-hand EDGE:
+  // columns 0-1 were surface all the way to the seabed and every row above the
+  // crest was open water. The room now enters at row 0, so it faced the player
+  // on arrival.
+  const rows = b.tiles.map((r, y) => {
     let out = '';
-    for (let x = 0; x < b.width; x++) out += r[x] === '.' ? (x < 2 ? '~' : '_') : r[x];
+    for (let x = 0; x < b.width; x++) out += r[x] === '.' ? (y <= 1 ? '~' : '_') : r[x];
     return out;
   });
   const wp = b.meta.waterPipe;
@@ -820,13 +862,13 @@ const WATERROOM = {
   music: 'underwater',
   width: ${b.width},
   height: 15,
-  spawn: { x: 3, y: 12 },
+  spawn: { x: 2, y: 0 },
   tiles: [
 ${rows.map((r) => `    '${r}',`).join('\n')}
   ],
   entities: [],
   warps: [
-    { from: { x: ${wp.x - 1}, y: ${wp.top} }, dir: 'right', to: { area: 'main', x: ${back}.5, y: 12, exit: 'up' } },
+    { from: { x: ${wp.x - 1}, y: ${wp.top} }, dir: 'right', to: { area: 'main', x: ${back}.5, y: ${backTop}, exit: 'up' } },
   ],
 };
 `;
@@ -836,9 +878,33 @@ ${rows.map((r) => `    '${r}',`).join('\n')}
 // two rows for it: `$24, $05, $24` — blank, five, blank — for the beanstalk
 // route, and `$08, $07, $06` for the other one. So which pipes work depends on
 // how you arrived, and `dests` says which.
+// The room ENDS at the wall the player cannot pass, and the emitted width is the
+// camera's right limit (camera.js: maxX = width*16 - screenW). Emitting anything
+// past the wall therefore lets the camera scroll beyond the warp pipes, and
+// because the camera is forward-only and player.js pins the player to cam.x, a
+// pipe that crosses the left edge is gone for good. That was the bug: at width
+// 70 the camera reached column 54, so walking to the last pipe put the world-8
+// pipe at column 50 permanently out of reach — aiming for it landed you in 7-1.
+//
+// The original solves this with a ScrollLockObject (smbdis.asm:3566) that stops
+// the camera dead. We have no such mechanism, but we do not need one here: the
+// lock exists so the player can walk BACK to a pipe he has passed, which reduces
+// to "the camera's left edge must never pass the first pipe". Ending the room at
+// the wall gives exactly that, from the data, with no camera code.
+//
+// NOTE the trap this replaces: `buildArea` computes width as furthest object + 8
+// (see the width line near the top of this file), and objects that place no
+// tiles — ScrollLockWarp, the Frenzy commands, LoopCmd — count. For GroundArea16
+// the furthest object IS the scroll lock at column 70, so the camera command that
+// exists to constrain the camera was defining the limit it was meant to
+// constrain. That affects 16 of the 34 areas and is its own task; do not "fix"
+// the width line without measuring, because every castle is padded by a trailing
+// LoopCmd 8 columns past the axe and the bridge.
 export function warpZoneSource(id, name, dests) {
   const b = buildArea('GroundArea16', { theme: 'overworld' });
-  const W = 70;
+  const wall = b.objs.filter((o) => o.name === 'ColumnOfSolidBlocks').map((o) => o.x);
+  if (!wall.length) throw new Error('warpZoneSource: no wall found — cannot bound the room');
+  const W = Math.max(...wall) + 1;
   const rows = b.tiles.map((r) => r.slice(0, W));
   const pipes = b.meta.pipes.filter((p) => p.warp);
   const warps = pipes

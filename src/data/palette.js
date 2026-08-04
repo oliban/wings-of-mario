@@ -24,6 +24,9 @@ export const SKY = {
   // which is black, and 3-1, 3-2 and 3-3 all resolve to it. This was '#0d1b3e'
   // and unused by anything; matching the original is the point of the exercise.
   night: '#000000',
+  // Harry's levels are painted on paper, so their sky is the paper. Kept dark
+  // enough that the HUD's white text still reads against it.
+  paper: '#9c9aa6',
 };
 
 // Shared ink colors so every art module outlines consistently.

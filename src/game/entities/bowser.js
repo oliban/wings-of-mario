@@ -25,6 +25,16 @@ const JET = pickAnim(BOSS, ['BOWSER_FLAME.jet', 'BOWSER_FLAME', 'BOWSER_FIRE'], 
 
 const TRACK_FRAMES = 26;
 
+// Which world are we in? `opts.world` wins if a level ever supplies it; otherwise
+// the leading number of the level id ('6-4' -> 6), read the way cannons.js:73
+// reads it. Falls back to 1, i.e. the 1-4 arsenal, when nothing is knowable.
+function worldNumberOf(world, opts) {
+  if (opts && opts.world != null) return opts.world | 0;
+  const lvl = world && world.level;
+  const m = /^(\d+)/.exec(String((lvl && lvl.id) || ''));
+  return m ? m[1] | 0 : 1;
+}
+
 // Apex of Bowser's hop, in pixels — three tiles, as on the bridge. The impulse
 // is solved from it against the shared enemy gravity so his weight comes from
 // the arc, not from a private gravity constant.
@@ -142,8 +152,18 @@ export default class Bowser extends Entity {
     this.fireT = rng.int(0, 40);
     this.breatheT = -1;
 
-    // From world 6 on he leads with hammers as well as fire.
-    this.throwsHammers = !!opts.hammers || (opts.world != null && opts.world >= 6);
+    // ChkFireB / HammerChk (smbdis.asm, RunBowser) split his arsenal by world and
+    // the two halves do NOT overlap:
+    //   worlds 1-5  flames, no hammers   (`cmp #World6 / bcc SetHmrTmr`)
+    //   worlds 6-7  hammers, NO flames   (`cmp #World6 / bcs BowserGfxHandler`)
+    //   world  8    flames AND hammers   (`cmp #World8 / beq SpawnFBr`)
+    // The level data carries no `world` option, so it is read off the level id the
+    // way cannons.js:73 does. Without this he threw no hammers anywhere and
+    // breathed fire everywhere.
+    const wn = worldNumberOf(world, opts);
+    this.worldNum = wn;
+    this.throwsHammers = opts.hammers != null ? !!opts.hammers : wn >= 6;
+    this.breathesFire = opts.fire != null ? !!opts.fire : wn < 6 || wn >= 8;
     this.hammerPeriod = opts.hammerPeriod == null ? 84 : opts.hammerPeriod;
     this.hammerT = rng.int(0, 50);
     this.armT = 0;
@@ -180,7 +200,7 @@ export default class Bowser extends Entity {
     if (col.hitLeft || col.hitRight) this.dir = -this.dir;
 
     this._hopStep();
-    this._fireStep();
+    if (this.breathesFire) this._fireStep();
     if (this.throwsHammers) this._hammerStep();
     if (this.armT > 0) this.armT--;
   }
@@ -248,12 +268,45 @@ export default class Bowser extends Entity {
     sfx(this.world, 'bump');
     if (typeof this.world.freeze === 'function') this.world.freeze(2);
     fx(this.world, 'fireballBurst', this.centerX, this.centerY);
-    if (this.hp <= 0) this.defeat(fb);
+    // The fifth fireball is the ONLY thing that unmasks him — the axe just drops
+    // the bridge, and the plunge hides whatever he really was.
+    if (this.hp <= 0) this.defeat(fb, true);
     return true;
   }
 
-  // The axe drops the bridge out from under him.
-  defeat(by) {
+  // BowserIdentities (smbdis.asm:11120) — indexed by WorldNumber, which is
+  // zero-based, so world 1 unmasks as a goomba and only world 8 is the real
+  // thing. HurtBowser (asm:11128-11145) rewrites Enemy_ID in place, gives it
+  // `lda #$fe` of upward speed and a defeated state, and THAT is the body that
+  // falls. Our roster's names, in the same order.
+  _revealType() {
+    const ROSTER = ['goomba', 'koopa', 'buzzy', 'spiny', 'lakitu', 'blooper', 'hammerbro'];
+    if (this.worldNum < 1 || this.worldNum > ROSTER.length) return null;
+    return ROSTER[this.worldNum - 1];
+  }
+
+  // Swap the boss for the little enemy he always was and let that tumble away.
+  // Returns true when the reveal happened and Bowser himself is gone.
+  _reveal(by) {
+    const type = this._revealType();
+    if (!type) return false;
+    const e = spawnAt(this.world, type, this.x, this.y, {
+      variant: type === 'koopa' ? 'green' : undefined,
+      active: true,
+    });
+    if (!e) return false;
+    // Seat it where his feet were, not where his shoulders were.
+    e.x = this.centerX - e.w * 0.5;
+    e.y = this.y + this.h - e.h;
+    e.facing = this.facing;
+    if (typeof e.kill === 'function') e.kill('shell', by || null);
+    e.vy = -2.4;
+    return true;
+  }
+
+  // The axe drops the bridge out from under him. `unmask` is set only by the
+  // fireball path; everything else takes the plunge as Bowser.
+  defeat(by, unmask) {
     if (this.dead) return;
     this.dead = true;
     this.tangible = false;
@@ -268,6 +321,9 @@ export default class Bowser extends Entity {
     sfx(this.world, 'bowserfall');
     addScore(this.world, 5000, this.centerX, this.y);
     fx(this.world, 'enemyPoof', this.centerX, this.centerY);
+    // Worlds 1-7, killed by fire: the disguise comes off and the impostor falls
+    // in his place, so Bowser's own body must not also be drawn plunging.
+    if (unmask && this._reveal(by)) this.remove();
   }
 
   onAxe() {

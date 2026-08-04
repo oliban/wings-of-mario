@@ -18,8 +18,35 @@ import {
   sfx,
 } from './index.js';
 
-const STILL_FRAMES = 140;
+// HandleStompedShellE (smbdis.asm:11499-11510) sets EnemyIntervalTimer from
+// RevivalRateData (asm:11496) to $10. EnemyIntervalTimer is $0796, ABOVE the
+// frame-timer cut at offset $14, so DecTimers (asm:786-799) only decrements it
+// once per 21 frames: 16 * 21 = 336 frames before the koopa climbs back in.
+//
+// The last WOBBLE_FRAMES of that are the shiver that telegraphs it. The original
+// has no wobble — it is ours — so it is spent out of the 336, not added to it.
+//
+// NOT YET FAITHFUL: RevivalRateData's second entry is $0b (231 frames) under
+// PrimaryHardMode, i.e. worlds 5-8. We have no hard-mode flag at all yet — see
+// the hard-mode item in agent-reports/enemies.md, which covers enemy walk speed,
+// the hammer interval and Bowser's flame timer as well.
+// The ROM's own two numbers, kept separate so the total below can never drift
+// away from them: $10 ticks of a timer that moves once every 21 frames.
+const REVIVE_TICKS = 0x10;
+const INTERVAL_FRAMES = 21;
+const REVIVE_FRAMES = REVIVE_TICKS * INTERVAL_FRAMES; // 336
+
 const WOBBLE_FRAMES = 80;
+const STILL_FRAMES = REVIVE_FRAMES - WOBBLE_FRAMES;
+
+// KickedShellPtsData (smbdis.asm:11325) = $0a, $06, $04, indexed by the shell's
+// revival timer when the player kicks it. Those are FloateyNumTileData indices,
+// so via chainScore's zero-based view they are 8000 / 1000 / 500 — kicking a
+// shell in the last instants before the koopa climbs back in is worth far more
+// than the chain formula pays. HandlePECollisions (asm:11366-11373) reads the
+// timer, and only falls back to `$03 + StompChainCounter` when it is >= 3.
+// chainScore indices for 8000 / 1000 / 500, in timer order 0, 1, 2.
+const KICKED_SHELL_PTS = [9, 5, 3];
 
 const ART = {
   green: {
@@ -82,6 +109,14 @@ export default class Shell extends Entity {
 
   get wobbling() {
     return !this.sliding && this.stillT >= STILL_FRAMES;
+  }
+
+  // The ROM's EnemyIntervalTimer for this shell: it starts at $10 and counts
+  // DOWN once every 21 frames, where our stillT counts UP once a frame. Zero
+  // means the koopa is climbing back out this instant.
+  get revivalTimer() {
+    if (this.sliding) return REVIVE_TICKS;
+    return Math.max(0, REVIVE_TICKS - Math.floor(this.stillT / INTERVAL_FRAMES));
   }
 
   _hitWall(col) {
@@ -194,12 +229,21 @@ export default class Shell extends Entity {
     }
     let dir = player && player.centerX > this.centerX ? -1 : 1;
     if (player && Math.abs(player.vx || 0) > 0.15) dir = player.vx > 0 ? 1 : -1;
+
+    // Read the revival timer BEFORE kicking — kick() resets stillT, and the
+    // original scores off the timer the shell had at the moment of contact.
+    const timer = this.revivalTimer;
     this.kick(dir);
-    // The kick itself scores: HandlePECollisions (smbdis.asm:11366) does
-    // `lda #$03 / adc StompChainCounter`, so a fresh chain pays 400. Only the
-    // side-kick pays — a shell kicked by landing on it is already covered by
-    // the stomp chain the world awards.
-    addScore(this.world, chainScore(2 + (player ? player.stompChain | 0 : 0)), this.centerX, this.y);
+
+    // The kick itself scores. HandlePECollisions (smbdis.asm:11366-11373) does
+    // `lda #$03 / adc StompChainCounter`, so a fresh chain pays 400 — but only
+    // when the shell is not about to re-animate. `ldy EnemyIntervalTimer,x /
+    // cpy #$03 / bcs KSPts` diverts anything under three ticks to
+    // KickedShellPtsData instead, paying 8000, 1000 or 500 for catching it in
+    // the last moments. Only the side-kick pays at all: a shell kicked by
+    // landing on it is already covered by the stomp chain the world awards.
+    const idx = timer < KICKED_SHELL_PTS.length ? KICKED_SHELL_PTS[timer] : 2 + (player ? player.stompChain | 0 : 0);
+    addScore(this.world, chainScore(idx), this.centerX, this.y);
   }
 
   onFireball(fb) {

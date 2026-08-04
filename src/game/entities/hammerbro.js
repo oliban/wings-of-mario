@@ -125,10 +125,14 @@ export default class HammerBro extends Entity {
     this.dir = opts.dir || -1;
     this.walkT = 40;
 
-    this.throwPeriod = opts.throwPeriod == null ? 118 : opts.throwPeriod;
+    // ProcHammerBro (smbdis.asm:9219-9231): HammerThrowingTimer reloads from
+    // HammerThrowTmrData (asm:9207) with $30 and is decremented once per frame,
+    // so a hammer leaves his hand every 49 frames — relentlessly, for as long as
+    // he is on screen. There is no volley in the original: the bursts-and-gaps
+    // pattern this used to have was invention, and it cost him half his output.
+    this.throwPeriod = opts.throwPeriod == null ? 49 : opts.throwPeriod;
     this.throwT = Math.floor(this.throwPeriod * (opts.phase == null ? 0.35 : opts.phase));
     this.windT = -1;
-    this.volley = 0;
 
     this.hopPeriod = opts.hopPeriod == null ? 170 : opts.hopPeriod;
     this.hopT = 0;
@@ -198,24 +202,23 @@ export default class HammerBro extends Entity {
   // The wind-up pose already shows the hammer cocked over his head, so the
   // thrown entity only appears at the moment of release.
   _throwStep() {
+    // The throw clock runs through the wind-up as well, so release-to-release is
+    // throwPeriod exactly rather than throwPeriod + WINDUP. The wind-up pose is
+    // ours — the original spawns the hammer the instant the timer expires — so it
+    // has to be paid for out of the interval, not added on top of it.
+    this.throwT++;
     if (this.windT >= 0) {
       this.windT++;
       if (this.windT === RELEASE_AT) this._release();
-      if (this.windT >= WINDUP) {
-        this.windT = -1;
-        // Mid-volley the next hammer comes almost immediately.
-        if (this.volley > 0) this.throwT = this.throwPeriod - 26;
-      }
+      if (this.windT >= WINDUP) this.windT = -1;
       return;
     }
-    if (++this.throwT < this.throwPeriod) return;
+    if (this.throwT < this.throwPeriod) return;
     this.throwT = 0;
     this.windT = 0;
-    if (this.volley <= 0) this.volley = rng.int(1, 3);
   }
 
   _release() {
-    this.volley--;
     sfx(this.world, 'kick');
     spawnAt(this.world, 'hammer', this.x + (this.facing > 0 ? 10 : -6), this.y - 10, {
       vx: 1.7 * this.facing,

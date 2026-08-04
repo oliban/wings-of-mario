@@ -16,6 +16,7 @@ import {
   bonusPagesFor,
   bonusReturn,
   skyReturn,
+  waterReturn,
   waterRoomSource,
 } from './smb-build.mjs';
 
@@ -154,12 +155,15 @@ ${entsBlock(L.entities)}
   // walked past it to bare floor, so the exit played a pipe emergence in thin air.
   const back = bonusReturn(L.meta, 6, pages[0]) || { col: landingNear(rows, wps[0].x + 24), top: 12 };
   const back2 = bonusReturn(L.meta, 6, pages[1]) || { col: landingNear(rows, wps[2].x + 24), top: 12 };
-  const outw = landingNear(rows, wps[1].x + 24);
+  // Same for the water room, off WaterArea1's own stream rather than the coin
+  // room's — row $0e there names EntrancePage 7 for world 6, column 115, and a
+  // pipe is standing at 115.
+  const outw = waterReturn(L.meta, 6) || { col: landingNear(rows, wps[1].x + 24), top: 12 };
   const vine = L.meta.vine;
   const body = `
 ${bonusRoomSource('6-2b', 'WORLD 6-2', pages[0], back.col, back.top)}
 ${bonusRoomSource('6-2d', 'WORLD 6-2', pages[1], back2.col, back2.top, 'BONUS2')}
-${waterRoomSource('6-2w', 'WORLD 6-2', outw)}
+${waterRoomSource('6-2w', 'WORLD 6-2', outw.col, outw.top)}
 ${skyAreaSource('6-2c', 'WORLD 6-2', skyReturn(6, 'GroundArea21'), 'GroundArea21')}
 export default {
   id: '6-2',
@@ -181,7 +185,7 @@ ${entsBlock(L.entities)}
   ],
   warps: [
     { from: { x: ${wps[0].x}, y: ${wps[0].top} }, dir: 'down', to: { area: '6-2b', x: 3.5, y: 3, exit: 'down' } },
-    { from: { x: ${wps[1].x}, y: ${wps[1].top} }, dir: 'down', to: { area: '6-2w', x: 3.5, y: 12, exit: 'down' } },
+    { from: { x: ${wps[1].x}, y: ${wps[1].top} }, dir: 'down', to: { area: '6-2w', x: 2.5, y: 0, exit: 'none' } },
     { from: { x: ${wps[2].x}, y: ${wps[2].top} }, dir: 'down', to: { area: '6-2d', x: 3.5, y: 3, exit: 'down' } },
   ],
   areas: { '6-2b': BONUS, '6-2d': BONUS2, '6-2w': WATERROOM, '6-2c': SKY },

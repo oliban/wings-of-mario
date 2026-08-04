@@ -317,6 +317,31 @@ function resolveX(world, box, dx, opts, res) {
   const ty0 = Math.floor(box.y / TILE);
   const ty1 = rangeEnd(box.y, box.h - skip, ty0);
 
+  // SMB's ImpedePlayerMove (smbdis.asm:12318-12351) does not merely stop the
+  // player on a side collision: it nullifies his X speed AND MOVES HIM ONE PIXEL
+  // AWAY from the wall he is pressed into (`lda #$ff` for a wall on the right,
+  // `lda #$01` for one on the left, then `adc Player_X_Position`). Repeated every
+  // frame the collision persists, that continuously extrudes a body which has
+  // ended up INSIDE a solid — grown to big inside a one-tile pocket, arrived from
+  // a warp, pushed by a lift — back out of it. The clamps below deliberately
+  // never yank an overlapping box backwards, so on their own they leave such a
+  // body exactly where it is, forever: the wedge the user hit in 3-1b's pyramid.
+  //
+  // Only when the clamp could not separate the box: the clamp target `s` lies
+  // BEHIND where the box already is, which happens only when it starts overlapping
+  // the column. `s === x0` is an ordinary wall hit landing exactly flush and must
+  // keep its exact stop, or every wall in the game turns spongy — so the test is
+  // strict.
+  //
+  // ImpedePlayerMove's two early exits ("if the player's speed is already
+  // directed AWAY from the wall, do nothing and let him leave") need no code
+  // here: a rightward sweep only ever scans columns to the RIGHT, so hitRight
+  // cannot be raised by a body moving left, and vice versa.
+  //
+  // Player-only, via opts.ejectX. ImpedePlayerMove is player-only in the ROM and
+  // enemies must keep the plain clamp.
+  const eject = opts.ejectX > 0 ? opts.ejectX : 0;
+
   if (dx > 0) {
     const c0 = Math.floor((x0 + w) / TILE);
     const c1 = rangeEnd(x1, w, c0);
@@ -325,6 +350,7 @@ function resolveX(world, box, dx, opts, res) {
         // max() so a box that starts overlapping is never yanked backwards.
         const s = c * TILE - w;
         x1 = s > x0 ? s : x0;
+        if (eject && s < x0) x1 = x0 - eject;
         res.hitRight = true;
         break;
       }
@@ -336,6 +362,7 @@ function resolveX(world, box, dx, opts, res) {
       if (scanColumn(world, res, 'left', c, ty0, ty1)) {
         const s = (c + 1) * TILE;
         x1 = s < x0 ? s : x0;
+        if (eject && s > x0) x1 = x0 + eject;
         res.hitLeft = true;
         break;
       }
@@ -459,6 +486,9 @@ export function wallAhead(world, box, dir, look = 1) {
 //   minX, maxX       : number hard pixel walls (camera-left wall, level edges)
 //   maxStep          : number sub-step length override
 //   footSkip         : number bottom pixels of the box excluded from the X sweep
+//   ejectX           : number pixels to push the box out of a solid it is ALREADY
+//                             inside when a side collision cannot separate it
+//                             (SMB's ImpedePlayerMove — player only, see resolveX)
 //
 // `out` lets callers recycle a result object. The returned object is the same
 // one — copy anything you need to keep past the next call.

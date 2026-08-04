@@ -106,7 +106,7 @@ const BONUS2 = {
 
 // The underwater bonus room, rendered from WaterArea1 — the area this level's
 // own enemy stream names. Swim right; the water pipe at column 62 lets you out
-// again at column 79.
+// again at column 115.
 const WATERROOM = {
   id: '6-2w',
   name: 'WORLD 6-2',
@@ -114,10 +114,10 @@ const WATERROOM = {
   music: 'underwater',
   width: 79,
   height: 15,
-  spawn: { x: 3, y: 12 },
+  spawn: { x: 2, y: 0 },
   tiles: [
-    '~~_____________________________________________________________________________',
-    '~~_____________________________________________________________________________',
+    '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~',
+    '~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~',
     '~~~~~~~~~~~~~~~~~~~~~~~~~~##~~~~##~~~~~~~~~~~~~~~~~~~~~~~~~~~##################',
     '__________________________##____##___________________________##################',
     '_______________=__________##____##____BBBBBB_________________##################',
@@ -134,7 +134,7 @@ const WATERROOM = {
   ],
   entities: [],
   warps: [
-    { from: { x: 61, y: 7 }, dir: 'right', to: { area: 'main', x: 79.5, y: 12, exit: 'up' } },
+    { from: { x: 61, y: 7 }, dir: 'right', to: { area: 'main', x: 115.5, y: 11, exit: 'up' } },
   ],
 };
 
@@ -229,7 +229,7 @@ export default {
   ],
   warps: [
     { from: { x: 19, y: 9 }, dir: 'down', to: { area: '6-2b', x: 3.5, y: 3, exit: 'down' } },
-    { from: { x: 56, y: 8 }, dir: 'down', to: { area: '6-2w', x: 3.5, y: 12, exit: 'down' } },
+    { from: { x: 56, y: 8 }, dir: 'down', to: { area: '6-2w', x: 2.5, y: 0, exit: 'none' } },
     { from: { x: 153, y: 10 }, dir: 'down', to: { area: '6-2d', x: 3.5, y: 3, exit: 'down' } },
   ],
   areas: { '6-2b': BONUS, '6-2d': BONUS2, '6-2w': WATERROOM, '6-2c': SKY },

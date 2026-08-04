@@ -73,7 +73,7 @@ const onlyLevel = argv.find((a) => !a.startsWith('-') && a !== onlyCheck) || nul
 
 const levelDir = join(ROOT, 'src/data/levels');
 const areas = [];
-for (const f of readdirSync(levelDir).filter((n) => /^\d+-\d+\.js$/.test(n)).sort()) {
+for (const f of readdirSync(levelDir).filter((n) => /^(?:\d+|h)-\d+\.js$/.test(n)).sort()) {
   const id = f.replace('.js', '');
   if (onlyLevel && id !== onlyLevel) continue;
   const lvl = (await import(pathToFileURL(join(levelDir, f)).href)).default;
@@ -146,7 +146,12 @@ const PAGE_HELPERS = () => {
       const w = g.world;
       if (!keepEntities) {
         w.entities.length = 0;
-        if (w.level) w.level.entities = [];
+        // `w.level` is the imported level module, shared by every load in this
+        // page. Emptying its `entities` in place does not just clear this run —
+        // it strips the level's platforms and enemies from every LATER load too,
+        // so a check that asks to keep entities gets none. Swap in a shallow
+        // clone instead and leave the module alone.
+        if (w.level) w.level = { ...w.level, entities: [] };
       }
       return w;
     },
@@ -352,8 +357,19 @@ if (wanted('blocks')) {
     // Live: bump every power/1up block and watch where the item ends up.
     const live = blocks.filter((b) => b.kind === 'power' || b.kind === '1up');
     if (!live.length) continue;
+    // Carry SEVERAL candidate spots, not just the first. bumpSpots sorts by y
+    // ascending, so a virtual lift node — which is only a real place to stand
+    // when the lift happens to be under you — sorts ahead of solid ground. 6-3's
+    // power block hangs over open air with a lift running beneath it, so the
+    // first spot drops the player into the pit. Real ground is tried first here,
+    // and the trial below re-sites on death regardless.
     const specs = live
-      .map((b) => ({ ...b, from: bumpSpots(a.graph, b.x, b.y)[0] || null }))
+      .map((b) => {
+        const all = bumpSpots(a.graph, b.x, b.y);
+        const solid = all.filter((n) => !n.virtual);
+        const spots = [...solid, ...all.filter((n) => n.virtual)].slice(0, 4);
+        return { ...b, spots, from: spots[0] || null };
+      })
       .filter((b) => b.from);
     if (!specs.length) continue;
 
@@ -366,9 +382,28 @@ if (wanted('blocks')) {
         const g = window.__GAME;
         const isItem = (e) => /mushroom|fireflower|flower|star|oneup|1up|vine/i.test(e.constructor.name);
         const out = [];
-        for (const s of specs) {
-          const w = await window.__PT.load(id, areaId);
-          const p = window.__PT.place(s.from.x, s.from.y, 'small');
+
+        // One trial from one standing spot. A trial in which the player DIES is
+        // not evidence about the block: the death freezes entity updates, so an
+        // item still rising is frozen mid-rise and looks like it "never finished".
+        // The caller re-sites and tries again.
+        const trial = async (s, spot) => {
+          // KEEP THE PLATFORMS. bumpSpots deliberately counts virtual lift nodes
+          // as places to stand — 6-3's power block hangs over a twelve-tile void
+          // with a horizontal lift running under it, and riding it is exactly
+          // what the original intends. Clearing every entity deleted that lift
+          // and dropped the player into the pit. Enemies still go, because this
+          // check is about level design and not combat.
+          //
+          // keepEntities also matters because __PT.load's clearing path empties
+          // `w.level.entities`, which is the CACHED level module: once cleared,
+          // every later load of that level in the same page comes back with no
+          // platforms at all.
+          const w = await window.__PT.load(id, areaId, { keepEntities: true });
+          for (let i = w.entities.length - 1; i >= 0; i--) {
+            if (!w.entities[i].isPlatform) w.entities.splice(i, 1);
+          }
+          const p = window.__PT.place(spot.x, spot.y, 'small');
           const lives0 = w.lives;
           const power0 = p.power;
           w.bumpBlock(s.x, s.y, p);
@@ -376,8 +411,10 @@ if (wanted('blocks')) {
           let item = null;
           let emerged = null;
           let collected = false;
+          let playerDied = false;
           for (let i = 0; i < 240; i++) {
             window.__PT.step(1);
+            if (p.state === 'dying' || p.state === 'done' || p.dead || w.lives < lives0) playerDied = true;
             if (!item) item = w.entities.find((e) => e !== p && isItem(e));
             if (!item) continue;
             if (!emerged && !item.emerging) {
@@ -391,19 +428,36 @@ if (wanted('blocks')) {
                 frames: i,
               };
             }
-            if (w.lives !== lives0 || p.power !== power0) collected = true;
+            // Taking the item is a GAIN: one more life, or a power level up.
+            // `w.lives !== lives0` also fires when the player LOSES a life, so a
+            // 1-up trial used to pass on a player death — the one thing the check
+            // exists to catch could not fail it.
+            if (w.lives === lives0 + 1 || p.power !== power0) collected = true;
+            if (playerDied) break;
             if (item.removed || item.dead) break;
             if (emerged && item.grounded && Math.abs(item.vx) < 0.01 && i > emerged.frames + 30) break;
           }
-          out.push({
-            ...s,
+          return {
+            from: { x: spot.x, y: spot.y },
+            playerDied,
             spawned: !!item,
             kindName: item ? item.constructor.name : null,
             emerged,
             collected,
             stillEmerging: !!(item && item.emerging),
             removedEarly: !!(item && (item.removed || item.dead) && !collected && !emerged),
-          });
+          };
+        };
+
+        for (const s of specs) {
+          let r = null;
+          let tried = 0;
+          for (const spot of s.spots) {
+            tried++;
+            r = await trial(s, spot);
+            if (!r.playerDied) break;
+          }
+          out.push({ ...s, ...r, spotsTried: tried, spotsAvailable: s.spots.length });
         }
         return out;
       },
@@ -416,23 +470,52 @@ if (wanted('blocks')) {
 
     const why = (r) => {
       if (!r.spawned) return 'nothing spawned';
-      if (r.stillEmerging) return `${r.kindName} never finished rising out of the block`;
+      // removedEarly BEFORE stillEmerging. An item destroyed while it was still
+      // rising satisfies both, and "was destroyed" is the accurate half — the
+      // other way round it was reported as having simply stalled, which sends
+      // you looking at the emerge code instead of at whatever killed it.
       if (r.removedEarly) return `${r.kindName} was destroyed before it emerged`;
+      if (r.stillEmerging) return `${r.kindName} never finished rising out of the block`;
       if (r.emerged && (r.emerged.insideSolid || r.emerged.headInSolid)) {
         return `${r.kindName} emerged INSIDE a solid tile at ${r.emerged.tx},${r.emerged.ty}`;
       }
       return null;
     };
-    const bad = rests.filter((r) => why(r));
-    record(
-      'blocks/yield',
-      a.name,
-      bad.length === 0,
-      bad.length
-        ? bad.map((r) => `${r.ch}@${r.x},${r.y} -> ${why(r)}`).join('; ')
-        : `${rests.length} item(s) emerged into open space` +
+    // A trial the player did not survive is not evidence about the block: the
+    // death freezes entity updates, so an item still rising is frozen mid-rise
+    // and reads as "never finished". Those are separated out and reported as
+    // ADVISORY — the same `weak` channel the run bot uses for "the harness could
+    // not drive this well enough to call it a defect". Every other verdict still
+    // fails hard; only the un-runnable trial is downgraded.
+    const invalid = rests.filter((r) => r.playerDied);
+    const bad = rests.filter((r) => !r.playerDied && why(r));
+    const detail = (list, f) => list.map((r) => `${r.ch}@${r.x},${r.y} -> ${f(r)}`).join('; ');
+    if (bad.length) {
+      record('blocks/yield', a.name, false, detail(bad, why));
+    } else if (invalid.length) {
+      record(
+        'blocks/yield',
+        a.name,
+        false,
+        detail(
+          invalid,
+          (r) =>
+            `HARNESS: player died at all ${r.spotsTried} candidate bump spot(s), so the trial never ran` +
+            ` and there is no verdict on this block. A death gates _updateEntities (world.js:1711),` +
+            ` the only caller of stepEmerge, so the item freezes mid-rise and would otherwise be` +
+            ` misreported as "never finished rising".`
+        ),
+        true
+      );
+    } else {
+      record(
+        'blocks/yield',
+        a.name,
+        true,
+        `${rests.length} item(s) emerged into open space` +
           ` (${rests.filter((r) => r.collected).length} collected on the spot)`
-    );
+      );
+    }
   }
 }
 

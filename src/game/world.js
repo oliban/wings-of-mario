@@ -200,8 +200,15 @@ const STOMP_CHAIN = [100, 200, 400, 500, 800, 1000, 2000, 4000, 5000, 8000];
 const TIME_TICKS = 24; // frames per unit of game time
 const HURRY_AT = 100;
 const DEATH_WATCHDOG = 300; // ticks before the world takes the life itself
-const TALLY_TICKS = 2; // frames per time unit during the end-of-level tally
+// AwardGameTimerPoints (smbdis.asm:10487-10502) is one star flag task tick, and
+// the task runs once a frame — so the clock sheds one unit and pays 50 points
+// EVERY frame. At 2 a 300-unit bonus took ten seconds instead of five.
+const TALLY_TICKS = 1; // frames per time unit during the end-of-level tally
 const TALLY_POINTS = 50;
+
+// DisplayDigits is a fixed six-digit field and DigitsMathRoutine (asm:2583-2610)
+// carries straight off the end of it, so the original's score wraps at 1,000,000.
+const SCORE_WRAP = 1000000;
 const FLAG_DROP = 2.6;
 
 const AIR_REC = Object.freeze({ name: 'air', char: '.', code: 46, solid: false });
@@ -617,6 +624,9 @@ export class World {
     this.flagY = 0;
     this.flagFalling = false;
     this.castleX = null;
+    // Clock reading at the moment the flagpole was grabbed; the fireworks count
+    // is derived from its last digit. See lowerFlag().
+    this._flagTime = null;
 
     this.safeMode = opts.safeMode !== false;
     this.resolveEnemyCollisions = opts.resolveEnemyCollisions !== false;
@@ -794,6 +804,7 @@ export class World {
     this.endPhase = null;
     this.endTimer = 0;
     this.flagFalling = false;
+    this._flagTime = null;
     this.state = 'playing';
 
     if (!opts.silent) this.music(lvl.music || this.theme || 'overworld');
@@ -832,6 +843,8 @@ export class World {
     // tile-accurate swimming, which is what lets 2-2 have a dry shore.
     this.hasWaterTiles = seen.has(95) || seen.has(126); // '_' and '~'
 
+    this._buildWaterBackdrop();
+
     // Emptied blocks fall back to the solid stone tile when tiles.js has no
     // dedicated "used" art — never to a bare rectangle.
     const used = this.recByCode[85];
@@ -842,6 +855,60 @@ export class World {
         used.anim = stone.anim;
       }
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // The water body behind a see-through tile.
+  //
+  // A water area paints its sea as TILES ('_' and '~'), and the renderer's base
+  // clear underneath them is palette.SKY.water — a flat #2038ec that nothing is
+  // ever supposed to show, because the body tiles cover the screen. A coin is a
+  // hole in that cover: its record is `28: { name: 'coin', sprite: null }`
+  // (src/data/tiles.js:2008) and resolves to the ITEM sprite, which is a coin on
+  // a transparent background rather than a coin on water. So every underwater
+  // coin drew its own 16x16 patch of raw clear colour, and a row of three coins
+  // read as one solid blue bar pasted over the sea. Coin heaven has no such box
+  // because its clear IS the sky it wants.
+  //
+  // The fix is a backdrop pass rather than new coin art, for two reasons. It is
+  // the whole CLASS: any non-solid, non-liquid tile in a water area punches the
+  // same hole — the anchors, the platform, the invisible blocks, a flagpole —
+  // and only the coin happens to be used in a water area today. And the water is
+  // animated: baking a still blue behind the coin would leave a static square
+  // sitting in a sea that visibly runs past it. Reusing the '_' record's own
+  // sprite table with the same selector drawTiles uses means the cell picks the
+  // frame its neighbours pick, from its own WORLD x, forever in step.
+  //
+  // `waterTop[tx]` is the first row of sea in that column, so the shore columns
+  // of 2-2 — dry ground above the waterline — get no backdrop and the sky above
+  // the waterline is untouched. Below it every cell is sea, air included: none of
+  // the four water areas spells an air pocket, and the air a collected coin
+  // leaves behind is a hole in the cover like any other.
+  _buildWaterBackdrop() {
+    this.waterTop = null;
+    this.waterBack = null;
+    if (!this.hasWaterTiles) return;
+    const rec = this.recByCode[95] || this._makeRec(95);
+    const art = rec && (rec.variants || (isSprite(rec.sprite) ? [rec.sprite] : null));
+    if (!art) return;
+
+    const w = this.w;
+    const h = this.h;
+    const top = new Int16Array(w).fill(h);
+    for (let ty = 0; ty < h; ty++) {
+      const row = ty * w;
+      for (let tx = 0; tx < w; tx++) {
+        const code = this.map[row + tx];
+        if ((code === 95 || code === 126) && top[tx] > ty) top[tx] = ty;
+      }
+    }
+    this.waterTop = top;
+    this.waterBack = {
+      variants: art,
+      vmask: art.length - 1,
+      va: rec.variants ? rec.va : 0,
+      vt: rec.variants ? rec.vt : 0,
+    };
   }
 
   _makeRec(code) {
@@ -1645,11 +1712,11 @@ export class World {
     const m = this._merge;
     if (m && x != null && Math.abs(x - m.x) < 28 && Math.abs(y - m.y) < 28) {
       if (v <= m.best) return;
-      this.score += v - m.best;
+      this.score = (this.score + v - m.best) % SCORE_WRAP;
       m.best = v;
       return;
     }
-    this.score += v;
+    this.score = (this.score + v) % SCORE_WRAP;
     if (x != null && y != null) this._popup(String(v), x, y);
   }
 
@@ -1912,7 +1979,17 @@ export class World {
       const feetBefore = p.y + p.h - (p.vy || 0);
       const stompable = typeof e.onStomp === 'function' && !e.isItem;
 
-      if (stompable && p.vy > 0 && feetBefore <= e.y + e.h * 0.55) {
+      // ChkETmrs (smbdis.asm:11388-11389) is the second half of
+      // ChkForPlayerInjury: `lda StompTimer / bne EnemyStomped`. While the
+      // stomp timer is live, a contact that would otherwise injure resolves as
+      // a stomp instead — the ROM decides stomp-vs-injury per enemy, and this
+      // is what lets one landing take out two enemies standing together.
+      // Without it the loop poisons itself: the first enemy's stompBounce sets
+      // p.vy negative, so the second overlapping enemy fails `p.vy > 0` (and
+      // the recomputed feetBefore with it) and falls through to onPlayerTouch,
+      // i.e. the player kills one and is hurt by the other.
+      const stompTimed = stompable && (p.stompTimer | 0) > 0;
+      if (stompTimed || (stompable && p.vy > 0 && feetBefore <= e.y + e.h * 0.55)) {
         const absorbed = this._safeCall(e, 'onStomp', p);
         // A broken onStomp absorbed nothing. _reportError has already dropped
         // the entity, so there is no touch to fall through to either — awarding
@@ -1932,6 +2009,19 @@ export class World {
     }
   }
 
+  // `inc StompTimer` (asm:11507) lives in HandleStompedShellE, the CHAIN path —
+  // the fixed-value stomps do not set it. EnemyStompedPts (asm:11464-11476, the
+  // cheep-cheep/hammer bro/lakitu/bloober values) and ChkForDemoteKoopa
+  // (asm:11480-11493, the paratroopa's flat 400) both bounce the player and
+  // return without ever touching the timer. Same test the score uses, so an
+  // entity that opts out of the chain with `stompPoints` opts out of both.
+  _stompPaysChain(e) {
+    const fn = playerMod && playerMod.stompPointsOf;
+    if (typeof fn === 'function') return !fn(e);
+    const v = e && e.stompPoints;
+    return !(typeof v === 'number' && isFinite(v) && v > 0);
+  }
+
   _onStompLanded(p, e) {
     // No hit-stop on a stomp. SMB has none, and freezing here breaks chain-stomping:
     // every frozen frame costs ~2.6px of horizontal travel at run speed, so a player
@@ -1942,6 +2032,13 @@ export class World {
 
     // The player normally owns the bounce and the chain score. If its bounce
     // throws, the world still has to launch Mario off the enemy's head.
+    //
+    // The timer is bumped AFTER the award, never before: HandleStompedShellE
+    // reads StompTimer into the floatey number and only then does `inc
+    // StompTimer` (asm:11502-11507), so the enemy that sets the timer is not
+    // paid by it. It is still live in time for the next enemy, because the
+    // next enemy is the next turn of the collision loop.
+    const paysChain = this._stompPaysChain(e);
     let bounced = false;
     if (typeof p.stompBounce === 'function') {
       if (this.safeMode) {
@@ -1956,15 +2053,28 @@ export class World {
         bounced = true;
       }
     }
-    if (bounced) return;
+    if (bounced) {
+      if (p && paysChain) p.stompTimer = (p.stompTimer | 0) + 1;
+      return;
+    }
 
     p.vy = -6.4;
     p.grounded = false;
+    // Past the top of the table the chain keeps paying LIVES, not 8000 again:
+    // FloateyNumbersRoutine (asm:1286-1289) clamps FloateyNum_Control at $0b, and
+    // $0b is the 1-UP entry of ScoreUpdateData (asm:1278-1281, `inc NumberofLives`
+    // asm:1300) — so every further enemy in an unbroken chain is another life.
+    // entities/index.js:shellChainScore already models this for the shell chain.
+    // The floatey number is StompChainCounter + StompTimer (asm:11502-11506),
+    // so a second enemy taken in the same frame is paid TWO rungs up the
+    // ladder, not one — see player._awardChain, which does the same arithmetic
+    // on the path that actually runs.
     const i = p.stompChain | 0;
-    p.stompChain = Math.min(i + 1, STOMP_CHAIN.length + 1);
-    if (i < STOMP_CHAIN.length) this.addScore(STOMP_CHAIN[i], e.x + e.w * 0.5, e.y);
-    else if (i === STOMP_CHAIN.length) this.addLife(1, e.x + e.w * 0.5, e.y);
-    else this.addScore(STOMP_CHAIN[STOMP_CHAIN.length - 1], e.x + e.w * 0.5, e.y);
+    const idx = Math.min(i + (p.stompTimer | 0), STOMP_CHAIN.length);
+    p.stompChain = Math.min(i + 1, STOMP_CHAIN.length);
+    if (idx < STOMP_CHAIN.length) this.addScore(STOMP_CHAIN[idx], e.x + e.w * 0.5, e.y);
+    else this.addLife(1, e.x + e.w * 0.5, e.y);
+    if (p && paysChain) p.stompTimer = (p.stompTimer | 0) + 1;
   }
 
   // Free-standing coins, hazard tiles and the castle axe.
@@ -2203,7 +2313,12 @@ export class World {
     return null;
   }
 
-  warp(wdef) {
+  // `by` is the brother who actually entered the pipe or rode the vine. Without
+  // it the emerging animation always played on world.player, so Luigi could walk
+  // into a pipe and watch Mario climb out of it. Both brothers travel either way
+  // — _placePlayer puts them side by side at the destination — so this decides
+  // who performs the exit, not who arrives.
+  warp(wdef, by) {
     const to = wdef && wdef.to;
     if (!to) return false;
 
@@ -2237,7 +2352,9 @@ export class World {
       resetTime: false,
       spawnAt: { x: to.x, y: to.y },
     });
-    const p = this.player;
+    // The exit belongs to whoever entered; the camera still anchors on the
+    // primary brother, so `world.player` keeps meaning exactly what it did.
+    const p = by && by.isPlayer === true ? by : this.player;
     if (!p) return true;
     const exit = to.exit || to.dir || null;
     if (exit && exit !== 'none' && typeof p.exitPipe === 'function') {
@@ -2247,12 +2364,12 @@ export class World {
       p.controlsLocked = false;
       p.state = 'normal';
     }
-    this.cam.reset(this.level, p);
+    this.cam.reset(this.level, this.player || p);
     return true;
   }
 
-  doWarp(wdef) {
-    return this.warp(wdef);
+  doWarp(wdef, by) {
+    return this.warp(wdef, by);
   }
 
   // -------------------------------------------------------------------------
@@ -2297,13 +2414,24 @@ export class World {
       this.cam.player = this.player;
     }
 
+    // PlayerLoseLife (smbdis.asm:2911-2916) decrements FIRST and only then tests
+    // the result — `dec NumberofLives / bpl StillInGame` — so the life being taken
+    // is the one just spent, and the game ends when nothing is left to spend.
+    // Testing before the decrement gave a fourth attempt the original never grants
+    // and let `lives` sit at 0 for a life the player was still playing.
+    //
+    // We keep our own storage convention rather than the ROM's: `lives` counts
+    // attempts REMAINING INCLUDING THE CURRENT ONE (3 at the start), where SMB
+    // stores 2 and prints NumberofLives+1 (asm:1723-1726) for the same display.
+    // The two agree on every number the player ever sees, and ours keeps the HUD,
+    // the co-op roster and the intermediate screen free of the +1.
+    this.lives--;
     if (this.lives <= 0) {
       this.state = 'gameover';
       this.music('game-over');
       if (this.onGameOver) this.onGameOver(this);
       return;
     }
-    this.lives--;
     const handled = this.onLifeLost ? this.onLifeLost(this) === true : false;
     if (!handled) this.respawn();
   }
@@ -2349,6 +2477,13 @@ export class World {
     this.state = 'levelend';
     this.endPhase = 'flag';
     this.endTimer = 0;
+    // The fireworks are keyed off the LAST DIGIT OF THE CLOCK AT THIS MOMENT, and
+    // the tally below is about to run that clock to zero. GameTimerFireworks
+    // (smbdis.asm:10466-10479) is star flag task 1 and reads GameTimerDisplay+2
+    // before AwardGameTimerPoints (task 2) touches it; RaiseFlagSetoffFWorks
+    // (task 3) then fires them. Reading this.time after the tally always yields 0,
+    // which is the whole reason to snapshot it here.
+    this._flagTime = this.time;
     this.cam.lock(true);
   }
 
@@ -2411,17 +2546,55 @@ export class World {
       if (this.endTimer % TALLY_TICKS === 0) {
         if (this.time > 0) {
           this.time--;
-          this.score += TALLY_POINTS;
-          this.sfx('coin');
+          this.addScore(TALLY_POINTS);
+          // AwardGameTimerPoints (asm:10493-10497) queues the tick on
+          // `FrameCounter AND #%00000100` — four frames sounding, four silent,
+          // which is what gives the tally its stutter instead of a flat buzz.
+          // The tick itself is authored in src/audio/sfx.js ('timer-tick'), sized
+          // for exactly this firing rate.
+          if (this.endTimer & 4) this.sfx('timer-tick');
         } else {
-          this.endPhase = 'hold';
-          this.endTimer = 0;
+          this._beginFireworks();
         }
       }
+    } else if (this.endPhase === 'fireworks') {
+      // Watchdog: a missing or wedged show must not strand the level.
+      if (this.endTimer > 600) this.onFireworksDone();
     } else if (this.endPhase === 'hold' && this.endTimer > 90) {
       this.state = 'complete';
       if (this.onLevelComplete) this.onLevelComplete(this);
     }
+  }
+
+  // Star flag task 3, RaiseFlagSetoffFWorks (smbdis.asm:10516-10525): once the
+  // tally has finished, set off however many shells task 1 banked. The count rule
+  // (last digit 1/3/6 -> 1/3/6 shells, nothing otherwise) and the 500 points a
+  // shell pays (FireworksSoundScore asm:10432-10439) both live in the entity, so
+  // this hands it the snapshotted clock rather than restating the rule.
+  //
+  // Flagpole levels only. A castle ends on the axe with no star flag object, and
+  // the original fires nothing there.
+  _beginFireworks() {
+    this.endPhase = 'fireworks';
+    this.endTimer = 0;
+    const t = this._flagTime;
+    this._flagTime = null;
+    if (t == null || !this.flag) {
+      this.onFireworksDone();
+      return;
+    }
+    // Anchored on the castle, which is where the star flag stands. The shells'
+    // own spread carries them up into the sky from here.
+    const x = this.castleX != null ? this.castleX + TILE / 2 : this.flag.x + TILE * 4;
+    const y = this.flag.top + 100;
+    const show = this.spawn('fireworks', x, y, { time: t });
+    if (!show || show.removed) this.onFireworksDone();
+  }
+
+  onFireworksDone() {
+    if (this.endPhase !== 'fireworks') return;
+    this.endPhase = 'hold';
+    this.endTimer = 0;
   }
 
   _updatePopups() {
@@ -2564,12 +2737,28 @@ export class World {
     const r = this._visibleRange(cam);
     const blocks = this.blocks;
     const tick = this.tick;
+    // See _buildWaterBackdrop. Null everywhere except a water area that tiles its
+    // sea, so every other level pays one null test per row.
+    const back = this.waterBack;
+    const wtop = this.waterTop;
     for (let ty = r.y0; ty <= r.y1; ty++) {
       const row = ty * this.w;
       for (let tx = r.x0; tx <= r.x1; tx++) {
         const code = this.map[row + tx];
         const rec = this.recByCode[code];
-        if (!rec || rec.decor || rec.invisible || rec.code === 46) continue;
+        if (!rec) continue;
+        // A tile that does not fill its cell with something opaque gets the sea
+        // painted behind it first, on the same beat and from the same world x as
+        // the body tiles either side of it. Solid and liquid tiles cover their own
+        // cell, so they skip the pass and it costs them one property read. Air is
+        // in the pass rather than skipped with the rest: collecting an underwater
+        // coin turns its cell into air, which is the very same hole in the cover,
+        // and it would leave the box behind exactly where a coin had just been.
+        if (back && !rec.solid && !rec.liquid && ty >= wtop[tx]) {
+          const b = back.variants[(tx * back.va + (back.vt ? tick >> back.vt : 0)) & back.vmask];
+          if (b) b.draw(ctx, Math.floor(tx * TILE - cam.x), Math.floor(ty * TILE + (TILE - b.h) - cam.y));
+        }
+        if (rec.decor || rec.invisible || rec.code === 46) continue;
         // Cap art (see _bindTileCap). Only lava and stairs carry a cap, so every
         // other tile pays one property test and no map read. The extra read is the
         // cell DIRECTLY ABOVE: a run is capped where the thing above it is not the

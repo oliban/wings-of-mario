@@ -80,7 +80,15 @@ const MUSHROOM_1UP = spriteOf(ITEMS.MUSHROOM_1UP && ITEMS.MUSHROOM_1UP.idle, MUS
 
 export const ITEM_GRAVITY = PHYS.enemyGravity;
 export const ITEM_MAX_FALL = PHYS.enemyMaxFall;
-export const ITEM_WALK = 0.75;
+// `lda #$10 / sta Enemy_X_Speed,x` at the end of GrowThePowerUp
+// (smbdis.asm:7190-7191). Speeds are sixteenths of a pixel per frame — anchored
+// by NormalXSpdData `.db $f8, $f4` (asm:8162), the goomba's own 0.5 — so $10 is
+// exactly 1.0, not the 0.75 this had.
+//
+// DUPLICATED: blocks.js:49 holds the same constant for items that DID come out
+// of a block. Both must move together; they are separate only because there is
+// no shared home for an item constant yet (PHYS would be it).
+export const ITEM_WALK = 1.0;
 
 // Axis-resolved tile stepping shared by the free-moving items.
 // Returns the push direction (-1 pushed left, 1 pushed right, 0 clear).
@@ -180,8 +188,14 @@ export default class Mushroom extends Entity {
   // Called by blocks.js the tick the item finishes rising out of its block.
   onEmerged() {
     fx(this.world, 'powerupSparkle', this.x + 8, this.y + 8);
-    if (this.world.solidAt(this.x + this.w + 1, this.y + 8)) this.facing = -1;
-    else if (this.world.solidAt(this.x - 1, this.y + 8)) this.facing = 1;
+    // Always right, with no wall test. GrowThePowerUp ends `asl / sta
+    // Enemy_SprAttrib+5 / rol / sta Enemy_MovingDir,x` (smbdis.asm:7193-7196):
+    // the asl leaves A zero with carry set, so the rol rotates that carry back
+    // in and the direction is unconditionally 1. A mushroom that surfaces facing
+    // a wall is turned a frame later by DoEnemySideCheck (asm:12589-12610),
+    // which is exactly what stepX()'s push does for us in update() below — so
+    // the old peek at the neighbouring tiles was redundant as well as unfaithful.
+    this.facing = 1;
     this.vx = ITEM_WALK * this.facing;
   }
 

@@ -11,6 +11,27 @@
 //   node tools/reach.mjs 1-2 --patch 198,10=.
 //                                   # "what if that block weren't there?" — edits the
 //                                   # tile map in memory before analysing. Repeatable.
+//   node tools/reach.mjs --big      # model a TWO-TILE-TALL body (big/fire Mario)
+//   node tools/reach.mjs --sizes    # run both bodies and rank what only BIG cannot escape
+//   node tools/reach.mjs --sizes --strict
+//                                   # ...and count the ACCEPTED traps too, so you can
+//                                   # see the detector is still alive. See ACCEPTED.
+//   node tools/reach.mjs 3-1 --patch 3-1b:5,6==
+//                                   # patches take an optional AREA prefix
+//
+// MEASURING ONE OF THESE BY HAND
+// ------------------------------
+// If you go and drive the game to confirm a cell this tool reports, use ONE FRESH
+// PAGE PER RUN. Reloading an area restores its TILES but not an item block's
+// already-spent state, so the second run in a page finds a plain breakable brick
+// where the first found an item block — and big Mario "escapes" a pocket that is
+// really sealed. Two successive sweeps gave the opposite verdict to a single clean
+// run on 3-1b (5,7) for exactly that reason, and it is the one harness fault this
+// project has hit that produced a confidently WRONG all-clear on a reported bug.
+// Two more, while you are there: teleporting onto a coin tile eats that coin, so
+// take any "has the level changed" baseline AFTER placing the player; and holding
+// jump for N frames is ONE jump, not many, so toggle it or you will read "he
+// cannot jump out" off a probe that only ever jumped once.
 //
 // MODEL
 // -----
@@ -32,6 +53,32 @@
 // from the furthest column you have reached you may still walk BACKTRACK = 7
 // tiles left, and no further. Taking a warp resets the camera, so a warp edge
 // clears that limit.
+//
+// BODY HEIGHT
+// -----------
+// The model was size-agnostic — one tile of body, effectively small Mario — and
+// that is why 3-1b's brick pyramid never showed up: every pocket inside it is one
+// tile tall, so a small body walks in and out and a BIG one (HITBOX.BIG_H = 32px
+// = two tiles) cannot. `--big` gives the body a head row: a node needs headroom,
+// and every flight path is checked two rows deep.
+//
+// Ducking IS modelled, and has to be: 1-2 is built on sliding under one-tile
+// ceilings, and without it that level alone reported 25 trap regions that were
+// really just its own low corridors. But it is momentum only — you cannot duck
+// and then start walking (asm:5585-5589) — so it needs a run-up. See canDuckSlide.
+//
+// Two things this pass gets right that a naive one does not, both of which had it
+// reporting nothing about the room it was written for:
+//   * it is seeded from the SMALL player's reachable set, because you arrive in
+//     one of these pockets small and GROW; and
+//   * it seeds from where the inbound PIPE puts you down, not from the area's
+//     `spawn` field, which for a sub-area is a generated fallback.
+//
+// Brick-smashing is still not modelled, so a flagged cell whose ceiling is a
+// plain breakable brick may in practice be escapable by a big player bumping his
+// way out. Of the four cells this reports in 3-1b, only (5,7) is truly sealed —
+// its ceiling is the spent item block. The others were confirmed by hand as
+// escapable ONLY by demolishing bricks, which is worth flagging anyway.
 //
 // The movement numbers are deliberately conservative. Approximate by design:
 //   * flight arcs are checked as "rise to an apex row, cross, drop", not as a
@@ -65,15 +112,23 @@ const BACKTRACK = 7; // tiles you can walk left of your furthest point (camera.F
 
 const args = process.argv.slice(2);
 const verbose = args.includes('-v');
+const bigFlag = args.includes('--big');
+const sizesFlag = args.includes('--sizes');
+// Count the ACCEPTED traps too. This is the switch that proves the sweep can
+// still fail: green with the allow-list on, red with it off, same cells either way.
+const strictFlag = args.includes('--strict');
 const patches = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] !== '--patch') continue;
-  const m = /^(\d+),(\d+)=(.)$/.exec(args[i + 1] || '');
+  // `x,y=c` patches the main area; `3-1b:x,y=c` patches a sub-area. Sub-areas were
+  // unpatchable, which meant the one place a synthetic trap was worth injecting —
+  // a bonus room — could not be tested at all.
+  const m = /^(?:([\w-]+):)?(\d+),(\d+)=(.)$/.exec(args[i + 1] || '');
   if (!m) {
-    console.error(`bad --patch "${args[i + 1]}", want x,y=char`);
+    console.error(`bad --patch "${args[i + 1]}", want [area:]x,y=char`);
     process.exit(2);
   }
-  patches.push({ x: +m[1], y: +m[2], ch: m[3] });
+  patches.push({ area: m[1] || 'main', x: +m[2], y: +m[3], ch: m[4] });
   args.splice(i, 2);
   i--;
 }
@@ -94,10 +149,15 @@ const only = args.find((a) => !a.startsWith('-')) || null;
 
 function applyPatches(lvl) {
   for (const p of patches) {
-    const row = lvl.tiles[p.y];
+    const target = p.area === 'main' ? lvl : (lvl.areas || {})[p.area];
+    if (!target) {
+      console.error(`--patch names area "${p.area}", which this level does not have`);
+      process.exit(2);
+    }
+    const row = target.tiles[p.y];
     if (row == null || p.x >= row.length) continue;
-    lvl.tiles[p.y] = row.slice(0, p.x) + p.ch + row.slice(p.x + 1);
-    console.log(`patched (${p.x},${p.y}) '${row[p.x]}' -> '${p.ch}'`);
+    target.tiles[p.y] = row.slice(0, p.x) + p.ch + row.slice(p.x + 1);
+    console.log(`patched ${p.area} (${p.x},${p.y}) '${row[p.x]}' -> '${p.ch}'`);
   }
 }
 
@@ -128,7 +188,7 @@ export function atMouth(x, y, wp) {
 // Tile queries
 // ---------------------------------------------------------------------------
 
-function makeGrid(lvl) {
+function makeGrid(lvl, body = 1) {
   const T = lvl.tiles;
   const H = T.length;
   const W = lvl.width || T[0].length;
@@ -146,8 +206,14 @@ function makeGrid(lvl) {
     return !!r.solid;
   };
 
-  // Air the player can occupy.
+  // Air the player can occupy. `free` is one tile — the old size-agnostic body;
+  // `freeBody` is the whole standing body, feet on row y and `body-1` rows of
+  // head above it. Everything that asks "can the player BE here" uses freeBody.
   const free = (x, y) => !wall(x, y) && y >= 0 && y < H;
+  const freeBody = (x, y) => {
+    for (let r = y - body + 1; r <= y; r++) if (!free(x, r)) return false;
+    return true;
+  };
 
   // Something you can land on top of.
   const support = (x, y) => {
@@ -169,14 +235,18 @@ function makeGrid(lvl) {
     return !!(r && r.liquid);
   };
 
-  return { T, W, H, at, wall, free, support, liquid };
+  // Can the player STAND, at full height, on this column and start walking from
+  // it? The run-up test below needs this and nothing else does.
+  const stand = (x, y) => freeBody(x, y) && support(x, y + 1);
+
+  return { T, W, H, body, at, wall, free, freeBody, support, stand, liquid };
 }
 
 // ---------------------------------------------------------------------------
 // Nodes
 // ---------------------------------------------------------------------------
 
-function buildNodes(lvl, g) {
+function buildNodes(lvl, g, entries = []) {
   const nodes = [];
   const key = (x, y) => x * 64 + y;
   const byKey = new Map();
@@ -199,7 +269,7 @@ function buildNodes(lvl, g) {
   // Every free tile with support beneath it, at EVERY depth in the column.
   for (let x = 0; x < g.W; x++) {
     for (let y = 0; y < g.H; y++) {
-      if (!g.free(x, y)) continue;
+      if (!g.freeBody(x, y)) continue;
       if (g.support(x, y + 1)) add(x, y, { swim: g.liquid(x, y) });
       else if (g.liquid(x, y)) add(x, y, { swim: true }); // treading water counts
     }
@@ -260,7 +330,21 @@ function buildNodes(lvl, g) {
     }
   }
 
-  return { nodes, byKey, key, lifts };
+  // Where an inbound pipe actually puts the player down — see the note at the
+  // spawn in buildLevelGraph. Marked virtual so findTraps never reports one as a
+  // place you are stranded: it is a point you fall through, not a ledge.
+  const entryNodes = [];
+  for (const e of entries) {
+    const ex = Math.floor(e.x);
+    const ey = Math.floor(e.y);
+    if (ex < 0 || ex >= g.W || ey < 0 || ey >= g.H) continue;
+    const n = g.freeBody(ex, ey)
+      ? add(ex, ey, { virtual: true, entry: true })
+      : byKey.get(key(ex, ey)) || null;
+    if (n) entryNodes.push(n);
+  }
+
+  return { nodes, byKey, key, lifts, entryNodes };
 }
 
 // A lift spec keeps its tile top-left, so its deck top is at spec.y * TILE and
@@ -290,9 +374,39 @@ function liftFrom(pos, opts) {
 // Edges
 // ---------------------------------------------------------------------------
 
+// Columns of full-height standing room a big player needs behind him before a
+// one-tile ceiling, to be carrying speed when he reaches it. Three is the
+// smallest run-up that keeps 1-2 honest; see canDuckSlide.
+const RUNUP = 3;
+
 function makeTravel(g) {
+  // Every feet-row from yTop to yBot has to admit the WHOLE body, head included.
   const colFree = (x, yTop, yBot) => {
-    for (let y = yTop; y <= yBot; y++) if (!g.free(x, y)) return false;
+    for (let y = yTop; y <= yBot; y++) if (!g.freeBody(x, y)) return false;
+    return true;
+  };
+
+  // May a two-tile body cross a ONE-tile-high stretch by ducking?
+  //
+  // In the original you cannot duck-WALK. PlayerCtrlRoutine (smbdis.asm:5585-5589)
+  // nullifies Left_Right_Buttons AND Up_Down_Buttons the moment down is held on
+  // the ground with a direction pressed, so a crouched Mario gets no acceleration
+  // at all — ImposeFriction then bleeds off whatever speed he already had. The
+  // duck-slide is therefore momentum ONLY: you can carry speed into a low gap,
+  // you can never start moving inside one.
+  //
+  // Modelled as a run-up requirement: RUNUP columns of full-height standing room
+  // immediately BEHIND the player, on his own row, in the direction he is going.
+  // 1-2's low stretch at columns 54-55 is approached across a wide open floor and
+  // passes; 3-1b's pocket at (5,7) is one column wide with brick on both sides,
+  // so there is nowhere to build speed and it correctly stays sealed.
+  //
+  // Only a level walk qualifies. Ducking mid-jump is not a thing worth modelling,
+  // and a body that is one tile tall (small Mario) has nothing to duck to.
+  const canDuckSlide = (a, b, p, step) => {
+    if (g.body < 2) return false;
+    if (a.y !== p || b.y !== p) return false;
+    for (let i = 1; i <= RUNUP; i++) if (!g.stand(a.x - step * i, p)) return false;
     return true;
   };
 
@@ -318,11 +432,15 @@ function makeTravel(g) {
       if (!colFree(b.x, p, b.y)) continue;
       let clear = true;
       const step = dx > 0 ? 1 : -1;
+      const slide = canDuckSlide(a, b, p, step);
       for (let c = a.x + step; c !== b.x; c += step) {
-        if (!g.free(c, p)) {
-          clear = false;
-          break;
-        }
+        if (g.freeBody(c, p)) continue;
+        // A big player who is ALREADY MOVING keeps his speed under a one-tile
+        // ceiling — 1-2 is built on it. See canDuckSlide for why this is not a
+        // free pass.
+        if (slide && g.free(c, p)) continue;
+        clear = false;
+        break;
       }
       if (clear) return true;
     }
@@ -338,9 +456,9 @@ function makeTravel(g) {
  * The whole traversal model for one area, as data. Exported so other tools
  * (playthrough.mjs) can ask "is this block reachable?" without re-deriving it.
  */
-export function buildLevelGraph(lvl, areaKey = 'main') {
-  const g = makeGrid(lvl);
-  const { nodes, byKey, key, lifts } = buildNodes(lvl, g);
+export function buildLevelGraph(lvl, areaKey = 'main', opts = {}) {
+  const g = makeGrid(lvl, opts.body || 1);
+  const { nodes, byKey, key, lifts, entryNodes } = buildNodes(lvl, g, opts.entries || []);
   const canTravel = makeTravel(g);
 
   // --- adjacency -----------------------------------------------------------
@@ -409,16 +527,31 @@ export function buildLevelGraph(lvl, areaKey = 'main') {
   const spawnY = Math.round((lvl.spawn && lvl.spawn.y) != null ? lvl.spawn.y : 12);
   const start = landingNode(byKey, key, g, spawnX, spawnY) || nearestNode(nodes, spawnX, spawnY);
 
+  // A sub-area's `spawn` is NOT where the player arrives. It is the generator's
+  // "first column with floor and headroom", a fallback; the pipe that leads here
+  // names its own destination, and in 3-1b that is (2.5, 3) — in the air, above
+  // the coin pyramid, with the whole fall to steer. Seeding only from `spawn`
+  // put the player on the room floor, from which the pyramid is six tiles up and
+  // unreachable, so NOTHING inside it was ever analysed at either size. Entries
+  // are airborne and virtual: somewhere you pass through, never somewhere you are
+  // reported as stranded.
+  const entryIds = entryNodes.map((n) => n.id);
+
   // Reachability under the camera rule. `best[i]` is the smallest "furthest
   // column reached" with which the player can be standing on node i; a smaller
   // value means more of the level is still behind the camera edge, so this is a
   // shortest-path search on that value rather than a plain flood.
-  const reach = (fromId) => {
+  const reach = (from) => {
+    const seedIds = Array.isArray(from) ? from : [from];
     const best = new Int32Array(nodes.length).fill(INF);
     const queued = new Uint8Array(nodes.length);
-    best[fromId] = nodes[fromId].x;
-    const q = [fromId];
-    queued[fromId] = 1;
+    const q = [];
+    for (const fromId of seedIds) {
+      if (fromId == null) continue;
+      best[fromId] = nodes[fromId].x;
+      q.push(fromId);
+      queued[fromId] = 1;
+    }
     while (q.length) {
       const i = q.shift();
       queued[i] = 0;
@@ -440,7 +573,8 @@ export function buildLevelGraph(lvl, areaKey = 'main') {
     return best;
   };
 
-  const fromSpawn = start ? reach(start.id) : new Int32Array(nodes.length).fill(INF);
+  const seedIds = start ? [start.id, ...entryIds] : entryIds;
+  const fromSpawn = seedIds.length ? reach(seedIds) : new Int32Array(nodes.length).fill(INF);
   const nodeAt = (x, y) => byKey.get(key(x, y)) || null;
   const reachedFromSpawn = (n) => !!n && fromSpawn[n.id] < INF;
 
@@ -479,8 +613,8 @@ export function findTraps(gr) {
   return traps;
 }
 
-function analyse(name, lvl, areaKey) {
-  const gr = buildLevelGraph(lvl, areaKey);
+function analyse(name, lvl, areaKey, body = 1, entries = []) {
+  const gr = buildLevelGraph(lvl, areaKey, { body, entries });
   if (!gr.nodes.length) {
     console.log(`\n${name}: no standable tile anywhere — level is unplayable.`);
     return 1;
@@ -535,6 +669,150 @@ function analyse(name, lvl, areaKey) {
   return runs.length;
 }
 
+// ---------------------------------------------------------------------------
+// Size comparison
+// ---------------------------------------------------------------------------
+
+// Traps a TWO-tile body cannot escape but a ONE-tile body can. Every big node is
+// also a small node (a body that fits two rows fits one), so the difference is
+// always "big Mario is the one in trouble here".
+//
+// Ranked by how likely a player is to end up in it. A pocket you can only enter
+// by a precise jump is a curiosity; one you can WALK into off the natural route
+// is the bug. `walk-in` means some reachable node outside the region sits on the
+// same row one column away — you get there by holding a direction.
+//
+// SEEDING. The candidates are NOT the cells big Mario can walk to. He usually
+// cannot walk into one of these at all — 3-1b's pocket at (5,7) is sealed by
+// (5,5) against a big body arriving from either side, and a sweep seeded from the
+// big spawn is therefore structurally blind to the exact class it exists to find.
+// He arrives SMALL and GROWS: the room hands him a mushroom brick directly over
+// his head, and the frame he takes it he is two tiles tall in a one-tile pocket.
+// So the seed is every cell a SMALL player can reach, and the question asked of
+// each is "if he were big HERE, could he get out?".
+function compareSizes(name, lvl, areaKey, entries = []) {
+  const small = buildLevelGraph(lvl, areaKey, { body: 1, entries });
+  const big = buildLevelGraph(lvl, areaKey, { body: 2, entries });
+  if (!big.nodes.length || !big.start) return 0;
+
+  const smallTrapped = new Set();
+  for (const n of findTraps(small)) smallTrapped.add(`${n.x},${n.y}`);
+
+  // Reachable by a small player, and roomy enough for a big body to exist in.
+  const seeds = [];
+  for (const n of big.nodes) {
+    if (n.virtual) continue; // a lift deck is not somewhere you get stranded
+    if (n.exit) continue;
+    if (smallTrapped.has(`${n.x},${n.y}`)) continue; // already a trap at both sizes
+    const s = small.nodeAt(n.x, n.y);
+    if (!small.reachedFromSpawn(s)) continue;
+    seeds.push(n);
+  }
+
+  const bigTraps = seeds.filter((n) => {
+    const onward = big.reach(n.id);
+    for (let i = 0; i < big.nodes.length; i++) {
+      if (onward[i] < INF && big.nodes[i].exit) return false;
+    }
+    return true;
+  });
+  if (!bigTraps.length) return 0;
+
+  const region = new Set(bigTraps.map((n) => `${n.x},${n.y}`));
+  // Predecessors: reachable nodes OUTSIDE the region with an edge into it.
+  const entryRank = new Map(); // "x,y" of a trap node -> { walkIn, preds }
+  for (const n of bigTraps) entryRank.set(`${n.x},${n.y}`, { walkIn: false, preds: 0 });
+  for (const a of big.nodes) {
+    // Predecessors are asked of the SMALL graph too: "could he have walked in
+    // here and then grown" is the question, and big-spawn reachability is the
+    // assumption that made this sweep blind in the first place.
+    if (!small.reachedFromSpawn(small.nodeAt(a.x, a.y))) continue;
+    if (region.has(`${a.x},${a.y}`)) continue;
+    for (const j of big.out[a.id]) {
+      const b = big.nodes[j];
+      const e = entryRank.get(`${b.x},${b.y}`);
+      if (!e) continue;
+      e.preds++;
+      if (a.y === b.y && Math.abs(a.x - b.x) === 1) e.walkIn = true;
+    }
+  }
+
+  // Group into contiguous runs on a row, carrying the worst entry rank.
+  bigTraps.sort((a, b) => a.y - b.y || a.x - b.x);
+  const runs = [];
+  for (const n of bigTraps) {
+    const e = entryRank.get(`${n.x},${n.y}`);
+    const last = runs[runs.length - 1];
+    if (last && last.y === n.y && n.x === last.x1 + 1) {
+      last.x1 = n.x;
+      last.walkIn = last.walkIn || e.walkIn;
+      last.preds += e.preds;
+    } else runs.push({ y: n.y, x0: n.x, x1: n.x, walkIn: e.walkIn, preds: e.preds });
+  }
+  runs.sort((a, b) => Number(b.walkIn) - Number(a.walkIn) || b.preds - a.preds || a.x0 - b.x0);
+
+  console.log(`\n${name}  (spawn ${big.spawn.x},${big.start.y}  goal x=${big.goalX})`);
+  let unaccepted = 0;
+  for (const r of runs) {
+    const span = r.x0 === r.x1 ? `column ${r.x0}` : `columns ${r.x0}..${r.x1}`;
+    const how = r.walkIn ? 'WALK-IN' : r.preds ? 'jump-in' : 'unreachable-except-by-growing';
+    const ok = acceptedCells(name, r);
+    if (ok && !strictFlag) {
+      console.log(`  accepted trap  ${span}  standing on y=${r.y}  — ${ok}`);
+      continue;
+    }
+    unaccepted++;
+    console.log(`  BIG-ONLY TRAP ${span}  standing on y=${r.y}  ${how}  (${r.preds} way(s) in)`);
+  }
+  return unaccepted;
+}
+
+// ---------------------------------------------------------------------------
+// Known and ACCEPTED traps
+// ---------------------------------------------------------------------------
+//
+// A trap that is in the ORIGINAL is not a bug, and a sweep that stays red over
+// one is a sweep people learn to ignore. These are still printed on every run —
+// muting them from the count is not the same as hiding them — and `--strict`
+// counts them anyway, which is how you check the detector is still alive.
+//
+// Nothing goes in here without a decision behind it. Name the decision.
+const ACCEPTED = [
+  {
+    // 3-1b's coin pyramid. Big Mario is sealed in these four pockets: brick left,
+    // brick right, and for (5,7) the SPENT ITEM BLOCK at (5,5) overhead, the one
+    // tile in reach he cannot break. He cannot walk in at either side — he walks
+    // in SMALL, bumps the mushroom brick over his head, and the frame he grows he
+    // is two tiles tall in a one-tile pocket.
+    //
+    // Checked against the ROM and kept: our side probes match DoPlayerSideCheck
+    // (asm:12026-12058) row for row, the room's tiles and its Brick(powerup) at
+    // (5,5) match reference/smb-areas.json byte for byte, and the mushroom's trip
+    // to him — emerge, walk right, off the ledge, reverse on a wall — is what
+    // asm:7181-7196 / 12572-12577 / 12589-12610 describe. The original traps you
+    // here too, and the level timer is its own way out.
+    //
+    // DECISION 2026-08-02: the user was shown this evidence and chose to keep it
+    // faithful rather than alter the room. Do not "fix" 3-1b.
+    area: '3-1/3-1b',
+    cells: ['4,8', '5,7', '10,7', '11,8'],
+    why: "the original's own geometry, kept deliberately (see ACCEPTED, 2026-08-02)",
+  },
+];
+
+// Does an entire reported run fall inside one accepted entry? A run that has
+// grown past its accepted cells is NOT accepted — that is a new trap touching an
+// old one, and it must still turn the sweep red.
+function acceptedCells(name, run) {
+  for (const a of ACCEPTED) {
+    if (a.area !== name) continue;
+    let all = true;
+    for (let x = run.x0; x <= run.x1 && all; x++) all = a.cells.includes(`${x},${run.y}`);
+    if (all) return a.why;
+  }
+  return null;
+}
+
 // Spawns and warp destinations are written in mid-air; the player falls to the
 // first surface below.
 function landingNode(byKey, key, g, x, y) {
@@ -559,6 +837,28 @@ function nearestNode(nodes, x, y) {
   return bd <= 40 ? best : null;
 }
 
+// Every place the player can be PUT DOWN in `areaKey`: the destination of any
+// warp anywhere in the level that names it. A sub-area is only ever entered
+// through one of these, and its own `spawn` field is a generated fallback that
+// frequently is not one of them — 3-1b's says the room floor while the pipe
+// drops you in from the ceiling three rows above the coin pyramid.
+function entriesInto(lvl, areaKey) {
+  const out = [];
+  const scan = (warps, selfKey) => {
+    for (const wp of warps || []) {
+      const to = wp.to;
+      if (!to || to.level || to.complete) continue;
+      const dest = to.area || selfKey;
+      if (dest !== areaKey) continue;
+      if (typeof to.x !== 'number' || typeof to.y !== 'number') continue;
+      out.push({ x: to.x, y: to.y });
+    }
+  };
+  scan(lvl.warps, 'main');
+  for (const [aid, area] of Object.entries(lvl.areas || {})) scan(area.warps, aid);
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -566,7 +866,7 @@ function nearestNode(nodes, x, y) {
 function main() {
   const dir = join(ROOT, 'src/data/levels');
   const files = readdirSync(dir)
-    .filter((f) => /^\d+-\d+\.js$/.test(f))
+    .filter((f) => /^(?:\d+|h)-\d+\.js$/.test(f))
     .sort();
   return (async () => {
     let total = 0;
@@ -577,17 +877,21 @@ function main() {
       const mod = await import(pathToFileURL(join(dir, f)).href);
       const lvl = mod.default;
       if (only) applyPatches(lvl);
-      total += analyse(id, lvl, 'main');
+      const run = sizesFlag
+        ? (n, l, a, e) => compareSizes(n, l, a, e)
+        : (n, l, a, e) => analyse(n, l, a, bigFlag ? 2 : 1, e);
+      total += run(id, lvl, 'main', entriesInto(lvl, 'main'));
       checked++;
       for (const [aid, area] of Object.entries(lvl.areas || {})) {
-        total += analyse(`${id}/${aid}`, area, aid);
+        total += run(`${id}/${aid}`, area, aid, entriesInto(lvl, aid));
         checked++;
       }
     }
+    const what = sizesFlag ? 'big-only trap region' : 'trap region';
     console.log(
       total
-        ? `\n${total} trap region(s) found in ${checked} area(s).`
-        : `\nNo traps found in ${checked} area(s).`
+        ? `\n${total} ${what}(s) found in ${checked} area(s).`
+        : `\nNo ${what}s found in ${checked} area(s).`
     );
     process.exit(total ? 1 : 0);
   })();

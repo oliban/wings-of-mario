@@ -12,11 +12,16 @@ import {
   sfx,
 } from './index.js';
 
+// MovePiranhaPlant (smbdis.asm): InitPiranhaPlant sets PiranhaPlant_Y_Speed to
+// $01 and the travel to `sbc #$18` = 24 pixels, and RiseFallPiranhaPlant only
+// moves on every other frame (`lda FrameCounter / lsr / bcc PutinPipe`) — so a
+// pixel every two frames, 48 frames to travel each way. At each end it parks for
+// EnemyFrameTimer = $40 = 64 frames. The full cycle is 48+64+48+64 = 224 frames.
 const PLANT_H = 24;
-const RISE = 30;
-const SNAP = 60;
-const SINK = 30;
-const WAIT = 60;
+const RISE = 48;
+const SNAP = 64;
+const SINK = 48;
+const WAIT = 64;
 const SAFE_DIST = 24;
 
 const SNAP_ANIM = pickAnim(EB, ['PIRANHA.snap', 'PIRANHA_ANIM', 'PIRANHA'], null, 18);

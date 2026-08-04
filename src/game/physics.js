@@ -29,11 +29,34 @@ function deepFreeze(o) {
 //   gFall  applies the moment the button is released, or the moment vy turns positive.
 //
 // `at` is the inclusive lower bound of |vx| for that row.
-// ---------------------------------------------------------------------------
+//
+// The original indexes ONE table set by Player_XSpeedAbsolute against four
+// thresholds (smbdis.asm:6095-6107) — `cmp #$09 / #$10 / #$19 / #$1c`, each
+// `bcc` skipping the `iny` — giving five rows, read out of JumpMForceData,
+// FallMForceData and PlayerYSpdData at asm:6014-6021:
+//
+//   Y   speed >=        vy0        gHold        gFall
+//   0   $00  0.0        $fc  -4    $20  0.125   $70  0.4375
+//   1   $09  0.5625     $fc  -4    $20  0.125   $70  0.4375
+//   2   $10  1.0        $fc  -4    $1e  0.1171875  $60  0.375
+//   3   $19  1.5625     $fb  -5    $28  0.15625 $90  0.5625
+//   4   $1c  1.75       $fb  -5    $28  0.15625 $90  0.5625
+//
+// Rows 0/1 and 3/4 carry identical data, so three rows reproduce all five
+// exactly. Speeds are the ROM's byte over 16, the same scaling maxWalkSpeed
+// ($19) and maxRunSpeed ($29) already use.
+//
+// The third threshold is $19 = 1.5625, NOT the 2.3125 this table carried for
+// most of the project's life. $19 is exactly maxWalkSpeed, so in the original
+// the taller -5 jump is available from full WALKING speed upward; ours withheld
+// it until 2.3125, which is only reachable with the run button held and near
+// top speed. The whole band from a full walk to 2.3125 was taking off on the
+// short row. Neither calibrated jump moves: a standing jump is row 0 at vx 0,
+// and a full-speed run jump is 2.5625, already above both thresholds.
 const JUMP_ROWS = [
   { at: 0.0, vy0: -4.0, gHold: 0.125, gFall: 0.4375 },
   { at: 1.0, vy0: -4.0, gHold: 0.1171875, gFall: 0.375 },
-  { at: 2.3125, vy0: -5.0, gHold: 0.15625, gFall: 0.5625 },
+  { at: 1.5625, vy0: -5.0, gHold: 0.15625, gFall: 0.5625 },
 ];
 
 export const JUMP_TABLE = deepFreeze(JUMP_ROWS.map((r) => ({ ...r })));

@@ -514,6 +514,31 @@ const EFFECTS = {
     }
   },
 
+  // The end-of-level bonus tally tick. Authored, not sampled — like everything
+  // else in this file — to match the CHARACTER of the original's tally blip.
+  //
+  // Its constraints come from how it is played, not from how it sounds alone:
+  // AwardGameTimerPoints queues it on `FrameCounter AND #%00000100`
+  // (smbdis.asm:10493-10497), so world.js fires it four frames out of every eight
+  // for the length of the tally — up to thirty times a second, for several
+  // seconds. Anything with body, low end or a tail becomes a drill at that rate.
+  // So: one pulse, very short, very high, very quiet, on the thinnest duty, with
+  // no entry in DUCK — a tick that pumped the fanfare down thirty times a second
+  // would be worse than the wrong sound. playSfx's releaseTag voice-stealing then
+  // makes a fast run of these read as one rattle instead of a stack of blips.
+  'timer-tick'(E, t, tag) {
+    E.pulse({
+      time: t,
+      dur: 0.016,
+      note: 'e7',
+      duty: DUTY.D125,
+      vol: 0.075,
+      attack: 0.001,
+      release: 0.005,
+      tag,
+    });
+  },
+
   'enemy-fire'(E, t, tag) {
     E.noise({
       time: t,
@@ -744,6 +769,10 @@ const ALIASES = {
   'player-down': 'death',
   hurry: 'time-warning',
   'time-up': 'time-warning',
+  timertick: 'timer-tick',
+  timerTick: 'timer-tick',
+  tick: 'timer-tick',
+  tally: 'timer-tick',
   bowserfire: 'enemy-fire',
   'bowser-fire': 'enemy-fire',
   flame: 'enemy-fire',
