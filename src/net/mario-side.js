@@ -4,6 +4,7 @@ import { Interp } from './interp.js';
 import { NetOverlay } from './mario-overlay.js';
 import {
   roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure, lobbyHeader,
+  rememberSeat, recallSeat, forgetSeat,
 } from './lobby.js';
 import { openFrontDoor } from './lobby-screen.js';
 import { ISLAND_TOP_Y } from '../wings/geo.js';
@@ -124,9 +125,12 @@ export class MarioNet {
     return slot ? slot.x : null;
   }
 
-  async connect({ room, side = 'mario', location = window.location } = {}) {
+  // `token` is the seat we already hold, if this page has been here before. The
+  // server puts a token back in its own seat and ignores one it does not know,
+  // so passing a stale one costs nothing and passing none is a fresh join.
+  async connect({ room, side = 'mario', token = null, location = window.location } = {}) {
     this.transport = new Transport(wsUrl(location), {});
-    this.session = new Session({ transport: this.transport, room, side });
+    this.session = new Session({ transport: this.transport, room, side, token });
 
     this.session.on('snapshot', (m) => {
       if (m.side === 'mario') return;
@@ -468,8 +472,15 @@ async function boot() {
   const code = room || (await mintRoom(location.origin));
   joining = code;
   showRoom(window, code, 'mario');
-  banner(document, `ROOM ${code} — MARIO`);
-  const welcome = await net.connect({ room: code, side: 'mario', location });
+  // A page that already holds this seat says so while it asks for it back. The
+  // one thing that must never be on screen during a reconnect is SEAT TAKEN.
+  const held = recallSeat(window, code, 'mario');
+  banner(document, held ? `ROOM ${code} — MARIO — RECONNECTING` : `ROOM ${code} — MARIO`);
+  const welcome = await net.connect({ room: code, side: 'mario', token: held, location });
+  // From the welcome, not from `held`: a stale token is answered with a FRESH
+  // seat and a fresh token, and storing the one we asked with would leave the
+  // tab holding a token for a seat it no longer has.
+  rememberSeat(window, code, 'mario', welcome.token);
   const say = (present) =>
     banner(document, `ROOM ${code} — MARIO — ${present ? 'PILOT IS UP' : 'WAITING FOR PILOT'}`);
   say(welcome.peer);
@@ -499,6 +510,13 @@ const ready = boot().catch((e) => {
   // over. The refusals the server can actually name say so on the banner
   // instead of hiding behind OFFLINE; see bootFailure.
   const fail = bootFailure(e, { room: joining, side: 'mario' });
+  // A refusal the SERVER named is proof the token we presented is not in that
+  // seat: a token it recognises is always let in. Dropping it here is what
+  // stops a tab that lost its seat from re-presenting a dead token on every
+  // future reload. A refusal it did not name — no server, no endpoint, a socket
+  // that never opened — keeps the token, because that server may yet come back
+  // still holding the seat.
+  if (fail.diagnosed) forgetSeat(window, joining, 'mario');
   console.warn('[mario net] offline:', e && e.message ? e.message : e);
   banner(document, fail.text);
   return null;

@@ -79,10 +79,13 @@ export function roomToJSON(room) {
 // one bad room is dropped, it never takes the file or the boot with it.
 // How long a restored seat is still held for the token that owns it.
 //
-// A seat token lives in the Session object on the page and NOWHERE ELSE — not
-// in storage, not in the URL — so it survives a dropped socket and does not
-// survive a reload. That is fine while the server is up: the client that lost
-// its socket reconnects itself, with its token, and gets its seat back.
+// A seat token lives in the tab's sessionStorage (see lobby.js), so it survives
+// a dropped socket AND a reload, and dies when the tab does. That is fine while
+// the server is up: the client that lost its socket — or its whole document —
+// reconnects itself, with its token, and gets its seat back.
+//
+// The limit below therefore bounds how long a seat is held for a TAB THAT MAY
+// HAVE BEEN CLOSED, which is the only case that can no longer speak for itself.
 //
 // Across a restart it needs a limit, or persistence introduces a dead end that
 // memory never had. A room whose two seats came back held by tokens that no

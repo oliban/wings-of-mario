@@ -116,6 +116,19 @@ export async function startServer(opts = {}) {
 
   const wss = new WebSocketServer({ server: http, path: '/ws' });
 
+  // token -> the socket that currently holds that seat.
+  //
+  // A reload is two sockets for one seat, and their order is not guaranteed:
+  // the new page's hello can land before the old page's close does. Without
+  // this, the old socket's close would then mark a seat that a LIVE page is
+  // sitting in as absent and tell the peer that player had left — the reconnect
+  // would succeed and immediately be undone by the ghost of the tab it
+  // replaced. Only the socket that still holds the seat may vacate it.
+  //
+  // Bounded by the number of open sockets: the holder deletes its own entry on
+  // close, and a superseded socket has none to delete.
+  const holders = new Map();
+
   wss.on('connection', (ws) => {
     // Per-socket state. `seat` is null until a valid hello arrives; nothing
     // else is accepted before then.
@@ -168,6 +181,9 @@ export async function startServer(opts = {}) {
         ws.__room = room;
         ws.__side = res.side;
         ws.__token = res.token;
+        // This socket is now the one that speaks for this seat. On a reconnect
+        // that displaces whichever socket held it before.
+        holders.set(res.token, ws);
 
         const state = room.matchState();
         send(ws, {
@@ -305,6 +321,11 @@ export async function startServer(opts = {}) {
 
     ws.on('close', () => {
       if (!room || !seat) return;
+      // Superseded: a newer socket already reconnected into this seat and is
+      // sitting in it. This close is the old page going away, and it says
+      // nothing about whether the player is here.
+      if (holders.get(seat.token) !== ws) return;
+      holders.delete(seat.token);
       room.leave(seat.token, Date.now());
       relay({ t: MSG.PEER, side: seat.side, present: false });
     });

@@ -17,6 +17,86 @@ export function roomFromLocation(search = '') {
   };
 }
 
+// ---------------------------------------------------------------------------
+// THE SEAT TOKEN, and where it lives across a reload.
+//
+// The server hands out a token that puts a returning player back in their own
+// seat (spec 7.4), and Room.join has always honoured it. It lived in the
+// Session object and nowhere else, so it survived a dropped socket and did not
+// survive a reload — and a reloaded page, arriving with no token at all, is
+// indistinguishable from a stranger asking for an occupied seat. Pressing
+// reload therefore locked a player out of their own match with SEAT TAKEN.
+//
+// sessionStorage rather than localStorage, and this is the whole design: a
+// token identifies ONE seat held by ONE page. sessionStorage is scoped to the
+// tab, so it survives F5 and dies with the tab — exactly a reconnect token's
+// meaning — and two tabs on one laptop get two separate stores and stay two
+// players, which is how this game is normally tested and often played.
+//
+// (Chrome's Duplicate Tab copies sessionStorage, so a duplicated tab would
+// present its parent's token and take the seat over. That is one keystroke
+// nobody presses mid-match, and the alternative — localStorage — would break
+// the ordinary two-tab case instead.)
+// ---------------------------------------------------------------------------
+
+const SEAT_KEY_PREFIX = 'wom.seat.';
+
+// Keyed by room AND side: one tab can hold different seats in different rooms
+// over its life, and a token is only ever valid for the one it was minted for.
+function seatKey(room, side) {
+  const code = normalizeRoomCode(room);
+  if (!code || !SIDES.includes(side)) return null;
+  return `${SEAT_KEY_PREFIX}${code}.${side}`;
+}
+
+// Every access can throw, not just fail: a page in Safari's private mode or in
+// a sandboxed iframe throws on the mere mention of sessionStorage. A page that
+// cannot store a token still has to play, so this returns null and the caller
+// joins fresh — the behaviour every page had before this existed.
+function seatStore(win) {
+  try {
+    const w = win || (typeof window === 'undefined' ? null : window);
+    return w && w.sessionStorage ? w.sessionStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+export function rememberSeat(win, room, side, token) {
+  const key = seatKey(room, side);
+  const store = seatStore(win);
+  if (!key || !store || typeof token !== 'string' || !token) return false;
+  try {
+    store.setItem(key, token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function recallSeat(win, room, side) {
+  const key = seatKey(room, side);
+  const store = seatStore(win);
+  if (!key || !store) return null;
+  try {
+    return store.getItem(key) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function forgetSeat(win, room, side) {
+  const key = seatKey(room, side);
+  const store = seatStore(win);
+  if (!key || !store) return false;
+  try {
+    store.removeItem(key);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function wsUrl(loc) {
   const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${loc.host}/ws`;

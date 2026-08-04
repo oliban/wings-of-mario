@@ -3,6 +3,7 @@ import { Session } from './session.js';
 import { Interp } from './interp.js';
 import {
   roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure, lobbyHeader,
+  rememberSeat, recallSeat, forgetSeat,
 } from './lobby.js';
 import pilot from '../wings/pilot-main.js';
 import { DamageSync, applyToIsland } from './damage-sync.js';
@@ -105,9 +106,11 @@ export class PilotNet {
     return isle ? isle.originX : null;
   }
 
-  async connect({ room, side = 'pilot', location = window.location } = {}) {
+  // `token` is the seat we already hold, if this page has been here before.
+  // See MarioNet.connect: the two sides do this identically.
+  async connect({ room, side = 'pilot', token = null, location = window.location } = {}) {
     this.transport = new Transport(wsUrl(location), {});
-    this.session = new Session({ transport: this.transport, room, side });
+    this.session = new Session({ transport: this.transport, room, side, token });
 
     this.session.on('snapshot', (m) => {
       if (m.side === 'pilot') return; // our own, echoed back: ignore
@@ -319,8 +322,12 @@ async function boot() {
   const code = room || (await mintRoom(location.origin));
   joining = code;
   showRoom(window, code, 'pilot');
-  banner(document, `ROOM ${code} — PILOT`);
-  const welcome = await net.connect({ room: code, side: 'pilot', location });
+  // See the same three lines on Mario's side: a page that already holds this
+  // seat asks for it back, and says so while it waits.
+  const held = recallSeat(window, code, 'pilot');
+  banner(document, held ? `ROOM ${code} — PILOT — RECONNECTING` : `ROOM ${code} — PILOT`);
+  const welcome = await net.connect({ room: code, side: 'pilot', token: held, location });
+  rememberSeat(window, code, 'pilot', welcome.token);
   const say = (present) =>
     banner(document, `ROOM ${code} — PILOT — ${present ? 'MARIO IS HERE' : 'WAITING FOR MARIO'}`);
   say(welcome.peer);
@@ -338,6 +345,9 @@ const ready = boot().catch((e) => {
   // over. The refusals the server can actually name say so on the banner
   // instead of hiding behind OFFLINE; see bootFailure.
   const fail = bootFailure(e, { room: joining, side: 'pilot' });
+  // A named refusal means the token we presented is not in that seat; see the
+  // same line on Mario's side for why an unnamed one keeps it.
+  if (fail.diagnosed) forgetSeat(window, joining, 'pilot');
   console.warn('[pilot net] offline:', e && e.message ? e.message : e);
   banner(document, fail.text);
   return null;
