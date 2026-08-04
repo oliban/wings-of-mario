@@ -87,6 +87,17 @@ const BLUE = ['#0b2f74', '#1749a8', '#3878d8', '#a8d0ff'];
 const WHITE = ['#6c7590', '#a8b4cc', '#d8e0f0', '#ffffff'];
 const GOLD = ['#8a5600', '#e0a41c', '#fbe07c', '#fff8d0'];
 const GREEN = ['#0d5210', '#2fa832', '#8ce65a', '#d4ffb0'];
+// Work clothes for the toolbelt form: a denim cap and shirt over canvas overalls.
+// The overalls CANNOT be the obvious tan — slot 1 is skin shadow (#a8571c) and
+// slot c is boot leather, so any tan bib measured under 30 units from one of them
+// and the man turned into one brown column. Pushing the canvas green-olive is what
+// buys the separation (72 units off the skin ramp at its closest index) while
+// still reading as workwear rather than as a second Luigi: the green is a drab
+// khaki three steps darker and far less saturated than Luigi's #2fa832.
+// The denim keeps its mid and light BELOW the #5c94fc sky (52 units clear at the
+// closest slot) so a jumping figure never dissolves into the background.
+const DENIM = ['#16345e', '#2f5f9c', '#4c86cc', '#a8d0ff'];
+const CANVAS = ['#2c4a14', '#6e8a24', '#b8c85a'];
 
 function pal(cap, ovl, skin = SKIN, hair = HAIR, shoe = SHOE, btn = BTN) {
   return [
@@ -102,6 +113,11 @@ const BIG_PAL = pal(RED, BLUE);
 const FIRE_PAL = pal(WHITE, RED, SKIN, HAIR, SHOE, BTN);
 const DEAD_PAL = pal(RED, BLUE, SKIN_PALE);
 const FIRE_DEAD_PAL = pal(WHITE, RED, SKIN_PALE, HAIR, SHOE, BTN);
+// Toolbelt keeps the boots and the brass button of the other forms on purpose:
+// the belt drawn across the pelvis is painted in those same two leather slots and
+// buckled with that same brass, so it costs no palette slot at all.
+const TOOL_PAL = pal(DENIM, CANVAS, SKIN, HAIR, SHOE, BTN);
+const TOOL_DEAD_PAL = pal(DENIM, CANVAS, SKIN_PALE, HAIR, SHOE, BTN);
 
 // The star flash cycles cap, overalls, shoes, hair and buttons — never the SKIN.
 // Holding the face on one ramp is what keeps the cap/face edge readable through
@@ -122,6 +138,8 @@ export const MARIO_PALS = {
   small: SMALL_PAL,
   big: BIG_PAL,
   fire: FIRE_PAL,
+  tool: TOOL_PAL,
+  toolDead: TOOL_DEAD_PAL,
   dead: DEAD_PAL,
   star: STAR_PALS,
 };
@@ -1310,6 +1328,122 @@ export const FIRE_MARIO = {
   star: STAR_PALS,
 };
 
+/* ================================================================== *
+ *  TOOLBELT MARIO — Big Mario's pixels in work clothes, plus a belt
+ *
+ *  Derived from BIG_MARIO the way FIRE_MARIO is, so every animation big
+ *  Mario has (and every one he gains later) arrives here for free. The
+ *  costume is a denim cap and shirt over olive canvas overalls; the read
+ *  that actually names the power-up is the LEATHER BELT.
+ *
+ *  The belt is not authored per pose — 63 hand-drawn waistlines would
+ *  drift out of register the first time a walk frame moved a row. It is
+ *  a transform on whatever rows are passed in:
+ *
+ *    * the two pelvis rows are found by walking UP from the soles through
+ *      the split-leg block to the row where the hips weld together;
+ *    * on those two rows, and ONLY on pixels already in the overall ramp
+ *      (8/9/a), the canvas is remapped to boot leather — lit strap on the
+ *      upper row, dark strap on the lower — with a 2x2 brass buckle set
+ *      forward of centre, where a buckle sits on a man facing right.
+ *
+ *  Because it only ever swaps one slot for another, the alpha mask, the
+ *  row widths, the "no fully opaque row" invariant and the "every sprite
+ *  uses all sixteen slots" invariant of the source frame all survive
+ *  untouched. The belt cannot fuse two limbs together, because it never
+ *  paints a pixel that was not already opaque.
+ * ================================================================== */
+
+const OVERALL_CHARS = '89a';
+
+function opaqueRuns(row) {
+  let n = 0;
+  let prev = false;
+  for (let i = 0; i < row.length; i++) {
+    const on = row[i] !== '.';
+    if (on && !prev) n++;
+    prev = on;
+  }
+  return n;
+}
+
+// Walk up from the bottom: skip a lone trailing boot (the passing frames end on
+// one leg), climb through the rows where the two legs are separate, and stop at
+// the first row where they are one mass again. That row is the pelvis; the belt
+// sits on the two rows above it, which is where every big pose already keeps its
+// shared waist band.
+function waistRows(rows) {
+  const h = rows.length;
+  let y = h - 1;
+  while (y >= 0 && opaqueRuns(rows[y]) < 2) y--;
+  while (y >= 0 && opaqueRuns(rows[y]) >= 2) y--;
+  const split = y + 1;
+  const top = split - 3;
+  if (top < h * 0.5 || top < 1 || split >= h) return null;
+  return [top, top + 1];
+}
+
+function beltify(rows) {
+  const w = waistRows(rows);
+  if (!w) return rows;
+  const [hi, lo] = w;
+  const strap = (row, ch) =>
+    row.split('').map((c) => (OVERALL_CHARS.includes(c) ? ch : c)).join('');
+
+  const out = rows.slice();
+  // Lit strap on slot 1 rather than on the mid-leather of the boots: against the
+  // dark olive canvas a #84421c band was read as the shadow under the bib, and a
+  // belt that reads as a shadow is not a belt. Slot 1 is 78 units off the canvas
+  // mid, and the dark row under it keeps the leather a two-step form.
+  out[hi] = strap(out[hi], '1');
+  out[lo] = strap(out[lo], 'c');
+
+  // The buckle rides the front two thirds of the strap, not its centre: the
+  // figure faces right, and a buckle centred in the silhouette reads as a spine.
+  const span = [];
+  for (let x = 0; x < rows[hi].length; x++) {
+    if (OVERALL_CHARS.includes(rows[hi][x]) && OVERALL_CHARS.includes(rows[lo][x])) span.push(x);
+  }
+  if (span.length >= 4) {
+    const x0 = span[Math.min(span.length - 2, Math.floor(span.length * 0.6))];
+    for (const y of [hi, lo]) {
+      const r = out[y].split('');
+      for (const x of [x0, x0 + 1]) {
+        if (OVERALL_CHARS.includes(rows[y][x])) r[x] = 'd';
+      }
+      out[y] = r.join('');
+    }
+  }
+  return out;
+}
+
+const tool = (s, name) =>
+  makeSprite(beltify(s.rows), TOOL_PAL, { name: 'mario.tool.' + name, ox: s.ox, oy: s.oy });
+const toolAnim = (a, name) =>
+  new Anim(a.frames.map((f, i) => tool(f, `${name}${i}`)), a.holds, a.loop);
+
+const TOOL_DEAD = makeSprite(beltify(BIG_DEAD_ROWS), TOOL_DEAD_PAL,
+  { name: 'mario.tool.dead', ox: -2, oy: 0 });
+
+// The bomb goes out of the same lunge the fireball does — the throw is the arm
+// motion, not the projectile — so the pose is shared and only the clothes change.
+const TOOL_THROW = tool(FIRE_THROW, 'throw');
+
+export const TOOLBELT_MARIO = {
+  idle: tool(BIG_IDLE, 'idle'),
+  walk: toolAnim(BIG_MARIO.walk, 'walk'),
+  jump: tool(BIG_JUMP, 'jump'),
+  skid: tool(BIG_SKID, 'skid'),
+  duck: tool(BIG_DUCK, 'duck'),
+  dead: TOOL_DEAD,
+  climb: toolAnim(BIG_MARIO.climb, 'climb'),
+  swim: toolAnim(BIG_MARIO.swim, 'swim'),
+  swimIdle: tool(BIG_SWIM_IDLE, 'swimIdle'),
+  throwing: TOOL_THROW,
+  grow: tool(GROW_MID, 'grow'),
+  star: STAR_PALS,
+};
+
 
 /* ================================================================== *
  *  SMOOTH LOCOMOTION — a 6-frame walk and a 6-frame run, both scales.
@@ -2465,3 +2599,10 @@ BIG_MARIO.run = new Anim(
 
 FIRE_MARIO.walk6 = fireAnim(BIG_MARIO.walk6, 'walk6');
 FIRE_MARIO.run = fireAnim(BIG_MARIO.run, 'run');
+
+/* ------------------------------------------------------------------ *
+ *  TOOLBELT MARIO — derived the same way, belt included.
+ * ------------------------------------------------------------------ */
+
+TOOLBELT_MARIO.walk6 = toolAnim(BIG_MARIO.walk6, 'walk6');
+TOOLBELT_MARIO.run = toolAnim(BIG_MARIO.run, 'run');

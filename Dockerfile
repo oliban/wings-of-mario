@@ -21,6 +21,11 @@ RUN npm ci --omit=dev
 COPY server ./server
 COPY src ./src
 COPY index.html pilot.html ./
+# The social preview image, kept from upstream's nginx image for the reason
+# their comment gave: a missing asset is not necessarily a 404. Under nginx's
+# `try_files ... /index.html` it came back 200 with text/html, so a shared link
+# had no preview and nothing looked broken until you checked the content type.
+COPY og.png ./
 
 ENV NODE_ENV=production
 ENV PORT=8080

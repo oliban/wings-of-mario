@@ -274,6 +274,9 @@ class Game {
   // The HUD's left label follows who is actually playing.
   syncPlayerName() {
     if (!this.world) return;
+    // playerName is a display string; the toolbelt, the coin wallet and the
+    // suspended 1-up rule all need the mode itself, so the world carries a flag.
+    this.world.harryMode = this.harryMode === true;
     setHero(this.harryMode ? 'HARRY' : null);
     if (this.harryMode) this.world.playerName = 'HARRY';
     else if (this.playerCount > 1) this.world.playerName = this.turn === 0 ? t('mario') : t('luigi');
@@ -410,8 +413,10 @@ class Game {
   async endSession() {
     this.started = false;
     this.playerCount = 1;
+    this.harryMode = false;
     this.slots = [this.newSlot(), this.newSlot()];
     this.turn = 0;
+    this.syncPlayerName();
     this.world.lives = 3;
     this.world.score = 0;
     this.world.coins = 0;
@@ -433,7 +438,23 @@ class Game {
         else resumeMusic();
       }
 
+      // A screen that closes on a button press unblocks the world in the SAME
+      // frame, and that press is still a live edge by the time the player reads
+      // it. With the brick bomb on SELECT — which is also what closes the
+      // options screen — dismissing the menu threw a grenade. Measured, not
+      // theorised: it cost 5 coins every time.
+      //
+      // Only the edge is swallowed, not the frame: world.update() still runs on
+      // exactly the frames it always did, so nothing about the bots' timing
+      // moves. Buttons that are HELD are untouched — this clears `pressed()`
+      // for one frame, not the button itself.
+      const screenWasUp = screens.blocksWorld || screens.paused;
       screens.update();
+      if (screenWasUp) {
+        for (const p of [input, pad2]) {
+          if (p && p.prev && p.state) p.prev[BTN.SELECT] = p.state[BTN.SELECT];
+        }
+      }
 
       if (!screens.blocksWorld && !screens.paused) {
         this.world.update();
@@ -599,6 +620,18 @@ window.__GAME = {
   damageKeys() {
     const w = game.world;
     return w ? [...w.damage].sort() : [];
+  },
+
+  // Harry mode without going through the title menu. The level is reloaded
+  // because the toolbelt blocks are chosen once, at load.
+  async setHarry(on = true) {
+    game.harryMode = on !== false;
+    game.syncPlayerName();
+    if (game.world && game.world.level) {
+      await game.loadLevel(game.levelId, game.world.areaId, { resetPlayer: true });
+      game.loop.step(1);
+    }
+    return game.harryMode;
   },
 
   setPower(power) {

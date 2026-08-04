@@ -6,11 +6,18 @@
 // not from anyone's memory of the game, and deviations are marked DEVIATION and
 // exist only where this engine lacks a mechanism the original had.
 //
-// Two things in 1-1 are OURS and are preserved verbatim across regeneration:
+// Three things in 1-1 are OURS and are preserved verbatim across regeneration:
 //   * the '1-1w' warp zone on the first pipe, built from roster.js so it always
 //     lists every level that exists — it is the playtest shortcut;
+//   * the '1-1h' HARRY ZONE on the second pipe, built from roster.js's HARRY
+//     list the same way — it is the only route into Harry's levels;
 //   * the '1-1b' coin room, which the original's own warp pipe at column 57
 //     leads to.
+//
+// All three are built FROM the roster rather than written out, so adding a level
+// — an ordinary one or one of Harry's — needs no edit to this generator. That
+// property is the point: a233703 added the Harry zone to the generated file by
+// hand and not here, and regenerating world 1 silently deleted it.
 
 import { writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -93,6 +100,9 @@ ${note}
   const L = emitLevel('1-1', { theme: 'overworld' });
   const warp = L.meta.pipes.find((p) => p.warp);
   const first = L.meta.pipes[0];
+  // The SECOND pipe is Harry's door. Taken from the pipe list rather than
+  // written as a column so it follows the level data if that ever moves.
+  const second = L.meta.pipes[1];
   // The coin room's side pipe puts you back into the main area. The original's
   // own re-entry point is the pipe at column 163, the one after the staircases,
   // which is exactly why taking the room is a shortcut rather than a detour.
@@ -210,6 +220,70 @@ function buildWarpZone(order) {
 
 const WARP = buildWarpZone(ORDER);
 
+// HARRY'S WARP ZONE — the SECOND pipe in the game, the one at column ${second.x}.
+//
+// Same room, one floor: there are only ever a handful of Harry levels, so they
+// all fit on the ground and the upper ledge the debug zone needs is pointless
+// here. The room is held at 20 columns wide even with one pipe in it, because a
+// room narrower than the 16-tile screen has nothing for the camera to do and
+// reads as broken.
+function buildHarryZone(order) {
+  const first = 6;
+  const step = 4;
+  const floor = 12;
+  const width = Math.max(20, first + order.length * step + 3);
+
+  const g = [];
+  for (let y = 0; y < 15; y++) g.push(new Array(width).fill('.'));
+  const put = (x, y, ch) => {
+    if (x >= 0 && x < width && y >= 0 && y < 15) g[y][x] = ch;
+  };
+
+  for (let x = 0; x < width; x++) {
+    put(x, 0, '#');
+    put(x, 1, '#');
+    put(x, 13, '#');
+    put(x, 14, '#');
+  }
+  for (let y = 2; y < 13; y++) {
+    put(0, y, '#');
+    put(width - 1, y, '#');
+  }
+  for (let x = 1; x < width - 1; x++) put(x, floor, '#');
+
+  // The pipe you drop out of. Lip only — a body hanging into row 2 would put
+  // big Mario's head inside it.
+  put(2, 1, '[');
+  put(3, 1, ']');
+
+  const signs = [{ x: 1.5, y: 4, text: 'HARRY' }];
+  const warps = [];
+  order.forEach((id, i) => {
+    const c = first + i * step;
+    put(c, floor, '[');
+    put(c + 1, floor, ']');
+    signs.push({ x: c + 0.25, y: floor - 1, text: id.toUpperCase() });
+    warps.push({ from: { x: c, y: floor }, dir: 'down', to: { level: id } });
+  });
+
+  return {
+    id: '1-1h',
+    name: 'HARRY ZONE',
+    theme: 'underground',
+    // his own tune starts the moment you drop in, so the room announces itself
+    music: 'harry-lava',
+    width,
+    height: 15,
+    spawn: { x: 2, y: 3 },
+    tiles: g.map((r) => r.join('')),
+    entities: [],
+    signs,
+    warps,
+  };
+}
+
+const HARRY_ZONE = buildHarryZone(HARRY);
+
 export default {
   id: '1-1',
   name: 'WORLD 1-1',
@@ -230,8 +304,10 @@ ${entsBlock(L.entities)}
     { from: { x: ${warp.x}, y: ${warp.top} }, dir: 'down', to: { area: '1-1b', x: 2.5, y: 3, exit: 'down' } },
     // The first pipe in the game is the tester's door into every other level.
     { from: { x: ${first.x}, y: ${first.top} }, dir: 'down', to: { area: '1-1w', x: 2.5, y: 3, exit: 'down' } },
+    // The second pipe is the door into Harry's levels.
+    { from: { x: ${second.x}, y: ${second.top} }, dir: 'down', to: { area: '1-1h', x: 2.5, y: 3, exit: 'down' } },
   ],
-  areas: { '1-1b': BONUS, '1-1w': WARP },
+  areas: { '1-1b': BONUS, '1-1w': WARP, '1-1h': HARRY_ZONE },
   flagpole: { x: ${L.meta.flagpole.x} },
   castle: { x: ${L.meta.castle.x + 1} },
 };
@@ -249,7 +325,7 @@ ${entsBlock(L.entities)}
         "// The castle column is the original's 202 + 1: our castle base is cut open so\n" +
         '// the walk-off can reach the door, and the sprite is drawn one tile right.'
     ) +
-      "import { ORDER } from './roster.js';\n\n" +
+      "import { ORDER, HARRY } from './roster.js';\n\n" +
       tilesBlock(relieveBlocks(L.rows)) +
       body
   );

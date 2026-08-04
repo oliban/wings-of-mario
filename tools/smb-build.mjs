@@ -454,7 +454,23 @@ export function buildArea(levelId, opts = {}) {
     if (e.x < 8 && e.id < 0x37 && ENEMY_MAP[e.id]) continue;
     const gr = groupOf(e.id);
     if (gr) {
-      for (let i = 0; i < gr.count; i++) ents.push({ type: gr.type, x: e.x + i, y: gr.row + 1 });
+      // A group is NOT placed at its own column. HandleGroupEnemies takes the
+      // base from ScreenRight_X_Pos — the screen's right edge at the frame the
+      // record is consumed — and steps `clc / adc #$18`, 24 pixels, for each
+      // member after the first (smbdis.asm:8774-8790). The record's column only
+      // decides WHEN it fires: CheckRightExtBounds compares the column against
+      // (ScreenRight_X_Pos + $30) & $f0, and since a column is always a multiple
+      // of 16 that rounding cancels, so the record fires on the first frame
+      // ScreenRight_X_Pos >= column*16 - 48 (asm:7906-7912, 7957-7962). The
+      // nominal base is therefore three tiles LEFT of the column and the step is
+      // one and a half tiles — the last member of a three lands on the column.
+      //
+      // Placing them at the column instead buried 23 of the game's 148 grouped
+      // enemies in pipes, bricks and staircases; with this it is one. Both of
+      // 1-2's opening koopas were in that 23: one inside the three-tall pillar
+      // at column 31, one plugged into the one-tile slot at column 32.
+      for (let i = 0; i < gr.count; i++)
+        ents.push({ type: gr.type, x: e.x - 3 + i * 1.5, y: gr.row + 1 });
       continue;
     }
     const fb = FIREBARS[e.id];

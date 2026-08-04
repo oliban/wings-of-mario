@@ -79,6 +79,8 @@ export default class Shell extends Entity {
     this.vx = this.sliding ? this.speed * this.facing : 0;
     this.stillT = 0;
     this.chain = 0;
+    // Consecutive frames a sliding shell has failed to move at all. See update().
+    this.stuckT = 0;
     // Brief grace so the shell the player just made cannot instantly hurt them.
     this.kickGrace = 8;
 
@@ -95,12 +97,35 @@ export default class Shell extends Entity {
 
     if (this.sliding) {
       this.vx = this.speed * this.facing;
+      const x0 = this.x;
       const col = this.moveAndCollide();
       if (col.hitLeft || col.hitRight) this._hitWall(col);
+      // A shell penned in a gap no wider than itself — 1-2 has a 1-tile slot at
+      // column 32, between the pillars at 31 and 33 — reverses every single
+      // frame and still travels zero pixels. Reversing is already what the ROM
+      // does (DoEnemySideCheck -> InvEnemyDir, asm:12592-12631, and _hitWall
+      // below); measured in that slot the shell flips facing and vx between +3
+      // and -3 forever while x never leaves 512.00, so no amount of ejection
+      // fixes it. The state cannot arise in the original because the original
+      // never places an enemy there, and it is poisonous: a shell that is
+      // permanently `sliding` never accrues stillT, so the koopa never climbs
+      // back in, and a player standing in the same tile has already spent their
+      // one Enemy_CollisionBits interaction and can never be hurt by it.
+      //
+      // So park it. A resting shell is harmless to stand in — which is true of
+      // the original too — and the revival clock starts running again. Two
+      // frames, because a shell rebounding off a wall legitimately stands still
+      // for the single frame it turns around.
+      if (this.x === x0) {
+        if (++this.stuckT >= 2) this.stop();
+      } else {
+        this.stuckT = 0;
+      }
       this._sweep();
       return;
     }
 
+    this.stuckT = 0;
     this.vx = 0;
     this.moveAndCollide();
     this.stillT++;
@@ -198,20 +223,31 @@ export default class Shell extends Entity {
     this.drawSprite(ctx, cam, this.art.rest);
   }
 
-  onStomp(player) {
+  onStomp() {
     if (this.dead) return false;
+    // Only a MOVING shell is a stomp. Its d7 is set, so HandlePECollisions sends
+    // it through ChkForPlayerInjury (asm:11377) to HandleStompedShellE
+    // (asm:11499-11512) — the one path that does `inc StompChainCounter` and
+    // sets the #$fc bounce.
     if (this.sliding) {
       this.stop();
       return true;
     }
-    // Landing on a resting shell while moving kicks it that way; landing on it
-    // dead still kicks it wherever the player is facing.
-    let dir;
-    if (player && Math.abs(player.vx || 0) > 0.15) dir = player.vx > 0 ? 1 : -1;
-    else if (player && player.facing) dir = player.facing;
-    else dir = this.facing;
-    this.kick(dir);
-    return true;
+    // A RESTING shell is NOT a stomp, however fast the player is falling.
+    // HandlePECollisions (asm:11355-11376) picks the kick path purely off the
+    // enemy state — d7 clear, 3 LSB >= 2 — and never reads Player_Y_Speed at
+    // all. That path ends `KSPts: jsr SetupFloateyNumber / ExPEC: rts`: no
+    // chain increment and no Player_Y_Speed write, i.e. kicking a shell does
+    // not bounce Mario. Returning false hands the contact to onPlayerTouch
+    // below, which already models the kick and its `#$03 + StompChainCounter`
+    // score.
+    //
+    // Absorbing it here paid a SECOND chain rung and a SECOND bounce per
+    // stop/kick cycle. Against a shell that cannot escape — the 1-tile slot at
+    // column 32 of 1-2, where the pillars at 31 and 33 pen it in — that was an
+    // unbreakable airborne chain: 99 lives in 89 seconds with the jump button
+    // held and the player's feet never once touching the floor.
+    return false;
   }
 
   onPlayerTouch(player) {

@@ -1,4 +1,8 @@
-// Localisation. Swedish is the default; English is available from Options.
+// Localisation. English is the default; Swedish is available from Options.
+//
+// The stored choice wins over the default, so anyone who has already played and
+// picked a language keeps it — flipping the default only changes what a new
+// player sees on their first boot.
 //
 // Everything here is UPPERCASE and restricted to the glyphs the 8x8 font carries
 // (A-Z, Å Ä Ö, 0-9 and a little punctuation). Lowercase would silently fall back
@@ -116,7 +120,7 @@ function stored() {
 }
 
 // Swedish unless the player has explicitly chosen otherwise.
-let current = stored() || 'sv';
+let current = stored() || 'en';
 
 export function getLang() {
   return current;

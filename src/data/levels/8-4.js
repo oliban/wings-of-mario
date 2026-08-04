@@ -87,9 +87,9 @@ export default {
 
   ],
   entities: [
+    {type: 'goomba',x: 56,y: 12},
+    {type: 'goomba',x: 57.5,y: 12},
     {type: 'goomba',x: 59,y: 12},
-    {type: 'goomba',x: 60,y: 12},
-    {type: 'goomba',x: 61,y: 12},
     {type: 'platform',x: 70.75,y: 14,mode: 'horizontal',tiles: 3,range: 64,speed: 0.75},
     {type: 'buzzy',x: 128,y: 12},
     {type: 'buzzy',x: 130,y: 12},

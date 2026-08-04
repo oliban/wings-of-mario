@@ -498,6 +498,13 @@ export class Hud {
       timeUp: (w.time | 0) <= 0 && w.deathCause === 'timeup',
       // Harry mode and two-player both rename the left-hand label.
       name: w.playerName || null,
+      // In Harry mode the coins are a wallet, not a countdown to a 1-up, so the
+      // field has to hold three digits.
+      wallet: w.harryMode === true,
+      // Set by player.js when a brick bomb was refused for want of coins, and
+      // left to expire on its own. `until` is a world tick, so a paused game
+      // holds the flash rather than running it out.
+      denyCost: w.coinDeny && (w.tick | 0) < w.coinDeny.until ? w.coinDeny.cost | 0 : 0,
     };
   }
 
@@ -534,12 +541,40 @@ export class Hud {
     const scorePal = this.rolling ? (t & 4 ? 'gold' : 'amber') : null;
     drawTextOutlined(ctx, digits, L.scoreX, L.rowValue, scorePal);
 
-    // Coin counter.
-    const coinSprite = COIN_CYCLE[(t >> 3) % COIN_CYCLE.length];
-    coinSprite.draw(ctx, L.coinIconX, L.rowValue);
-    drawTextOutlined(ctx, '×', L.coinTimesX, L.rowValue);
-    const coins = Math.max(0, Math.min(99, d.coins | 0));
-    drawTextOutlined(ctx, pad(coins, 2), L.coinNumX, L.rowValue);
+    // Coin counter — HARRY MODE ONLY.
+    //
+    // DELIBERATE DEVIATION FROM SMB, NOT AN OVERSIGHT. The original always shows
+    // the coin counter; the user asked for it to appear only in Harry mode,
+    // where coins are a wallet you spend on brick bombs. In normal play this
+    // part of the strip is simply empty. Delete the `if` to restore the
+    // original behaviour — everything inside it already handles both modes.
+    //
+    // Nothing else on the row moves: MARIO/score, WORLD and TIME are all drawn
+    // at fixed x from HUD_LAYOUT and none of them is centred on the space this
+    // frees. A strip that reflowed between modes would read as broken.
+    if (d.wallet === true) {
+      const denyPal = (d.denyCost | 0) > 0 ? ((t >> 3) & 1 ? 'red' : 'amber') : null;
+      const coinSprite = COIN_CYCLE[(t >> 3) % COIN_CYCLE.length];
+      coinSprite.draw(ctx, L.coinIconX, L.rowValue);
+      drawTextOutlined(ctx, '×', L.coinTimesX, L.rowValue, denyPal);
+      // Two digits is the SMB width: the counter never reaches 100 there because
+      // the hundredth coin is a 1-up. A Harry-mode wallet does reach it, and
+      // there is room — the field ends at 128 and WORLD starts at 144.
+      const wide = d.wallet === true;
+      const coins = Math.max(0, Math.min(wide ? 999 : 99, d.coins | 0));
+      const coinDigits = wide ? 3 : 2;
+
+      // A dud thrown for want of coins flashes the group red and amber. The
+      // NUMBER ITSELF NEVER CHANGES — it is always the wallet.
+      //
+      // This used to alternate the wallet with the PRICE on the same beat, my
+      // idea, and it was wrong: a counter that swaps between 019 and 005 twice a
+      // second does not read as "that costs 5", it reads as a broken counter,
+      // and it was reported as one. A value that flickers between two numbers is
+      // never legible, however sound the intent. Colour carries the alarm;
+      // the digits stay still and keep meaning one thing.
+      drawTextOutlined(ctx, pad(coins, coinDigits), L.coinNumX, L.rowValue, denyPal);
+    }
 
     // World label, centred inside the WORLD field.
     const label = String(d.label || DEFAULT_STATE.label);

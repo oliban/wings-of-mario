@@ -50,6 +50,26 @@ const ITEM_WALK = 1.0;
 const STAR_BOUNCE = -5.6;
 const STAR_WALK = 1.35;
 
+// ---------------------------------------------------------------------------
+// Harry mode's toolbelt blocks.
+//
+// Exactly this many of the level's plain coin question blocks give up a toolbelt
+// instead, chosen from a seed derived from the level id so the same run always
+// produces the same two blocks. Math.random() here would make tools/reach.mjs
+// and tools/playthrough.mjs disagree with themselves between runs.
+// ---------------------------------------------------------------------------
+const TOOLBELT_BLOCKS = 2;
+
+function seedFor(id) {
+  let h = 0x811c9dc5;
+  const s = String(id || '');
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0 || 1;
+}
+
 // Packed tile key, shared with world.js so per-tile tables agree.
 export const tileKey = (tx, ty) => (ty << 12) | (tx & 0xfff);
 const key = tileKey;
@@ -303,12 +323,51 @@ export class BlockSystem {
     this.effects = [];
     this.rng = new Rng(0x1b10c5);
     this._shardCache = new WeakMap();
+    this.toolTiles = new Set();
   }
 
   reset() {
     this.bumps.clear();
     this.state.clear();
     this.effects.length = 0;
+    this._pickToolbeltTiles();
+  }
+
+  // Called once per level/area load, after world.js has built the tile map and
+  // the contents overrides. Outside Harry mode this only clears the set, so
+  // every other mode sees the level exactly as it was authored.
+  _pickToolbeltTiles() {
+    const set = this.toolTiles;
+    set.clear();
+    const w = this.world;
+    if (!w || w.harryMode !== true) return;
+    // Main area only: a bonus room's coin blocks stay coin blocks.
+    if (w.areaId) return;
+
+    const cands = [];
+    for (let ty = 0; ty < w.h; ty++) {
+      for (let tx = 0; tx < w.w; tx++) {
+        const rec = w.recAt(tx, ty);
+        // Visible '?' blocks holding a plain coin. Hidden blocks are skipped —
+        // a power-up nobody can see is a power-up nobody finds — and so is any
+        // tile the level's `contents` list has already spoken for.
+        if (!rec || rec.question !== true || rec.invisible === true) continue;
+        if (rec.item !== 'coin') continue;
+        if (w.contents && w.contents.get(key(tx, ty))) continue;
+        cands.push(key(tx, ty));
+      }
+    }
+    if (!cands.length) return;
+
+    const rng = new Rng(seedFor((w.level && w.level.id) || w.levelId));
+    const n = Math.min(TOOLBELT_BLOCKS, cands.length);
+    for (let i = 0; i < n; i++) {
+      const j = i + rng.int(0, cands.length - 1 - i);
+      const t = cands[i];
+      cands[i] = cands[j];
+      cands[j] = t;
+      set.add(cands[i]);
+    }
   }
 
   stateAt(tx, ty, create = false) {
@@ -436,6 +495,7 @@ export class BlockSystem {
   }
 
   _contentsOf(tx, ty, rec) {
+    if (this.toolTiles.size && this.toolTiles.has(key(tx, ty))) return 'toolbelt';
     const ov = this.world.contents.get(key(tx, ty));
     const item = ov ? ov.item : rec.item;
     return item || null;

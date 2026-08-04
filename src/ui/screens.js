@@ -1156,9 +1156,16 @@ export class LevelCompleteTally {
 
 /* ------------------------------------------------------------ options screen */
 
-const OPT_ROWS = ['video', 'music', 'sfx', 'back'];
-const OPT_LABEL = { video: t('video'), music: t('music'), sfx: t('sound'), back: t('back') };
-const OPT_Y = [60, 78, 96, 114];
+const OPT_ROWS = ['video', 'music', 'sfx', 'lang', 'back'];
+// A FUNCTION, not a table. The old `{ video: t('video'), ... }` was evaluated
+// once at module load, so every label froze in whatever language booted first —
+// invisible until this screen grew a language row, and then the one row you
+// cannot read is the one telling you how to change the language.
+const optLabel = (row) =>
+  ({ video: t('video'), music: t('music'), sfx: t('sound'), lang: t('language'), back: t('back') })[row];
+// Tightened from 18px to 16px spacing to fit a fifth row: the glyphs are 8px,
+// so the last row now ends at 128 and still clears the divider at 136.
+const OPT_Y = [56, 72, 88, 104, 120];
 const OPT_LABEL_X = 48;
 const OPT_VALUE_X = 144;
 const OPT_CURSOR_X = 32;
@@ -1214,7 +1221,11 @@ export class OptionsScreen {
       if (OPT_ROWS[this.index] === 'back') this.close();
       else this._adjust(1);
     }
-    if (input.pressed(BTN.SELECT)) this.close();
+    // SELECT and BACK both leave, from any row. BACK is Escape, which used to be
+    // an alias of START and so ADJUSTED whatever row was highlighted — pressing
+    // Escape on VIDEO cycled the video preset instead of backing out, which is
+    // the opposite of what Escape means everywhere else.
+    if (input.pressed(BTN.SELECT) || input.pressed(BTN.BACK)) this.close();
     return this;
   }
 
@@ -1230,6 +1241,9 @@ export class OptionsScreen {
     } else if (row === 'sfx') {
       o.nudge('sfx', dir);
       sfx('coin'); // audition the new level
+    } else if (row === 'lang') {
+      cycleLang(dir);
+      sfx('coin');
     } else if (row === 'back' && dir > 0) {
       this.close();
     }
@@ -1238,19 +1252,21 @@ export class OptionsScreen {
 
   draw(ctx) {
     fillRect(ctx, '#000000', 0, 0, SCREEN_W, SCREEN_H);
-    drawTextCentered(ctx, 'OPTIONS', 24, 'gold');
+    drawTextCentered(ctx, t('options'), 24, 'gold');
 
     const o = this.options;
     for (let i = 0; i < OPT_ROWS.length; i++) {
       const row = OPT_ROWS[i];
       const y = OPT_Y[i];
       const sel = i === this.index;
-      drawText(ctx, OPT_LABEL[row], OPT_LABEL_X, y, sel ? null : 'gray');
+      drawText(ctx, optLabel(row), OPT_LABEL_X, y, sel ? null : 'gray');
 
       if (row === 'video') {
         drawText(ctx, o.preset.toUpperCase(), OPT_VALUE_X, y, sel ? 'gold' : 'gray');
       } else if (row === 'music' || row === 'sfx') {
         drawMeter(ctx, OPT_VALUE_X, y, o[row]);
+      } else if (row === 'lang') {
+        drawText(ctx, LANG_NAMES[getLang()], OPT_VALUE_X, y, sel ? 'gold' : 'gray');
       }
 
       if (sel) {
@@ -1352,6 +1368,16 @@ export class Screens {
     this.world = null;
     this.renderer = null;
     this.audio = null;
+
+    // The menu row the cursor is ON right now, before anything is confirmed:
+    // 'start1' | 'start2' | 'harry' | 'options', or null when the title menu is
+    // not the screen in front of you. The page chrome outside the canvas reads
+    // this — the key legend reveals the toolbelt controls while HARRY MODE is
+    // highlighted — so it is a deliberate public accessor, not internals anyone
+    // should be reaching past.
+    Object.defineProperty(this, 'menuChoice', {
+      get: () => (this.state === 'title' ? MENU_RESULTS[this.title.index] || null : null),
+    });
 
     /** Fired with 'start1' | 'start2' when the title menu is confirmed. */
     this.onSelect = null;

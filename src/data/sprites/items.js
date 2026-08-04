@@ -244,6 +244,126 @@ export const FIRE_FLOWER = {
 };
 
 /* ------------------------------------------------------------------ *
+ * TOOLBELT — the power-up that rises out of a question block like the
+ * fire flower and puts Mario in work clothes.
+ *   0 outline  1 leather dark  2 leather mid  3 leather lit
+ *   4 brass dark  5 brass mid  6 brass lit
+ *   7 steel dark  8 steel mid  9 steel lit
+ *
+ * The read has to survive 16x16 against a mushroom, a flower and a star,
+ * so the sprite commits to ONE silhouette idea the others do not have: a
+ * horizontal band with things hanging off it. The strap runs edge to edge
+ * across rows 2-6 (nothing else in the item set is a full-width bar), the
+ * buckle is deliberately TALLER than the strap so it breaks that bar top
+ * and bottom instead of being a yellow dot inside it, and two tools hang
+ * clear of it with sky between them — a screwdriver on the left, a hammer
+ * on the right whose head is the widest mass below the belt.
+ *
+ * Four frames: the hanging tools swing a column as a rigid unit (they are
+ * shifted from the handle down, not from the middle — a tool that bends at
+ * the waist reads as a rendering fault, not as a swing) and a glint walks
+ * the brass. The alpha mask therefore changes between every adjacent pair.
+ * ------------------------------------------------------------------ */
+
+// Leather is pushed a step lighter than real belt hide: at #4a2208 the strap
+// carried no value against the underground black and the whole pickup went to
+// a gold buckle floating over nothing. This ramp keeps 44 units off the brass
+// mid at its closest index, so strap and buckle stay two materials.
+const TOOL_PAL = [
+  '#1a1008', '#5a2a0a', '#9c5620', '#d08a3c',
+  '#6e4400', '#e0a41c', '#fbe07c',
+  '#4e5670', '#8f9cb8', '#e0e8ff',
+];
+
+// 0 — at rest, glint on the upper left of the buckle ring.
+const TOOLBELT_0 = [
+  '.....000000.....',
+  '.....066550.....',
+  '0000006655000000',
+  '3333306005033333',
+  '2222206005022222',
+  '1111106555011111',
+  '0000005445000000',
+  '.03300444400330.',
+  '.03300000000330.',
+  '.0880......0330.',
+  '.0880......0330.',
+  '.0880....0000000',
+  '.0880....0999880',
+  '.0880....0888870',
+  '.0980....0887770',
+  '.000.....0000000',
+];
+
+// 1 — both tools swung a column, whole: handle, shank and head together.
+const TOOLBELT_1 = [
+  '.....000000.....',
+  '.....066650.....',
+  '0000006555000000',
+  '3333306005033333',
+  '2222206005022222',
+  '1111106555011111',
+  '0000005445000000',
+  '0330.044440330..',
+  '0330.000000330..',
+  '0880......0330..',
+  '0880......0330..',
+  '0880....0000000.',
+  '0880....0999880.',
+  '0880....0888870.',
+  '0980....0887770.',
+  '000.....0000000.',
+];
+
+// 2 — back at rest, the glint having crossed to the pin bar.
+const TOOLBELT_2 = [
+  '.....000000.....',
+  '.....066550.....',
+  '0000006555000000',
+  '3333306005033333',
+  '2222206005022222',
+  '1111106556011111',
+  '0000005445000000',
+  '.03300444400330.',
+  '.03300000000330.',
+  '.0880......0330.',
+  '.0880......0330.',
+  '.0880....0000000',
+  '.0880....0999880',
+  '.0880....0888870',
+  '.0980....0887770',
+  '.000.....0000000',
+];
+
+// 3 — swung again, glint down on the tongue below the strap.
+const TOOLBELT_3 = [
+  '.....000000.....',
+  '.....066550.....',
+  '0000006555000000',
+  '3333306005033333',
+  '2222206005022222',
+  '1111106555011111',
+  '0000005445000000',
+  '0330.045440330..',
+  '0330.000000330..',
+  '0880......0330..',
+  '0880......0330..',
+  '0880....0000000.',
+  '0880....0999880.',
+  '0880....0888870.',
+  '0980....0887770.',
+  '000.....0000000.',
+];
+
+export const TOOLBELT = {
+  idle: new Anim(
+    [TOOLBELT_0, TOOLBELT_1, TOOLBELT_2, TOOLBELT_3].map((r, i) =>
+      makeSprite(r, TOOL_PAL, { name: `toolbelt#${i}` })),
+    7
+  ),
+};
+
+/* ------------------------------------------------------------------ *
  * STARMAN — 5-point star. SMB1's star has no boots and no whites of the
  * eyes: the pupils sit as bare 2x2 blocks directly on the body, which is the
  * only way they survive the silver step of the colour cycle.

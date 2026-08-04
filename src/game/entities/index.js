@@ -37,6 +37,11 @@ import Bowser, { BowserFire } from './bowser.js';
 // not import it, so the enemy roster pulls it in to register the type.
 import './hammer.js';
 
+// The toolbelt power-up and the bomb it throws. world.js's item list does not
+// name them, so — like the hammer — the roster is what registers the types.
+import './toolbelt.js';
+import './brickbomb.js';
+
 // ---------------------------------------------------------------------------
 // Tunables. Pixels per frame / pixels per frame squared at 60.0988 Hz.
 //
