@@ -32,18 +32,33 @@ export const FLIGHT = {
   FUEL_THROTTLE: 0.01,
   // The stall turn: reaching zero airspeed with the stick still held against
   // you wings the aeroplane over onto the new heading rather than leaving it
-  // dead in the air. 26 ticks (~0.43s) reads as a manoeuvre without feeling
-  // like a cutscene — this happens every time a player reverses, so it errs
-  // short. The sweep always passes through PI/2 (straight down in world
-  // terms) at its midpoint regardless of which way it started, which is what
-  // makes every reversal cost a bit of altitude rather than alternating
-  // between diving and climbing depending on which way the player happened
-  // to be facing.
-  STALL_TURN_TICKS: 26,
+  // dead in the air. 70 ticks (~1.16s) is long enough that the eye reads a
+  // heavy aeroplane swinging its nose through the vertical and back out the
+  // other side, rather than a sprite flipping. It was 26 (~0.43s), which
+  // erred short on the grounds that a player does this constantly; at that
+  // length the roll in scene.js could not keep up with the heading (33
+  // degrees of bank lag at the midpoint) and the whole thing was over before
+  // it registered as a manoeuvre at all.
+  //
+  // The sweep always passes through PI/2 (straight down in world terms) at
+  // its midpoint regardless of which way it started, which is what makes
+  // every reversal cost a bit of altitude rather than alternating between
+  // diving and climbing depending on which way the player happened to be
+  // facing. Because the sink is that dip integrated, and nothing else, a
+  // longer turn costs proportionally more height: ~31px now against ~11px
+  // before. That is deliberate and is not compensated for here: the lowest
+  // you can reverse from over open sea and still fly away drops from y~537
+  // to y~518, so the band of altitude where changing ends kills you roughly
+  // doubles. Turning low is now a decision. It is still clear of the deck —
+  // a reversal from flight-deck height comes out ~29px above the water.
+  STALL_TURN_TICKS: 70,
   // A little airspeed is kept through the whole manoeuvre — a real wingover
   // carries forward drift, it does not pivot on the spot — and this is also
   // what the aeroplane exits the turn already flying at, so accelerating
-  // away afterward is a continuation, not a second standing start.
+  // away afterward is a continuation, not a second standing start. Left
+  // alone when the turn was lengthened: trimming it to claw back the extra
+  // sink would have paid for it out of the exit speed, which is the one
+  // thing this constant exists to protect.
   STALL_TURN_DRIFT: 0.9,
 };
 

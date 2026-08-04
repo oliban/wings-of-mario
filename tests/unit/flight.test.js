@@ -266,8 +266,13 @@ test('a stall turn costs a bit of altitude, felt but not fatal', () => {
   brakeToTurn(p, -1);
   rideTurnOut(p, -1);
   const sink = p.y - y0;
-  assert.ok(sink > 2, `a stall turn that costs nothing (${sink.toFixed(1)}px) is not felt`);
-  assert.ok(sink < 60, `a stall turn that costs ${sink.toFixed(1)}px is punishing, not a manoeuvre`);
+  // The cost is not a constant — it is the straight-down dip integrated over
+  // the length of the manoeuvre, so lengthening the turn raised it from ~11px
+  // to ~31px on purpose. The upper bound is what keeps that honest: a
+  // reversal at flight-deck height (y 500) must still come out above the sea
+  // at 560, or the manoeuvre stops being usable where it matters most.
+  assert.ok(sink > 15, `a stall turn this slow should cost real height, not ${sink.toFixed(1)}px`);
+  assert.ok(sink < 48, `a stall turn that costs ${sink.toFixed(1)}px cannot be flown off the deck`);
 });
 
 test('a stall turn drifts forward rather than pivoting on the spot', () => {
@@ -290,8 +295,11 @@ test('a stall turn reads as a manoeuvre, not a snap or a cutscene', () => {
   const p = createPlane({ mode: MODE.AIR, x: 0, y: 300, speed: 2.69, angle: 0, gear: false });
   brakeToTurn(p, -1);
   const ticks = rideTurnOut(p, -1);
-  assert.ok(ticks > 10, `a ${ticks}-tick turn is a snap, not a manoeuvre`);
-  assert.ok(ticks < 90, `a ${ticks}-tick turn is a cutscene, not something you can do constantly`);
+  // A full second is the floor, asked for by name: below it the eye reads a
+  // sprite flipping rather than an aeroplane swinging its nose through the
+  // vertical. 60.0988 is the fixed timestep, so a tick count is a duration.
+  assert.ok(ticks > 60.0988, `a ${ticks}-tick turn (${(ticks / 60.0988).toFixed(2)}s) is a snap, not a manoeuvre — this must take over a second`);
+  assert.ok(ticks < 110, `a ${ticks}-tick turn is a cutscene, not something you can do constantly`);
 });
 
 test('a stall turn always dips through world-straight-down at its midpoint, whichever way it started', () => {

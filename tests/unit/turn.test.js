@@ -59,7 +59,7 @@ test('a stall turn rolls a half turn and stays there', () => {
   const scene = new Scene();
   const sim = airborne();
   const t = stallTurn(scene, sim);
-  assert.ok(t.during.length > 10, `the turn was over in ${t.during.length} ticks`);
+  assert.ok(t.during.length > 60.0988, `the turn was over in ${t.during.length} ticks — the reversal is supposed to take over a second`);
   const end = scene.roll;
   // One half turn from where it started, plus whatever small standing bank the
   // manoeuvre's own pitch rate is leading with.
@@ -78,6 +78,39 @@ test('the roll goes THROUGH the planform rather than jumping past it', () => {
   for (let i = 1; i < rolls.length; i++) {
     assert.ok(Math.abs(rolls[i] - rolls[i - 1]) < 0.6, `tick ${i} jumped`);
   }
+});
+
+// THE FAILURE MODE OF A LONG TURN. The bank is a spring chasing a target, and
+// the risk in stretching the manoeuvre past a second was that the spring
+// arrives early and the aeroplane then sits rolled and motionless for the rest
+// of it — which reads worse than the short version it replaced. It does not,
+// because the target itself moves every tick rather than being set once at the
+// start; this is what says so. Both halves matter: the roll must never stop
+// moving mid-manoeuvre, and it must not be so far behind the target that the
+// bank and the heading look like two different manoeuvres.
+test('the roll keeps moving for the whole of a long turn, and stays with its target', () => {
+  const scene = new Scene();
+  const sim = airborne();
+  fly(scene, sim, 400, BRAKE, (s) => s.turnState().turning);
+  let stalled = 0;
+  let worstStall = 0;
+  let worstLag = 0;
+  let prev = scene.roll;
+  let ticks = 0;
+  while (sim.turnState().turning) {
+    sim.step(BRAKE);
+    scene.consume(sim);
+    // The slowest the sweep ever moves is at its two ends, where smoothstep
+    // flattens out; anywhere in the middle it should be visibly turning.
+    if (Math.abs(scene.roll - prev) < 0.004) stalled++;
+    else stalled = 0;
+    worstStall = Math.max(worstStall, stalled);
+    worstLag = Math.max(worstLag, Math.abs(scene.rollTarget - scene.roll));
+    prev = scene.roll;
+    ticks++;
+  }
+  assert.ok(worstStall < 8, `the bank sat still for ${worstStall} of ${ticks} ticks — the aeroplane is posing, not turning`);
+  assert.ok(worstLag < 0.25, `the bank fell ${worstLag.toFixed(3)}rad behind the heading it is supposed to be part of`);
 });
 
 // THE EASED-VS-LINEAR GUARD. turnProgress is linear in ticks; flight.js sweeps
