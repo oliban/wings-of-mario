@@ -397,7 +397,13 @@ export class Scene {
     };
 
     r.draw(LAYER.SKY, world((ctx) => drawSky(ctx, f.vw, f.vh, cam.y, CEILING_Y, SEA_Y)));
-    r.draw(LAYER.PARALLAX_FAR, world((ctx) => drawClouds(ctx, f.vw, f.vh, cam, this.tick)));
+    // The clouds are the one world layer NOT drawn through the zoom. They are
+    // distant, and a distant thing does not change size because you climbed
+    // three hundred pixels; inside the transform they shrank by three over the
+    // climb while holding their place on screen, which reads as the sky
+    // following the aeroplane. drawClouds takes the DEVICE frame and the
+    // world's scale and applies its own much gentler one. See art/sky.js.
+    r.draw(LAYER.PARALLAX_FAR, (ctx) => drawClouds(ctx, VIEW_W, VIEW_H, cam, this.tick, f.scale));
     r.draw(LAYER.BG_TILES, world((ctx) => this.drawShip(ctx, cam, f)));
     r.draw(LAYER.TILES, world((ctx) => this.drawIslands(ctx, sim, cam, f)));
     r.draw(LAYER.ENTITIES, world((ctx) => this.drawShots(ctx, sim, cam, f)));

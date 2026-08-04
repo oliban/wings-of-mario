@@ -45,6 +45,59 @@ export function drawSky(ctx, viewW, viewH, camY, ceilingY, seaY) {
 // Fair-weather cumulus. White now that the aeroplane is the dark object: a
 // bright cloud behind a dark aircraft helps it read rather than competing with
 // it, which is the opposite of the constraint a night sky imposed.
+//
+// THE CLOUDS ARE NOT IN THE WORLD.
+//
+// They used to be drawn through the same zoom transform as the ship and the
+// aeroplane, so climbing shrank them from 110 screen pixels wide to 31 — and
+// because the transform scales POSITION as well as size, the whole bank was
+// pulled back toward the top-left corner at exactly the rate it shrank. The net
+// effect on screen was a cloud that stayed put and changed size. The user's
+// word for it was "chased": a thing that holds its place in your view while
+// everything around it moves is read as attached to you, not as sky.
+//
+// So the layer is drawn OUTSIDE the world zoom, in its own near-screen space,
+// and everything below — the positions, the drift, the parallax, the cull — is
+// in that space. `worldScale` reaches this file only to compute the small
+// residual scale below.
+//
+// HOW MUCH OF THE ZOOM THE CLOUDS TAKE. Not none. A layer pinned at exactly 1.0
+// while the world runs 1.15 down to 0.32 reads as a decal on the canopy glass —
+// the eye gets no size cue at all and the clouds stop belonging to the same
+// photograph. A small share of the world's rate keeps them in the picture while
+// staying far below the threshold where the size change is what you notice.
+// 0.22 puts them at 1.03 on the deck and 0.85 at the ceiling: an 18% change
+// across the whole climb, against the world's 260%.
+const CLOUD_ZOOM_SHARE = 0.22;
+
+export function cloudScaleFor(worldScale) {
+  return 1 + (worldScale - 1) * CLOUD_ZOOM_SHARE;
+}
+
+// The bank field repeats with this period, in cloud-space pixels. Inside the
+// world transform the banks were spread over 5300 world pixels and the zoom did
+// the work of bringing several into frame at once; at a fixed scale that same
+// spread puts less than one bank on a 512-wide screen, which is an empty sky.
+// So the layout is compressed into CLOUD_SPAN and tiled. The period is chosen
+// to be comfortably wider than the frame plus a bank's reach, which is what
+// lets the wrap need only two copies and lets it always happen off screen.
+//
+// Tiling also fixes something the fixed field had quietly: the drift term grows
+// without bound with the tick, so on a long enough sortie the clouds used to
+// slide away and never come back. Modular arithmetic has no end.
+const CLOUD_SPAN = 1150;
+const WORLD_SPAN = 5600;
+const SPREAD = CLOUD_SPAN / WORLD_SPAN;
+
+// How much of the camera's vertical travel a bank takes, on top of its own
+// parallax multiplier. This number is unchanged from when the clouds were
+// inside the transform — but it used to be nearly cancelled by the zoom (the
+// bank sank 50 world pixels while being scaled down by three, so it moved five
+// screen pixels), and out here it is the whole vertical cue. Over the full
+// climb the shallowest bank now descends about 33 screen pixels and the deepest
+// about 67: the far ones barely move, the near ones sink toward the horizon.
+const VERT = 0.75;
+
 const DECKS = [
   { x: 240, y: 74, m: 0.16, w: 96, h: 9 },
   { x: 1180, y: 128, m: 0.22, w: 112, h: 10 },
@@ -127,30 +180,47 @@ function reach(d) {
 // tested directly: the cull is a performance optimisation and has to be
 // invisible, which is only checkable if you can ask it what it decided.
 //
-// viewW/viewH are in WORLD pixels — the caller draws through the zoom
-// transform, so these already grow as the world is drawn smaller, and the
-// margins below are world pixels too. Nothing here is in device units, which
-// is what would otherwise make the cull scale-dependent.
-export function visibleBanks(viewW, viewH, cam, tick) {
+// viewW/viewH are in DEVICE pixels and `worldScale` is the scale the world is
+// being drawn at, which together give the frame in cloud space. The returned
+// positions are cloud-space too, so a caller that scales by cloudScaleFor gets
+// them on screen where the cull said they were.
+export function visibleBanks(viewW, viewH, cam, tick, worldScale = 1) {
+  const s = cloudScaleFor(worldScale);
+  const vw = viewW / s;
+  const vh = viewH / s;
   const out = [];
   for (let id = 0; id < DECKS.length; id++) {
     const d = DECKS[id];
-    const sx = d.x - tick * 0.05 * d.m - cam.x * d.m;
-    const sy = d.y - cam.y * d.m * 0.75;
     const r = reach(d);
-    if (sy - r.up > viewH || sy + r.down < 0) continue;
-    if (sx + r.x < 0 || sx - r.x > viewW) continue;
-    // `id` is which bank this is and never changes; `seed` is what its shape
-    // is hashed from and must not change either. They are separate so a test
-    // can hold the first still and watch the second.
-    out.push({ id, x: sx, y: sy, w: d.w, h: d.h, seed: d.x });
+    const sy = d.y - cam.y * d.m * VERT;
+    if (sy - r.up > vh || sy + r.down < 0) continue;
+    // Fold the drift and the parallax into one period. The bank exists at every
+    // multiple of CLOUD_SPAN, so only the two copies either side of the frame's
+    // left edge can reach it — CLOUD_SPAN is wider than any frame plus a bank's
+    // reach, which is what makes two enough and makes the wrap itself happen
+    // out of sight.
+    const x = d.x * SPREAD - tick * 0.05 * d.m - cam.x * d.m;
+    const wrapped = ((x % CLOUD_SPAN) + CLOUD_SPAN) % CLOUD_SPAN;
+    for (const sx of [wrapped - CLOUD_SPAN, wrapped]) {
+      if (sx + r.x < 0 || sx - r.x > vw) continue;
+      // `id` is which bank this is and never changes; `seed` is what its shape
+      // is hashed from and must not change either. They are separate so a test
+      // can hold the first still and watch the second. A tiled copy is the same
+      // bank seen again, so it carries the same id and the same seed.
+      out.push({ id, x: sx, y: sy, w: d.w, h: d.h, seed: d.x });
+    }
   }
   return out;
 }
 
-export function drawClouds(ctx, viewW, viewH, cam, tick) {
+// Draws the whole cloud layer, including its own scale. The caller hands it the
+// device frame and the world's current scale and does NOT wrap it in the world
+// transform — that is the entire point of this layer.
+export function drawClouds(ctx, viewW, viewH, cam, tick, worldScale = 1) {
   ctx.save();
-  for (const b of visibleBanks(viewW, viewH, cam, tick)) {
+  const s = cloudScaleFor(worldScale);
+  ctx.scale(s, s);
+  for (const b of visibleBanks(viewW, viewH, cam, tick, worldScale)) {
     drawBank(ctx, b.x, b.y, b.w, b.h, b.seed);
   }
   ctx.restore();
