@@ -23,7 +23,7 @@
 import { Entity, registerEntity } from '../entity.js';
 import { SCREEN_W } from '../../core/constants.js';
 import { Rng } from '../../core/rng.js';
-import { frozen, playerOf, spawnAt, sfx } from './index.js';
+import { frozen, playerOf, spawnAt, sfx, hardMode } from './index.js';
 
 // InitFlyingCheepCheep, smbdis.asm ~8419.
 // FlyCCTimerData ($10 $60 $20 $48): frames between spawns, picked with two
@@ -46,9 +46,12 @@ const FLY_CC_GRAVITY = 0x0d / 256;
 const FLY_CC_MAX_FALL = 5;
 // `lda #$f8 / sta Enemy_Y_Position` — spawned 248 px down, below the screen.
 const FLY_CC_SPAWN_Y = 0xf8;
-// MaxCC: `cpx $00 / bcs ChpChpEx` with $00 = 3 (4 in secondary hard mode) caps
-// the fish to the first three enemy slots.
+// MaxCC: `cpx $00 / bcs ChpChpEx` with $00 = 3 caps the fish to the first three
+// enemy slots. InitFlyingCheepCheep (asm:8425-8433) does `ldy #$03 / lda
+// SecondaryHardMode / beq MaxCC / iny` first, so hard mode allows a fourth fish
+// on screen at once.
 const FLY_CC_MAX = 3;
+const FLY_CC_MAX_HARD = 4;
 
 // BulletBillCheepCheep, smbdis.asm ~8683.
 // Enemy17YPosData: the eight heights a $17 frenzy uses, cycled through a bit
@@ -170,7 +173,7 @@ export default class Frenzy extends Entity {
 
     // The slot cap is tested *after* the timer is reloaded, so a full screen
     // costs you a fish rather than shifting the cadence.
-    if (this._liveCount() >= FLY_CC_MAX) return;
+    if (this._liveCount() >= (hardMode(this.world) ? FLY_CC_MAX_HARD : FLY_CC_MAX)) return;
 
     const seedLow = rng.int(0, 3); // `lda PseudoRandomBitReg,x / and #%11` -> $00 and $01
 

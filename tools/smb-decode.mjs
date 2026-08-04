@@ -43,8 +43,17 @@ export const ENEMY_NAMES = {
   0x31: 'starflag', 0x32: 'jumpspring', 0x33: 'bulletbill-cannon', 0x35: 'toad',
 };
 
-export function decodeEnemies(bytes) {
-  const out = [];
+// Walk the enemy stream the way CheckRightBounds/CheckPageCtrlRow do
+// (smbdis.asm:7905-7940). The order of the three steps is what matters:
+//
+//   1. the second byte's MSB advances the page — this is done for EVERY record,
+//      including the three-byte row-$0e ones, BEFORE the row is looked at;
+//   2. only then is row $0f treated as a page-select;
+//   3. the page select latch is cleared after each record that is stepped over.
+//
+// Getting (1) wrong costs 16 columns per row-$0e record whose second byte has
+// bit 7 set, and every enemy after it lands that much too early.
+function walkEnemies(bytes, onEnemy, onPointer) {
   let page = 0;
   let pageSel = false;
   let i = 0;
@@ -54,26 +63,31 @@ export function decodeEnemies(bytes) {
     const row = b0 & 0x0f;
     const b1 = bytes[i + 1];
 
-    if (row === 0x0f) {
+    if (b1 & 0x80 && !pageSel) {
+      page += 1;
+      pageSel = true;
+    }
+    if (row === 0x0f && !pageSel) {
       // Page control: the second byte IS the page, and nothing is spawned.
       page = b1 & 0x3f;
       pageSel = true;
       i += 2;
       continue;
     }
+    const x = page * 16 + (b0 >> 4);
     if (row === 0x0e) {
-      // Three-byte world-specific area pointer, not an enemy.
+      // Three-byte area pointer, not an enemy: second byte is the destination
+      // area pointer, third is world number in the 3 MSB and entrance page in
+      // the 5 LSB.
+      const b2 = bytes[i + 2];
+      onPointer({ x, pointer: b1, world: b2 >> 5, entrancePage: b2 & 0x1f });
+      pageSel = false;
       i += 3;
       continue;
     }
-    // The MSB advances the page, but only once per page-select window.
-    if (b1 & 0x80 && !pageSel) {
-      page += 1;
-      pageSel = true;
-    }
     const id = b1 & 0x3f;
-    out.push({
-      x: page * 16 + (b0 >> 4),
+    onEnemy({
+      x,
       y: row,
       id,
       name: ENEMY_NAMES[id] || `id$${id.toString(16)}`,
@@ -82,6 +96,22 @@ export function decodeEnemies(bytes) {
     pageSel = false;
     i += 2;
   }
+}
+
+export function decodeEnemies(bytes) {
+  const out = [];
+  walkEnemies(bytes, (e) => out.push(e), () => {});
+  return out;
+}
+
+// The row-$0e records: where a pipe entered near this column sends you, and at
+// which page of the destination you come out. A record is read when the screen's
+// right edge reaches it, so it is armed roughly nine columns before the player
+// gets there — which is why each of 8-4's records sits a few columns past the
+// pipe it governs.
+export function decodePointers(bytes) {
+  const out = [];
+  walkEnemies(bytes, () => {}, (p) => out.push(p));
   return out;
 }
 

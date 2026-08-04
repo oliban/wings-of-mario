@@ -79,10 +79,10 @@ export default {
   spawn: { x: 5, y: 12 },
   tiles: TILES,
   contents: [
-    {x: 220,y: 9,item: 'coin',count: 10},
+    {x: 220,y: 9,item: 'multicoin'},
   ],
   entities: [
-    {type: 'lakitu',x: 14,y: 3},
+    {type: 'lakitu',x: 30,y: 3},
     {type: 'lakitu',x: 112,y: 3},
     {type: 'lakitu',x: 193,y: 3},
     {type: 'frenzy',x: 222,y: 2,kind: 'stop'},

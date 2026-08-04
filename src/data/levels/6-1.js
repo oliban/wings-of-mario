@@ -46,8 +46,8 @@ export default {
   tiles: TILES,
   contents: [
     {x: 36,y: 5,item: 'power'},
-    {x: 43,y: 9,item: 'coin',count: 10},
-    {x: 152,y: 9,item: 'coin',count: 10},
+    {x: 43,y: 9,item: 'multicoin'},
+    {x: 152,y: 9,item: 'multicoin'},
   ],
   entities: [
     {type: 'lakitu',x: 32,y: 3},

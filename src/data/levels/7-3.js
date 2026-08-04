@@ -45,6 +45,14 @@ export default {
 
   ],
   entities: [
+    {type: 'koopa',x: 39,y: 9,variant: 'green',hard: true},
+    {type: 'koopa',x: 52,y: 9,variant: 'green',winged: true,hard: true},
+    {type: 'koopa',x: 79,y: 9,variant: 'red',hard: true},
+    {type: 'koopa',x: 95,y: 9,variant: 'red',hard: true},
+    {type: 'koopa',x: 119,y: 12,variant: 'red',hard: true},
+    {type: 'koopa',x: 140,y: 7,variant: 'green',winged: true,fly: 'horizontal',hard: true},
+    {type: 'cheep',x: 144,y: 16,variant: 'grey'},
+    {type: 'koopa',x: 156,y: 9,variant: 'green',winged: true,fly: 'horizontal',hard: true},
     {type: 'frenzy',x: 26,y: 2,kind: 'cheep'},
     {type: 'frenzy',x: 137,y: 2,kind: 'cheep'},
     {type: 'frenzy',x: 197,y: 2,kind: 'stop'},

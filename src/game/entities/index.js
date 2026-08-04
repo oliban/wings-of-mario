@@ -185,6 +185,19 @@ export function frozen(world) {
   return !!world && (world.freezeTimer | 0) > 0;
 }
 
+// SecondaryHardMode, for the enemies that read it. The world works out the flag
+// once per area (see World.loadLevel); everything here just asks.
+export function hardMode(world) {
+  return !!(world && world.hardMode);
+}
+
+// Pick between the two entries of one of the original's hard-mode tables.
+// Written this way so the call site reads as the table it came from:
+//   hardPick(world, 0x30, 0x1c)  ->  HammerThrowTmrData
+export function hardPick(world, off, on) {
+  return hardMode(world) ? on : off;
+}
+
 export function sfx(world, name) {
   const a = world && world.audio;
   if (a && typeof a.sfx === 'function') {

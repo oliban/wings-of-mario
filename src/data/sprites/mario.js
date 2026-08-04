@@ -433,12 +433,16 @@ const SL_TRAIL = [
   '01cb00.01cb00...',
   '0bccb0.0bccb0...',
 ];
-// Airborne: rear leg tucked up, front leg reaching down.
+// Airborne: a SPLIT, not a tuck. The rear leg is thrown back and up until its
+// SOLE faces the camera — a flat dark bar on the left edge, which is the single
+// read that sells a leap — while the lead leg bows out, pulls its shin back in
+// and kicks the boot forward again past the hip. Four rows is not much to bend a
+// leg in, so the bend is spent on the lead leg and the rear one is all foot.
 const SL_JUMP = [
   '..0a9999999980..',
-  '01cb00..0a99980.',
+  '0bcc0....0a99980',
   '0bccb0..0a99980.',
-  '........01ccb0..',
+  '........01ccccb0',
 ];
 // Grow/shrink squash (5 rows): hips bulge a pixel wider each side and the soles
 // spread — the size change lands with weight instead of mid-stride.
@@ -1012,16 +1016,16 @@ const BL_TRAIL = [
 // used to share three identical rows with the swim split, which made the jump and
 // the power stroke read as the same drawing.
 const BL_JUMP = [
-  '..0998800a99980.',
-  '.0998800.0a9980.',
-  '01cb00...0a9980.',
-  '0cccb0...0a99980',
-  '0bcccb0..0a99980',
-  '0bbbbb0..0999980',
-  '.........0899880',
-  '.........01ccb0.',
-  '.........0cccb0.',
-  '........0bcccb0.',
+  '..0998800a9980..',
+  '.099880..0a9980.',
+  '0bcc880...0a9980',
+  '0bccb0....0a9980',
+  '0bccb0...0a9980.',
+  '01cb0....0a9980.',
+  '.........0a9980.',
+  '........01cccb0.',
+  '........0cccccb0',
+  '.......0bbbbbbb0',
 ];
 
 const BIG_IDLE = bg([...B_HEAD, ...BA_DOWN, ...BL_TOGETHER], 'idle');

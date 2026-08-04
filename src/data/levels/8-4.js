@@ -30,8 +30,9 @@ const TILES = [
 ];
 
 // The underwater section, rendered from WaterArea3. You drop in at the left and
-// swim right; the water pipe at column 68 puts you out on the ledge at 282,
-// past the last lava and at the foot of Bowser's bridge.
+// swim right; the water pipe at column 68 is this area's only row-$0e record,
+// and it points back at 8-4 with entrance page 16 — column 256, the last
+// stretch of castle, with Bowser's bridge ahead of you and the third loop behind.
 const WATER = {
   id: '8-4w',
   name: 'WORLD 8-4',
@@ -69,7 +70,7 @@ const WATER = {
     {type: 'piranha',x: 3.5,y: 11},
   ],
   warps: [
-    { from: { x: 67, y: 7 }, dir: 'right', to: { area: 'main', x: 283.5, y: 9, exit: 'up' } },
+    { from: { x: 67, y: 7 }, dir: 'right', to: { area: 'main', x: 256.5, y: 12, exit: 'none' } },
   ],
 };
 
@@ -90,16 +91,16 @@ export default {
     {type: 'goomba',x: 56,y: 12},
     {type: 'goomba',x: 57.5,y: 12},
     {type: 'goomba',x: 59,y: 12},
-    {type: 'platform',x: 70.75,y: 14,mode: 'horizontal',tiles: 3,range: 64,speed: 0.75},
+    {type: 'platform',x: 70.75,y: 13,mode: 'horizontal',tiles: 3,range: 64,speed: 0.75},
     {type: 'buzzy',x: 128,y: 12},
     {type: 'buzzy',x: 130,y: 12},
-    {type: 'koopa',x: 139,y: 12,variant: 'green'},
-    {type: 'koopa',x: 141,y: 12,variant: 'green'},
-    {type: 'koopa',x: 155,y: 12,variant: 'green'},
-    {type: 'koopa',x: 157,y: 12,variant: 'green'},
-    {type: 'hammerbro',x: 257,y: 12},
-    {type: 'podoboo',x: 263,y: 14},
-    {type: 'bowser',x: 279,y: 9},
+    {type: 'koopa',x: 139,y: 12,variant: 'green',winged: true},
+    {type: 'koopa',x: 141,y: 12,variant: 'green',winged: true},
+    {type: 'koopa',x: 155,y: 12,variant: 'green',winged: true},
+    {type: 'koopa',x: 157,y: 12,variant: 'green',winged: true},
+    {type: 'hammerbro',x: 273,y: 12},
+    {type: 'podoboo',x: 279,y: 13},
+    {type: 'bowser',x: 295,y: 9},
     {type: 'frenzy',x: 221,y: 2,kind: 'cheep'},
     {type: 'frenzy',x: 234,y: 2,kind: 'stop'},
     {type: 'piranha',x: 19.5,y: 11},
@@ -119,20 +120,27 @@ export default {
     {type: 'piranha',x: 266.5,y: 11},
   ],
   warps: [
-    { from: { x: 51, y: 11 }, dir: 'down', to: { area: 'main', x: 112.5, y: 12, exit: 'up' } },
-    { from: { x: 81, y: 8 }, dir: 'down', to: { area: 'main', x: 16.5, y: 12, exit: 'up' } },
-    { from: { x: 132, y: 11 }, dir: 'down', to: { area: 'main', x: 16.5, y: 12, exit: 'up' } },
-    { from: { x: 152, y: 6 }, dir: 'down', to: { area: 'main', x: 192.5, y: 12, exit: 'up' } },
-    { from: { x: 212, y: 7 }, dir: 'down', to: { area: 'main', x: 16.5, y: 12, exit: 'up' } },
+    // record at 56: 8-4 page 1
+    { from: { x: 51, y: 11 }, dir: 'down', to: { area: 'main', x: 16.5, y: 12, exit: 'none' } },
+    // record at 83: 8-4 page 7
+    { from: { x: 81, y: 8 }, dir: 'down', to: { area: 'main', x: 112.5, y: 12, exit: 'none' } },
+    // record at 133: 8-4 page 1
+    { from: { x: 132, y: 11 }, dir: 'down', to: { area: 'main', x: 16.5, y: 12, exit: 'none' } },
+    // record at 159: 8-4 page 12
+    { from: { x: 152, y: 6 }, dir: 'down', to: { area: 'main', x: 192.5, y: 12, exit: 'none' } },
+    // record at 212: 8-4 page 1
+    { from: { x: 212, y: 7 }, dir: 'down', to: { area: 'main', x: 16.5, y: 12, exit: 'none' } },
+    // record at 228: WaterArea3
     { from: { x: 228, y: 8 }, dir: 'down', to: { area: '8-4w', x: 5.5, y: 8, exit: 'down' } },
-    { from: { x: 266, y: 11 }, dir: 'down', to: { area: 'main', x: 16.5, y: 12, exit: 'up' } },
-    // Two dead ends where the level's own logic is "you took the wrong route":
-    // the pillar at 62-65 before the first lava, and the floor past the water
-    // pipe at 228. The original answers both with ProcLoopCommand — world 8's
-    // entries are pages 6, 11 and 16 — so both send you back to the start, the
-    // same way 4-4's corridors do.
-    { from: { x: 66, y: 9 }, dir: 'right', to: { area: 'main', x: 16.5, y: 12, exit: 'none' } },
-    { from: { x: 277, y: 12 }, dir: 'right', to: { area: 'main', x: 16.5, y: 12, exit: 'none' } },
+    // record at 271: 8-4 page 1
+    { from: { x: 266, y: 11 }, dir: 'down', to: { area: 'main', x: 16.5, y: 12, exit: 'none' } },
+    // The three loop commands. Walk to the end of a room without taking its pipe
+    // and the original loops the level data back four pages — the same corridor
+    // again — and kills every enemy on the way. Modelled here as a silent warp
+    // back to the page the loopback lands on.
+    { from: { x: 87, y: 9 }, dir: 'right', to: { area: 'main', x: 32.5, y: 12, exit: 'none' } },
+    { from: { x: 167, y: 12 }, dir: 'right', to: { area: 'main', x: 112.5, y: 12, exit: 'none' } },
+    { from: { x: 247, y: 9 }, dir: 'right', to: { area: 'main', x: 192.5, y: 12, exit: 'none' } },
   ],
   areas: { '8-4w': WATER },
   flagpole: null,

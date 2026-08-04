@@ -35,8 +35,16 @@ const FLOOR_TOP = 13;
 const ENEMY_MAP = {
   0x00: 'koopa:green', 0x02: 'buzzy', 0x03: 'koopa:red', 0x05: 'hammerbro',
   0x06: 'goomba', 0x07: 'blooper', 0x0a: 'cheep:grey', 0x0b: 'cheep:red',
-  0x0c: 'podoboo', 0x0d: 'piranha', 0x0e: 'koopa:green', 0x0f: 'koopa:red',
-  0x10: 'koopa:green', 0x11: 'lakitu', 0x12: 'spiny', 0x2d: 'bowser',
+  0x0c: 'podoboo', 0x0d: 'piranha',
+  // The three winged koopas. They are NOT one enemy with one behaviour: the
+  // original hands each its own movement sub (EnemyMovementSubs, asm:9086-9106)
+  // — $0e hops along the ground, $0f springs straight up and down without
+  // moving sideways at all, $10 cruises left and right. Emitting all three as
+  // plain koopas left 52 paratroopas in the game walking.
+  0x0e: { type: 'koopa:green', winged: true },
+  0x0f: { type: 'koopa:red', winged: true },
+  0x10: { type: 'koopa:green', winged: true, fly: 'horizontal' },
+  0x11: 'lakitu', 0x12: 'spiny', 0x2d: 'bowser',
 };
 // HandleGroupEnemies, exactly: subtract $37, and the three bits that remain say
 // everything. Below 4 the group is goombas, 4 and up green koopas; d1 picks the
@@ -332,7 +340,10 @@ export function buildArea(levelId, opts = {}) {
       case 'Hidden1Up': put(x, y, '1'); break;
       case 'Brick(powerup)': put(x, y, '='); contents.push({ x, y, item: 'power' }); break;
       case 'Brick(star)': put(x, y, '='); contents.push({ x, y, item: 'star' }); break;
-      case 'Brick(coins)': put(x, y, '='); contents.push({ x, y, item: 'coin', count: 10 }); break;
+      // A multi-coin brick has no coin count in the ROM — BrickCoinTimer
+      // (smbdis.asm:7249-7256) is a clock, and the payout is whatever fits in
+      // it. The old `count: 10` invented a number the data never had.
+      case 'Brick(coins)': put(x, y, '='); contents.push({ x, y, item: 'multicoin' }); break;
       case 'Brick(1up)': put(x, y, '='); contents.push({ x, y, item: '1up' }); break;
       case 'Brick(vine)': put(x, y, 'v'); meta.vine = { x, y }; break;
       case 'EmptyBlock': put(x, y, 'U'); break;
@@ -440,8 +451,15 @@ export function buildArea(levelId, opts = {}) {
 
   const ents = [];
   const pairedBalance = new Set();
+  // Bit 6 of an enemy record's second byte marks it as existing only when
+  // SecondaryHardMode is set (asm:7976-7979 — the parser skips the object
+  // outright when the flag is clear). Dropping them here made the back half of
+  // the game permanently easier than the original; they are emitted with a
+  // `hard` marker now and gated when the area spawns its entities.
+  let hardRec = false;
+  const hard = (spec) => (hardRec ? { ...spec, hard: true } : spec);
   for (const e of enemies) {
-    if (e.hardOnly) continue;
+    hardRec = !!e.hardOnly;
     // DEVIATION: skip a walker that would spawn inside the opening screen.
     // 1-1's stream really does carry a goomba at column 6 — the decode is
     // anchored by the explicit page marker later in the same stream, and every
@@ -470,7 +488,7 @@ export function buildArea(levelId, opts = {}) {
       // 1-2's opening koopas were in that 23: one inside the three-tall pillar
       // at column 31, one plugged into the one-tile slot at column 32.
       for (let i = 0; i < gr.count; i++)
-        ents.push({ type: gr.type, x: e.x - 3 + i * 1.5, y: gr.row + 1 });
+        ents.push(hard({ type: gr.type, x: e.x - 3 + i * 1.5, y: gr.row + 1 }));
       continue;
     }
     const fb = FIREBARS[e.id];
@@ -483,13 +501,24 @@ export function buildArea(levelId, opts = {}) {
       // Firebars are above $15, so they get neither. Checked against 1-4: every
       // firebar lands exactly on the EmptyBlock the original mounts it on
       // (enemy row 6 vs object row 4, both our row 6).
-      ents.push({ type: 'firebar', x: e.x, y: e.y, ...fb });
+      ents.push(hard({ type: 'firebar', x: e.x, y: e.y, ...fb }));
       continue;
     }
     const lift = LIFTS[e.id];
     if (lift) {
       // PosPlatform nudges every lift 12 pixels right of its own column.
-      const spec = { type: 'platform', x: e.x + 0.75, y: e.y + 1, ...lift, range: 64, speed: 0.75 };
+      //
+      // A lift does NOT take the +1 the walking enemies below take. That +1 is
+      // there because a goomba written at enemy row 11 falls to the floor before
+      // you ever see it, so the row it ends up occupying is one below the row it
+      // was written at. A lift does not fall: InitHoriPlatform/InitVertPlatform
+      // leave Enemy_Y_Position exactly as PositionEnemyObj wrote it, row * 16,
+      // and PosPlatform — the only thing that moves a lift after placement —
+      // adjusts X alone (smbdis.asm:8988-8996). Carrying the walkers' +1 through
+      // put every lift in the game a full row below where the original has it,
+      // which over lava is the difference between a deck you ride and a deck
+      // inside the hazard.
+      const spec = { type: 'platform', x: e.x + 0.75, y: e.y, ...lift, range: 64, speed: 0.75 };
       if (e.id === 0x24) {
         // A balance platform is HALF of a pair. The original writes both halves
         // into the enemy stream and links them by adjacency through
@@ -505,13 +534,17 @@ export function buildArea(levelId, opts = {}) {
         if (mate) {
           pairedBalance.add(mate);
           spec.spacing = (mate.x - e.x) * 16;
-          spec.anchorY = ((e.y + 1 + mate.y + 1) / 2) * 16;
+          spec.anchorY = ((e.y + mate.y) / 2) * 16;
         }
       }
-      ents.push(spec);
+      ents.push(hard(spec));
       continue;
     }
-    const t = ENEMY_MAP[e.id];
+    // An entry is either a bare type string or a type plus the options that
+    // distinguish this id from the others sharing that type.
+    const hit = ENEMY_MAP[e.id];
+    const t = typeof hit === 'string' ? hit : hit && hit.type;
+    const extra = typeof hit === 'string' || !hit ? null : (({ type: _t, ...rest }) => rest)(hit);
     if (!t) {
       // Same rule as the object stream: nothing disappears quietly. These are
       // the ids we know carry no entity of their own.
@@ -528,7 +561,7 @@ export function buildArea(levelId, opts = {}) {
     // Enemies map with +1, not the objects' +2: the original's enemy row is the
     // row the body occupies, so a row-11 koopa stands ON the floor rather than
     // half-buried in its top course.
-    ents.push({ type: t, x: e.x, y: e.y + 1 });
+    ents.push(hard({ type: t, x: e.x, y: e.y + 1, ...(extra || {}) }));
   }
   ents.push(...frenzies);
   ents.push(...pipePlants);

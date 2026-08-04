@@ -6,6 +6,7 @@ import {
   pickAnim,
   pickSprite,
   frozen,
+  hardPick,
   hurtPlayer,
   isStarPlayer,
   playerOf,
@@ -61,7 +62,11 @@ export class BowserFire extends Entity {
     this.h = 12;
     this.anchor = 'center';
     this.facing = opts.dir || opts.facing || -1;
-    this.speed = opts.speed == null ? 2.0 : opts.speed;
+    // ProcBowserFlame (asm:10328-10334) subtracts a movement force of $40 from
+    // the flame's subpixel accumulator each frame, $60 in secondary hard mode,
+    // on top of the flat one pixel it always takes. 64/256 + 1 = 1.25 px/frame
+    // against 96/256 + 1 = 1.375, so the hard flame closes 1.1x faster.
+    this.speed = opts.speed == null ? hardPick(world, 2.0, 2.2) : opts.speed;
     this.vx = this.speed * this.facing;
     this.vy = 0;
     this.gravity = 0;
@@ -148,7 +153,10 @@ export default class Bowser extends Entity {
 
     this.hopPeriod = opts.hopPeriod == null ? 132 : opts.hopPeriod;
     this.hopT = rng.int(0, 60);
-    this.firePeriod = opts.firePeriod == null ? 116 : opts.firePeriod;
+    // ChkFireB (asm:10248-10258) loads BowserFireBreathTimer from SetFlameTimer
+    // and then `sec / sbc #$10` when SecondaryHardMode is set — sixteen frames
+    // less between breaths, whatever the cycling FlameTimerData entry was.
+    this.firePeriod = opts.firePeriod == null ? hardPick(world, 116, 100) : opts.firePeriod;
     this.fireT = rng.int(0, 40);
     this.breatheT = -1;
 

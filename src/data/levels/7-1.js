@@ -79,12 +79,16 @@ export default {
   tiles: TILES,
   contents: [
     {x: 27,y: 5,item: 'power'},
-    {x: 65,y: 9,item: 'coin',count: 10},
+    {x: 65,y: 9,item: 'multicoin'},
     {x: 151,y: 2,item: 'power'},
   ],
   entities: [
-    {type: 'koopa',x: 53,y: 12,variant: 'green'},
+    {type: 'koopa',x: 26,y: 12,variant: 'green',winged: true,hard: true},
+    {type: 'koopa',x: 44,y: 12,variant: 'green',winged: true,hard: true},
+    {type: 'koopa',x: 53,y: 12,variant: 'green',winged: true},
+    {type: 'koopa',x: 65,y: 12,variant: 'green',winged: true,hard: true},
     {type: 'hammerbro',x: 84,y: 12},
+    {type: 'hammerbro',x: 86,y: 8,hard: true},
     {type: 'koopa',x: 114,y: 12,variant: 'green'},
     {type: 'hammerbro',x: 135,y: 12},
     {type: 'hammerbro',x: 137,y: 8},

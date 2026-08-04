@@ -1,6 +1,7 @@
 import { Entity, registerEntity } from '../entity.js';
 import * as EB from '../../data/sprites/enemies-b.js';
-import { pickSprite, enemyDie, frozen, hurtPlayer, starTouch, playerOf, fx } from './index.js';
+import { pickSprite, enemyDie, frozen, hurtPlayer, starTouch, playerOf, fx, hardMode } from './index.js';
+import rng from '../../core/rng.js';
 
 const THRUST_T = 26;
 const DRIFT_T = 34;
@@ -21,6 +22,13 @@ export default class Blooper extends Entity {
     this.power = opts.power == null ? 1.55 : opts.power;
     this.thrusting = false;
     this.phaseT = 0;
+    // MoveBloober (asm:9466-9483) does NOT re-aim every stroke. Once a frame it
+    // masks the LSFR with BlooberBitmasks — %00111111 normally, %00000011 in
+    // secondary hard mode — and only re-points itself at the player when every
+    // masked bit comes up clear. That is one chance in 64 a frame against one in
+    // four: normally it commits to a heading and drifts, in hard mode it stays
+    // on you. In between it keeps whatever Enemy_MovingDir it already had.
+    this.chaseDir = this.facing;
     this.isEnemy = true;
     // Bloober ($07) is the third `iny` case in EnemyStomped (asm:11459-11460),
     // so Y=3 and StompedEnemyPtsData[3] = $06 (asm:11436) = "1000". The original
@@ -59,6 +67,16 @@ export default class Blooper extends Entity {
       if (this.vy < 0) this.vy = 0;
     }
     if (Math.abs(this.vx) > 0.08) this.facing = this.vx > 0 ? 1 : -1;
+
+    this._aimStep();
+  }
+
+  // The once-a-frame re-aim, with the original's two odds.
+  _aimStep() {
+    const bits = hardMode(this.world) ? 4 : 64;
+    if (!rng.chance(1 / bits)) return;
+    const p = playerOf(this.world);
+    if (p) this.chaseDir = p.centerX < this.centerX ? -1 : 1;
   }
 
   _thrust() {
@@ -68,7 +86,10 @@ export default class Blooper extends Entity {
     let dx = 0;
     let dy = -1;
     if (p) {
-      dx = p.centerX - this.centerX;
+      // Horizontally it swims the way it is already pointed — the heading only
+      // changes when _aimStep says so. Vertically it always works towards the
+      // player, which is what MoveBloober's up/down half does regardless.
+      dx = Math.abs(p.centerX - this.centerX) * this.chaseDir;
       dy = p.centerY - this.centerY - 14;
     }
     const len = Math.max(1, Math.sqrt(dx * dx + dy * dy));

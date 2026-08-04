@@ -27,9 +27,25 @@ const COIN_G = 0.9;
 
 const DEBRIS_G = 0.42;
 
-// A multi-coin brick keeps paying out for five seconds after the first hit.
-const MULTICOIN_TICKS = 300;
-const MULTICOIN_DEFAULT = 10;
+// Multi-coin brick. It is a CLOCK, not a counter: PlayerHeadCollision
+// (smbdis.asm:7245-7257) recognises metatile $58/$5d, loads BrickCoinTimer with
+// $0b on the first hit, and on every hit restores the OLD brick metatile while
+// that timer is still running. The coin total is therefore however many bumps
+// fit inside the window, never a fixed ten.
+//
+// $079d is an INTERVAL timer, not a frame timer. DecTimersLoop (asm:789-799)
+// walks offsets $00-$14 every frame but only reaches $15-$23 when
+// IntervalTimerControl underflows, which is once every 21 frames. So $0b
+// interval ticks is 11 * 21 = 231 frames, a little under four seconds.
+//
+// The ROM's timer is one global, shared by every multi-coin brick in the game,
+// and its companion flag is cleared when a BrickWithCoins object is RENDERED
+// (asm:4183-4185). We keep it per block instead. No two multi-coin bricks in
+// the game are within 34 columns of each other, so the second is always
+// re-rendered — clearing the flag — long before the first could still be
+// running, and the two models cannot be told apart in play.
+const MULTICOIN_TICKS = 0x0b;
+const INTERVAL_FRAMES = 21;
 
 // Item emerging from a block, drawn behind the tile layer. GrowThePowerUp
 // (smbdis.asm:7181-7196) opens with `lda FrameCounter / and #$03 / bne ChkPUSte`
@@ -319,16 +335,20 @@ export class BlockSystem {
   constructor(world) {
     this.world = world;
     this.bumps = new Map(); // key -> { tx, ty, t }
-    this.state = new Map(); // key -> { used, coins, timer, hits }
+    this.state = new Map(); // key -> { used, multicoin, timer, hits }
     this.effects = [];
     this.rng = new Rng(0x1b10c5);
     this._shardCache = new WeakMap();
     this.toolTiles = new Set();
+    // IntervalTimerControl, which the ROM inits to $14 and decrements once a
+    // frame; the interval timers step on the frame it underflows.
+    this._interval = INTERVAL_FRAMES - 1;
   }
 
   reset() {
     this.bumps.clear();
     this.state.clear();
+    this._interval = INTERVAL_FRAMES - 1;
     this.effects.length = 0;
     this._pickToolbeltTiles();
   }
@@ -374,7 +394,7 @@ export class BlockSystem {
     const k = key(tx, ty);
     let s = this.state.get(k);
     if (!s && create) {
-      s = { used: false, coins: 0, timer: 0, hits: 0 };
+      s = { used: false, multicoin: false, timer: 0, hits: 0 };
       this.state.set(k, s);
     }
     return s;
@@ -401,13 +421,13 @@ export class BlockSystem {
       b.t++;
       if (b.t >= BUMP_FRAMES) this.bumps.delete(k);
     }
-    for (const [k, s] of this.state) {
-      if (s.timer <= 0) continue;
-      s.timer--;
-      if (s.timer === 0 && !s.used) {
-        s.used = true;
-        this.world.setTile(k & 0xfff, k >> 12, 'U');
-      }
+    // The brick does NOT close itself when the clock runs out. The ROM picks the
+    // metatile to restore at bump time (asm:7254-7257), so an expired multi-coin
+    // brick keeps its face until something strikes it again — however long the
+    // player is away.
+    if (--this._interval < 0) {
+      this._interval = INTERVAL_FRAMES - 1;
+      for (const s of this.state.values()) if (s.timer > 0) s.timer--;
     }
     const fx = this.effects;
     let n = 0;
@@ -449,7 +469,7 @@ export class BlockSystem {
     st.hits++;
     this._startBump(tx, ty, by);
     this._yield(tx, ty, rec, st, by);
-    if (!st.used && st.timer <= 0) {
+    if (!st.used && !st.multicoin) {
       st.used = true;
       w.setTile(tx, ty, 'U');
     }
@@ -471,7 +491,7 @@ export class BlockSystem {
       st.hits++;
       this._startBump(tx, ty, by);
       this._yield(tx, ty, rec, st, by);
-      if (!st.used && st.timer <= 0) {
+      if (!st.used && !st.multicoin) {
         st.used = true;
         w.setTile(tx, ty, 'U');
       }
@@ -498,6 +518,10 @@ export class BlockSystem {
     if (this.toolTiles.size && this.toolTiles.has(key(tx, ty))) return 'toolbelt';
     const ov = this.world.contents.get(key(tx, ty));
     const item = ov ? ov.item : rec.item;
+    // Level files built before the marker had a name still say `item:'coin'`
+    // with a `count`. The ROM has no count — the brick is timed — but a count on
+    // a brick's coin is unambiguous, so it still reads as a multi-coin brick.
+    if (ov && item === 'coin' && ov.count > 0) return 'multicoin';
     return item || null;
   }
 
@@ -521,15 +545,15 @@ export class BlockSystem {
     if (!raw) return;
 
     if (raw === 'multicoin' || raw === 'coins') {
-      if (st.hits === 1) {
-        const ov = w.contents.get(key(tx, ty));
-        st.coins = ov && ov.count ? ov.count : MULTICOIN_DEFAULT;
-        st.timer = MULTICOIN_TICKS;
-      }
+      // The first hit starts the clock. Every hit pays a coin, including the one
+      // that arrives after the clock has run out — BumpBlock dispatches on the
+      // ORIGINAL metatile off the stack (asm:7319-7326), so the closing hit is
+      // still a CoinBlock. That hit is also the one that turns the brick into the
+      // empty block; nothing else ever does.
+      st.multicoin = true;
+      if (st.hits === 1) st.timer = MULTICOIN_TICKS;
       this._payCoin(tx, ty);
-      st.coins--;
-      if (st.coins <= 0 || st.timer <= 0) {
-        st.timer = 0;
+      if (st.hits > 1 && st.timer <= 0) {
         st.used = true;
         w.setTile(tx, ty, 'U');
       }
@@ -605,6 +629,9 @@ export class BlockSystem {
     if (!rec || !rec.solid) return false;
 
     const sprite = w.tileSprite(rec, w.tick);
+    // BrickShatter calls CheckTopOfBlock BEFORE it shatters (asm:7380), so a
+    // coin resting on the brick is taken as the brick goes.
+    this._takeCoinAbove(tx, ty);
     w.setTile(tx, ty, '.');
     this.bumps.delete(key(tx, ty));
     this.state.delete(key(tx, ty));
@@ -631,8 +658,36 @@ export class BlockSystem {
     const b = this.bumps.get(k);
     if (b) b.t = 0;
     else this.bumps.set(k, { tx, ty, t: 0 });
+    this._takeCoinAbove(tx, ty);
     this.flipEntitiesOn(tx, ty, by);
     this.world.shake(0.7, 3);
+  }
+
+  // CheckTopOfBlock (asm:7395-7411). Bumping a block takes a coin sitting
+  // directly on top of it: the ROM blanks that metatile and runs SetupJumpCoin,
+  // which is the hopping coin and its score. It is called from BOTH BumpBlock
+  // (asm:7308) and BrickShatter (asm:7380), so it applies to question blocks,
+  // to bricks that only rattle, and to bricks big Mario smashes alike.
+  //
+  // We were leaving every one of them behind. 24 coins in this game rest on a
+  // brick — all of them in 1-2 and 4-2 — and smashing the brick out from under
+  // one used to drop it on the floor of the level's logic: still collectable by
+  // jumping, but not the coin you had just earned.
+  //
+  // The ROM tests for metatile $c2 specifically, which is the DRY coin; the
+  // underwater coin is a different tile and is deliberately not taken this way,
+  // which is what the water check stands in for.
+  _takeCoinAbove(tx, ty) {
+    if (ty <= 0) return false; // `beq TopEx` — nothing above the top row
+    const w = this.world;
+    if (w.theme === 'water') return false;
+    const above = w.recAt(tx, ty - 1);
+    if (!above || !above.coin) return false;
+    w.setTile(tx, ty - 1, '.');
+    // _payCoin spawns its coin one tile ABOVE the row it is given, so passing
+    // the block's own row puts the hop exactly where the coin was.
+    this._payCoin(tx, ty);
+    return true;
   }
 
   // -------------------------------------------------------------------------

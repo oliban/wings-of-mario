@@ -161,7 +161,9 @@ function applyPatches(lvl) {
   }
 }
 
-const { LEGEND } = await import(pathToFileURL(join(ROOT, 'src/game/world.js')).href);
+const { LEGEND, secondaryHardMode } = await import(
+  pathToFileURL(join(ROOT, 'src/game/world.js')).href
+);
 
 const rec = (ch) => LEGEND[ch] || null;
 const INF = 1e9;
@@ -246,7 +248,7 @@ function makeGrid(lvl, body = 1) {
 // Nodes
 // ---------------------------------------------------------------------------
 
-function buildNodes(lvl, g, entries = []) {
+function buildNodes(lvl, g, entries = [], rootId = '') {
   const nodes = [];
   const key = (x, y) => x * 64 + y;
   const byKey = new Map();
@@ -293,14 +295,19 @@ function buildNodes(lvl, g, entries = []) {
       liftFrom({ x: pos.x + spacing / TILE, y: (2 * anchorY) / TILE - pos.y }, opts)
     );
   };
+  // The two conditions that shorten a three-tile deck, from the level itself.
+  const deck = {
+    castle: (lvl.theme || '') === 'castle',
+    hardMode: secondaryHardMode(rootId),
+  };
   for (const spec of lvl.entities || []) {
-    if (spec && spec.type === 'platform') addLift(spec, spec);
+    if (spec && spec.type === 'platform') addLift(spec, { ...spec, ...deck });
   }
   for (let y = 0; y < g.H; y++) {
     for (let x = 0; x < g.W; x++) {
       const r = g.at(x, y);
       if (!r || r.anchor !== 'platform') continue;
-      addLift({ x, y }, { ...(r.anchorOpts || {}) });
+      addLift({ x, y }, { ...(r.anchorOpts || {}), ...deck });
     }
   }
   for (const lift of lifts) {
@@ -351,15 +358,26 @@ function buildNodes(lvl, g, entries = []) {
 // the row a player standing on it occupies is one above that.
 function liftFrom(pos, opts) {
   const mode = opts.mode || opts.kind || 'horizontal';
-  const tiles = opts.tiles || opts.width || 3;
+  // A three-tile deck is drawn and boxed as TWO tiles in a castle or in
+  // secondary hard mode (asm:8930-8940, 13343-13350). Platform.tilesWide, same
+  // rule — the tool and the engine have to agree about a deck's width.
+  let tiles = opts.tiles || opts.width || 3;
+  if (tiles === 3 && (opts.castle || opts.hardMode)) tiles = 2;
   const range = opts.range != null ? opts.range : 64;
   const topPx = pos.y * TILE;
   const standRow = (px) => Math.floor((px - 1) / TILE);
   const x0 = Math.floor(pos.x);
   const lift = { mode, x0, x1: x0 + tiles - 1, y0: standRow(topPx), y1: standRow(topPx) };
   if (mode === 'vertical' || mode === 'pulley') {
-    lift.y0 = standRow(topPx - range);
-    lift.y1 = standRow(topPx + range);
+    // A springing vertical lift (the original's InitVertPlatform, $25 — the ones
+    // that carry no direction of their own) bobs around a centre 64 pixels from
+    // the row it is written at, not around that row. Platform.swingY, same rule.
+    const swing =
+      mode === 'vertical' && opts.dir == null
+        ? topPx + (topPx < 128 ? range : -range)
+        : topPx;
+    lift.y0 = standRow(swing - range);
+    lift.y1 = standRow(swing + range);
     if (mode === 'pulley') lift.y0 = standRow(topPx - (opts.spacing != null ? opts.spacing : 112));
   } else if (mode === 'horizontal') {
     lift.x0 = Math.floor((pos.x * TILE - range) / TILE);
@@ -458,7 +476,7 @@ function makeTravel(g) {
  */
 export function buildLevelGraph(lvl, areaKey = 'main', opts = {}) {
   const g = makeGrid(lvl, opts.body || 1);
-  const { nodes, byKey, key, lifts, entryNodes } = buildNodes(lvl, g, opts.entries || []);
+  const { nodes, byKey, key, lifts, entryNodes } = buildNodes(lvl, g, opts.entries || [], opts.rootId || '');
   const canTravel = makeTravel(g);
 
   // --- adjacency -----------------------------------------------------------
@@ -614,7 +632,8 @@ export function findTraps(gr) {
 }
 
 function analyse(name, lvl, areaKey, body = 1, entries = []) {
-  const gr = buildLevelGraph(lvl, areaKey, { body, entries });
+  // '8-4/8-4w' -> '8-4': a sub-area answers to its parent level's numbers.
+  const gr = buildLevelGraph(lvl, areaKey, { body, entries, rootId: String(name).split('/')[0] });
   if (!gr.nodes.length) {
     console.log(`\n${name}: no standable tile anywhere — level is unplayable.`);
     return 1;

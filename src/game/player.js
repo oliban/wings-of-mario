@@ -468,6 +468,64 @@ function stillAnim(sprite) {
   return a;
 }
 
+// Leg cadence, straight off GetPlayerAnimSpeed (smbdis.asm:6192-6223).
+//
+// The ROM does not ease the gait. It picks one of three frame timers from two
+// thresholds on Player_XSpeedAbsolute and switches on the frame the threshold is
+// crossed:
+//
+//   PlayerAnimTmrData .db $02, $04, $07      ; ticks each animation frame is held
+//   >= $1c -> 2        >= $0e -> 4        else -> 7
+//
+// Speed units are 1/16 px/frame, so the thresholds are 1.75 and 0.875 px/frame.
+// Note where they fall: max WALK is $18 (1.5625) and never reaches $1c, so the
+// fast cadence is the run's alone — holding B is what makes the legs churn.
+//
+// A cycle is three frames (ActionWalkRun -> FourFrameExtent, asm:14627-14657;
+// AnimationControl wraps PlayerAnimCtrl at 3), so a full stride is 6, 12 or 21
+// ticks. Our art carries SIX frames per cycle, so driving it by per-frame hold
+// would run the stride at half the original's rate — which is exactly what it
+// was doing. Drive it by PERIOD instead: the stride rate is then the ROM's and
+// the three extra frames are spent smoothing it rather than slowing it.
+const GAIT_RUN_SPEED = 1.75; // $1c/16
+const GAIT_MID_SPEED = 0.875; // $0e/16
+
+function stridePeriod(speed) {
+  if (speed >= GAIT_RUN_SPEED) return 3 * 2;
+  if (speed >= GAIT_MID_SPEED) return 3 * 4;
+  return 3 * 7;
+}
+
+// NO DRAWING IS EVER HELD FOR LESS THAN TWO TICKS. $02 is the smallest value in
+// PlayerAnimTmrData, so the original never shows a pose for a single frame — and
+// a single-frame pose is what strobes. At the run's 6-tick stride our six-frame
+// art would get exactly one tick each, which is why it read as a stutter rather
+// than as legs.
+//
+// So when the stride is too short to give six drawings two ticks apiece, fall
+// back to the shape the ROM itself uses at that speed: three frames, two ticks
+// each. Stride A, the beat between, stride B. The stride RATE is unchanged and
+// still the ROM's — this only stops the cycle asking the eye to read six
+// distinct drawings in a tenth of a second.
+const MIN_HOLD = 2;
+// The short cycle to reduce to, in preference order. `walk` is the original
+// three-frame art; walk6 and run are the six-frame ones and are never candidates.
+const THREE_FRAME_NAMES = ['walk', 'walking', 'move'];
+const thirdsCache = new WeakMap();
+
+function thirds(anim) {
+  const f = anim.frames;
+  if (f.length < 6) return anim;
+  let a = thirdsCache.get(anim);
+  if (!a) {
+    // 0 contact A, 2 passing A, 3 contact B. The ROM's three-frame walk has the
+    // same asymmetry: one passing pose serves both halves of the cycle.
+    a = new Anim([f[0], f[2], f[3]], MIN_HOLD);
+    thirdsCache.set(anim, a);
+  }
+  return a;
+}
+
 const POSE_ALIASES = {
   idle: ['idle', 'stand', 'standing', 'still', 'stop'],
   // walk6 is the smoother six-frame cycle; the three-frame `walk` stays as the
@@ -646,6 +704,8 @@ export default class Player extends EntityBase {
     this.stateTimer = 0;
     this.animTick = 0;
     this._cycleRate = null;
+    this._cycleDur = 0;
+    this._gaitAnim = null;
     this._lastFootIdx = -1;
     this._animIdx = 0;
     this._animLen = 1;
@@ -2311,13 +2371,20 @@ export default class Player extends EntityBase {
     if (this.ducking) return 'duck';
     if (!this.grounded) return this.vy < 0 ? 'jump' : 'fall';
     if (this.skidding) return 'skid';
-    if (Math.abs(this.vx) > 0.06) {
-      // Hysteresis across the walk/run boundary. Holding the pad at almost
-      // exactly maxWalk is common, and without a dead band the gait flips
-      // between two differently-drawn cycles every frame and reads as a stutter.
+    // `lda Player_X_Speed / ora Left_Right_Buttons / beq NonAnimatedActs`
+    // (asm:14604-14607): the legs keep cycling while a direction is held even at
+    // zero speed, which is why running into a wall in the original does not
+    // freeze Mario into the standing pose.
+    const held = this.state === 'normal' && (this._down(BTN.LEFT) || this._down(BTN.RIGHT));
+    if (Math.abs(this.vx) > 0.06 || (held && this.grounded)) {
+      // The run ART switches where the ROM's fast cadence does ($1c), so the
+      // change of drawing and the change of gait happen on the same frame. The
+      // ROM needs no hysteresis because it never swaps cycles; we do, or holding
+      // the pad at exactly the threshold flips between two differently-drawn
+      // cycles every frame and reads as a stutter.
       const sp = Math.abs(this.vx);
-      if (this._runGait) this._runGait = sp >= P.maxWalk * 0.86;
-      else this._runGait = sp > P.maxWalk * 1.04;
+      if (this._runGait) this._runGait = sp >= GAIT_RUN_SPEED * 0.94;
+      else this._runGait = sp >= GAIT_RUN_SPEED;
       return this._runGait ? 'run' : 'walk';
     }
     this._runGait = false;
@@ -2335,23 +2402,36 @@ export default class Player extends EntityBase {
     switch (key) {
       case 'run':
       case 'walk': {
-        // SMB scales the leg cycle with speed: a full run cycles ~3x a slow walk.
-        const t = clamp(Math.abs(this.vx) / P.maxRun, 0, 1);
-        // Ease the cycle rate in rather than stepping it, so accelerating out of a
-        // stand ramps the legs up smoothly instead of snapping to run cadence.
-        const target = 0.55 + 1.85 * t * t * (3 - 2 * t);
-        this._cycleRate = this._cycleRate == null ? target : this._cycleRate + (target - this._cycleRate) * 0.25;
-        this.walkPhase += this.state === 'normal' ? this._cycleRate : 1.1;
+        // One stride takes exactly as many ticks as the ROM's, whatever the frame
+        // count of the art: advance the phase by a whole cycle's worth of holds
+        // spread over that many ticks. No easing — the ROM steps its timer.
+        const period = this.state === 'normal' ? stridePeriod(Math.abs(this.vx)) : 14;
+        const cycle = this._gaitCycle(key, period);
+        this._gaitAnim = cycle;
+        const dur = cycle && cycle.duration ? cycle.duration : 15;
+        // The walk and the run are different lengths (24 phase units against 18),
+        // so carrying the raw phase across the boundary would throw the legs to an
+        // unrelated part of the stride. Rescale instead: the switch happens at the
+        // same point of the step it interrupted.
+        if (this._cycleDur && this._cycleDur !== dur) this.walkPhase *= dur / this._cycleDur;
+        this._cycleDur = dur;
+        this._cycleRate = dur / period;
+        this.walkPhase += this._cycleRate;
         // 720720 divides by every frame count 1..16, so wrapping never skips.
         if (this.walkPhase >= 720720) this.walkPhase -= 720720;
         this.animPhase = this.walkPhase;
 
-        // Footfall: a puff of dust each time the cycle returns to a contact pose
-        // at speed. This is what sells weight when running, and it costs nothing
-        // when walking slowly because the threshold gates it out.
+        // Footfall: a puff of dust as the cycle reaches a contact pose at speed.
+        // This is what sells weight when running. The contacts are the frames the
+        // art calls A and B — index 0 and the halfway frame — and NOT any of the
+        // four between them, which are mid-swing with a boot in the air.
         if (this.grounded && Math.abs(this.vx) > P.maxWalk * 0.8) {
           const idx = this._animIdx | 0;
-          if (idx !== this._lastFootIdx && idx !== 1) {
+          const len = this._animLen || 1;
+          // Contacts are the first frame and the one that opens the far-leg half:
+          // index 3 of the six-frame cycle, index 2 of the reduced three.
+          const contact = idx === 0 || (len > 2 && idx === Math.round(len / 2));
+          if (contact && idx !== this._lastFootIdx) {
             fx(this.world, 'runDust', this.x + this.w / 2, this.y + this.h, this.facing);
           }
           this._lastFootIdx = idx;
@@ -2364,10 +2444,53 @@ export default class Player extends EntityBase {
       case 'swimidle':
         this.animPhase = this.swimTick;
         break;
+      case 'fall':
+        // ActionFalling (asm:14622-14625) reaches the frame control through
+        // GetCurrentAnimOffset, which neither advances NOR clears it — walking off
+        // a ledge holds the stride where it was. Jumping does not: it goes through
+        // NonAnimatedActs like standing, so it falls to the reset below.
+        this.animPhase = this.animTick;
+        break;
       default:
+        // `sta PlayerAnimCtrl` with A=0 in NonAnimatedActs (asm:14616-14619):
+        // standing, skidding and crouching all ZERO the frame control, so the
+        // walk always restarts on contact A. Coming out of a skid mid-stride and
+        // resuming from wherever the legs happened to be is a modern habit.
+        this.walkPhase = 0;
+        this._lastFootIdx = -1;
+        this._gaitAnim = null;
+        this._cycleDur = 0;
         this.animPhase = this.animTick;
         break;
     }
+  }
+
+  // The cycle to run for `key` at `period` ticks per stride, reduced if the full
+  // one cannot give every drawing MIN_HOLD ticks. Resolved here rather than read
+  // off the last drawn frame so the tick a gait changes already runs at the new
+  // cycle's rate; _currentSprite then draws from whatever this chose.
+  _gaitCycle(key, period) {
+    const set = setFor(this.power, this.isLuigi);
+    const anim = pickAnim(set, key);
+    if (!anim) return null;
+    // Judge the cycle by its SHORTEST drawing, not by the frame count: walk6's
+    // holds run 5,3,4 and it is the 3 that decides. At a 12-tick stride that
+    // frame gets 1.5 ticks and flickers, so the walk reduces too — landing on
+    // three frames of four ticks, which is the ROM's walk exactly.
+    const shortest = Math.min(...anim.holds);
+    if ((period * shortest) / anim.duration >= MIN_HOLD) return anim;
+    // Reduce to the set's OWN three-frame cycle rather than slicing the six.
+    // Slicing picked contact A, passing A, contact B, and those are three
+    // different heights in the six-frame art's vertical plan — shoulder 10, 8,
+    // 10, then straight back to 10 for the next contact A. Two lows in a row
+    // followed by a jump to the high is a lurch, not a step. The three-frame
+    // art is DRAWN as a three-frame cycle and rises and falls evenly across it,
+    // which is also the job the ROM gives its three walk frames at every speed.
+    for (const n of THREE_FRAME_NAMES) {
+      const a = set[n];
+      if (a && a.frames && a.frames.length >= 2 && a.frames.length <= 4) return a;
+    }
+    return thirds(anim);
   }
 
   _currentSprite() {
@@ -2379,7 +2502,12 @@ export default class Player extends EntityBase {
     } else {
       set = setFor(this.power, this.isLuigi);
     }
-    const anim = pickAnim(set, key);
+    // _updateAnim already resolved the walk/run cycle for this tick, including
+    // any reduction; drawing a different one here would read a phase that was
+    // scaled for something else.
+    const anim = (key === 'walk' || key === 'run') && this._gaitAnim && this.state === 'normal'
+      ? this._gaitAnim
+      : pickAnim(set, key);
     if (!anim) return null;
     // Remember which frame of the cycle we are on. draw() uses it for the step
     // bob, and _updateAnim uses the change of frame as a footfall trigger.
@@ -2441,15 +2569,17 @@ export default class Player extends EntityBase {
     let dw = sprite.w;
     let dh = sprite.h;
 
-    // Step bob. In a real walk cycle the body is highest at the passing pose and
-    // lowest at each footfall, so the contact frames sit one pixel lower. One pixel
-    // is all it takes at this scale — it turns a slide into a walk, and it scales
-    // itself out at low speed so a creeping Mario does not jitter.
-    if (this.grounded && (this.pose === 'walk' || this.pose === 'run')) {
-      const len = this._animLen || 1;
-      const passing = len > 1 && this._animIdx === 1;
-      if (!passing && Math.abs(this.vx) > P.minWalk) dy += 1;
-    }
+    // NO STEP BOB HERE. There used to be one: +1px on every walk/run frame whose
+    // index was not 1, on the theory that the body rides highest at the passing
+    // pose. Every locomotion cycle in this game already draws that rise, and the
+    // extra pixel fought it both ways round. The six-frame cycles are STACKED to
+    // an authored vertical plan (shoulder 10 at contact, 9 at the down, 8 at
+    // passing), and index 1 there is the DOWN frame, not passing — so the pixel
+    // landed on the wrong beat and DOUBLED the travel. The three-frame cycle
+    // draws its middle frame a pixel low, which is index 1 — so the pixel
+    // CANCELLED it exactly and the walk measured flat: 0px of travel, a slide.
+    // Measured with the bob gone, both cycles rise and fall 1px on the beat the
+    // art intends.
 
     // Weight: squash on landing, stretch out of the takeoff.
     if (this.landSquash > 0) {

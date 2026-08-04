@@ -27,8 +27,12 @@ const TABLE_SIZE = 6;
 const MAX_BILLS = 3;
 // CannonBitmasks (asm:6760): %00001111 normally, %00000111 in secondary hard
 // mode. The masked roll must come out below 6 to name a table entry, so a given
-// cannon is looked at with probability 1/16 per free slot per frame.
+// cannon is looked at with probability 1/16 per free slot per frame — but in
+// secondary hard mode the narrower mask leaves only 0-7, and six of those eight
+// values name a table entry, so a cannon is looked at 6/8 of the time instead of
+// 6/16. Twice the fire rate, from the same fourteen-selection timer.
 const ROLL_MASK = 0x0f;
+const ROLL_MASK_HARD = 0x07;
 // `lda #$0e / sta Cannon_Timer,y` — fourteen selections between shots. At three
 // free slots that is 14 / (3/16) ~= 75 frames, a shade over a second.
 const FIRE_TIMER = 0x0e;
@@ -140,7 +144,7 @@ export class Cannons {
     const free = MAX_BILLS - this._liveCount();
     for (let slot = 0; slot < free; slot++) {
       // `lda PseudoRandomBitReg+1,x / and CannonBitmasks,y / cmp #$06 / bcs`.
-      const roll = this.rng.int(0, 255) & ROLL_MASK;
+      const roll = this.rng.int(0, 255) & (this.world && this.world.hardMode ? ROLL_MASK_HARD : ROLL_MASK);
       if (roll >= TABLE_SIZE) continue;
       const c = this.table[roll];
       // `lda Cannon_PageLoc,y / beq Chk_BB` — an entry never filled in is page

@@ -46,7 +46,7 @@ export default {
   tiles: TILES,
   contents: [
     {x: 77,y: 5,item: 'star'},
-    {x: 77,y: 9,item: 'coin',count: 10},
+    {x: 77,y: 9,item: 'multicoin'},
   ],
   entities: [
     {type: 'koopa',x: 17,y: 12,variant: 'green'},
@@ -63,7 +63,7 @@ export default {
     {type: 'goomba',x: 72.5,y: 12},
     {type: 'goomba',x: 74,y: 12},
     {type: 'koopa',x: 78,y: 12,variant: 'green'},
-    {type: 'koopa',x: 92,y: 12,variant: 'green'},
+    {type: 'koopa',x: 92,y: 12,variant: 'green',winged: true},
     {type: 'koopa',x: 111,y: 12,variant: 'green'},
     {type: 'goomba',x: 119,y: 12},
     {type: 'goomba',x: 120.5,y: 12},

@@ -58,7 +58,7 @@ const BONUS = {
     '################################',
   ],
   contents: [
-    {x: 12,y: 9,item: 'coin',count: 10},
+    {x: 12,y: 9,item: 'multicoin'},
   ],
   entities: [],
   warps: [
@@ -77,7 +77,7 @@ export default {
   spawn: { x: 2, y: 12 },
   tiles: TILES,
   contents: [
-    {x: 158,y: 5,item: 'coin',count: 10},
+    {x: 158,y: 5,item: 'multicoin'},
     {x: 186,y: 8,item: 'star'},
   ],
   entities: [
@@ -108,9 +108,9 @@ export default {
     {type: 'goomba',x: 148,y: 12},
     {type: 'goomba',x: 149.5,y: 12},
     {type: 'goomba',x: 151,y: 12},
-    {type: 'koopa',x: 161,y: 12,variant: 'green'},
-    {type: 'koopa',x: 172,y: 12,variant: 'green'},
-    {type: 'koopa',x: 177,y: 12,variant: 'green'},
+    {type: 'koopa',x: 161,y: 12,variant: 'green',winged: true},
+    {type: 'koopa',x: 172,y: 12,variant: 'green',winged: true},
+    {type: 'koopa',x: 177,y: 12,variant: 'green',winged: true},
     {type: 'koopa',x: 207,y: 12,variant: 'green'},
     {type: 'koopa',x: 208.5,y: 12,variant: 'green'},
     {type: 'goomba',x: 232,y: 12},

@@ -42,13 +42,13 @@ export default {
   contents: [
     {x: 66,y: 5,item: 'power'},
     {x: 116,y: 5,item: 'power'},
-    {x: 190,y: 9,item: 'coin',count: 10},
+    {x: 190,y: 9,item: 'multicoin'},
   ],
   entities: [
-    {type: 'koopa',x: 30,y: 12,variant: 'green'},
+    {type: 'koopa',x: 30,y: 12,variant: 'green',winged: true},
     {type: 'hammerbro',x: 63,y: 12},
     {type: 'hammerbro',x: 65,y: 8},
-    {type: 'koopa',x: 93,y: 12,variant: 'green'},
+    {type: 'koopa',x: 93,y: 12,variant: 'green',winged: true},
     {type: 'hammerbro',x: 117,y: 8},
     {type: 'hammerbro',x: 119,y: 12},
     {type: 'koopa',x: 137,y: 12,variant: 'green'},

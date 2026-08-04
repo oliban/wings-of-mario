@@ -244,6 +244,31 @@ const SFX_KEY = {
 
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// SecondaryHardMode, from InitializeArea (smbdis.asm:2694-2703):
+//
+//   primary hard mode on            -> on
+//   world > 5                       -> on
+//   world = 5 and level >= 3        -> on
+//   otherwise                       -> off
+//
+// `World5 = 4` and `Level3 = 2` (asm:633, 639) are the zero-based internal
+// numbers, so in the numbers people actually say, that is "5-3 and everything
+// after it". Not a difficulty setting: the original gives the player no say in
+// it, and neither do we.
+//
+// Take the ROOT level's id, never a sub-area's. An area of 8-4 is still 8-4 —
+// the original reads WorldNumber/LevelNumber, which a pipe does not change.
+// Harry's h-* levels are not a numbered world at all and get nothing.
+export function secondaryHardMode(levelId, primary = false) {
+  if (primary) return true;
+  const m = String(levelId || '').match(/^(\d+)\s*-\s*(\d+)/);
+  if (!m) return false;
+  const world = parseInt(m[1], 10);
+  const level = parseInt(m[2], 10);
+  if (world > 5) return true;
+  return world === 5 && level >= 3;
+}
+
 function isSprite(v) {
   return !!v && typeof v.draw === 'function' && typeof v.w === 'number';
 }
@@ -763,6 +788,15 @@ export class World {
       this.worldNum = parseInt(m[1], 10) || 1;
       this.levelNum = parseInt(m[2], 10) || 1;
     }
+
+    // SecondaryHardMode. InitializeArea (smbdis.asm:2694-2703) works this out
+    // every time an AREA initialises, from the game's WorldNumber/LevelNumber —
+    // NOT from the area's own identity — so a sub-area inherits its parent
+    // level's answer and a warp gets whatever its destination's numbers say.
+    // Deriving it here, from the root level, is what makes both of those true
+    // without any state to leak: warping 1-2 -> 4-1 leaves it off, warping into
+    // 8-1 turns it on.
+    this.hardMode = secondaryHardMode(levelObj.id, this.primaryHardMode);
 
     this._buildTiles(lvl);
     this.damage.clear();
@@ -1371,13 +1405,27 @@ export class World {
     const list = lvl.entities || [];
     for (const spec of list) {
       if (!spec || !spec.type) continue;
+      // Bit 6 of the enemy record: this one exists only in secondary hard mode.
+      // The original does not spawn-and-hide it, it never parses the object at
+      // all (asm:7976-7979), so the cheapest faithful thing is not to make it.
+      if (spec.hard && !this.hardMode) continue;
       const e = this.spawn(spec.type, spec.x * TILE, spec.y * TILE, spec);
       if (!e) continue;
-      if (typeof e.place === 'function') e.place(spec.x * TILE + TILE * 0.5, (spec.y + 1) * TILE);
-      else if (e.isPlatform) {
-        // A lift spans several tiles and measures its travel from where it was
-        // constructed, so it keeps the tile's top-left exactly like a map
-        // anchor does instead of being centred and re-seated afterwards.
+      // A lift spans several tiles and measures its travel from where it was
+      // constructed, so it keeps the tile's top-left exactly like a map anchor
+      // does instead of being centred and re-seated afterwards. This test has to
+      // come FIRST: `place` is defined on Entity, so `typeof e.place === 'function'`
+      // is true of every entity there is and the platform arm below could never
+      // run. A lift was therefore being bottom-anchored like a goomba, which put
+      // its deck 8 pixels below its own row and 16 pixels left of its own column —
+      // the original's lift deck is at row * 16 exactly. Eight pixels is nothing
+      // on a tree branch and lethal over lava: 8-4's lift deck sat inside the
+      // lava band and killed anyone who rode it, while reach.mjs — which has
+      // always modelled the deck at spec.y * TILE — saw a perfectly good crossing.
+      if (e.isPlatform) {
+        // keep the constructed top-left
+      } else if (typeof e.place === 'function') {
+        e.place(spec.x * TILE + TILE * 0.5, (spec.y + 1) * TILE);
       } else {
         e.x = spec.x * TILE + (TILE - e.w) * 0.5;
         e.y = (spec.y + 1) * TILE - e.h;

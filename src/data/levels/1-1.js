@@ -253,13 +253,14 @@ export default {
   spawn: { x: 2, y: 12 },
   tiles: TILES,
   contents: [
-    {x: 94,y: 9,item: 'coin',count: 10},
+    {x: 94,y: 9,item: 'multicoin'},
     {x: 101,y: 9,item: 'star'},
   ],
   entities: [
-    {type: 'goomba',x: 24,y: 12},
-    {type: 'goomba',x: 35,y: 12},
-    {type: 'goomba',x: 36.5,y: 12},
+    {type: 'goomba',x: 22,y: 12},
+    {type: 'goomba',x: 40,y: 12},
+    {type: 'goomba',x: 51,y: 12},
+    {type: 'goomba',x: 52.5,y: 12},
     {type: 'goomba',x: 80,y: 4},
     {type: 'goomba',x: 82,y: 4},
     {type: 'goomba',x: 97,y: 12},

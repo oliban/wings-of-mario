@@ -44,9 +44,9 @@ export default {
 
   ],
   entities: [
-    {type: 'platform',x: 18.75,y: 8,mode: 'fall',tiles: 3,range: 64,speed: 0.75},
+    {type: 'platform',x: 18.75,y: 7,mode: 'fall',tiles: 3,range: 64,speed: 0.75},
     {type: 'podoboo',x: 20,y: 13},
-    {type: 'platform',x: 22.75,y: 9,mode: 'fall',tiles: 3,range: 64,speed: 0.75},
+    {type: 'platform',x: 22.75,y: 8,mode: 'fall',tiles: 3,range: 64,speed: 0.75},
     {type: 'firebar',x: 103,y: 7,count: 6,speed: 1,dir: 1},
     {type: 'podoboo',x: 196,y: 13},
     {type: 'bowser',x: 199,y: 9},

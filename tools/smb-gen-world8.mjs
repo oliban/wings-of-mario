@@ -6,9 +6,10 @@
 // reference/, not from anyone's memory of the game, and deviations are marked
 // DEVIATION and exist only where this engine lacks a mechanism the original had.
 //
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decodePointers } from './smb-decode.mjs';
 import {
   emitLevel,
   bonusRoomSource,
@@ -23,6 +24,31 @@ const OUT = join(ROOT, 'src', 'data', 'levels');
 
 
 const SOLID = new Set(['#', 'B', '=', 'S', 'U']);
+
+const REF = JSON.parse(readFileSync(join(ROOT, 'reference', 'smb-areas.json'), 'utf8'));
+
+// The row-$0e records of a level's own enemy stream, in stream order: where a
+// pipe entered near that column sends you, and at which page you come out.
+function pointersIn(areaName) {
+  return decodePointers(REF.areas[areaName].enemyBytes);
+}
+function pointersFor(levelId) {
+  return pointersIn(REF.levelMap[levelId].area);
+}
+
+// World 8's three loop commands (LoopCmdWorldNumber/LoopCmdPageNumber,
+// smbdis.asm:7787-7793): pages 6, 11 and 16. Their LoopCmdYPosition is $f0,
+// which no player can ever be at, so the "correct position" test can never pass
+// and ExecGameLoopback always fires — that is what makes 8-4's rooms inescapable
+// except through the right pipe. The loopback sends the player back four pages.
+const LOOP_PAGES = [6, 11, 16];
+const LOOP_BACK_PAGES = 4;
+// ProcLoopCommand fires on CurrentColumnPos == 0, and CurrentPageLoc tracks the
+// column being rendered, which runs about nine columns ahead of the player. So
+// the player is roughly nine columns short of the page boundary when the loop
+// takes them. This engine has no rendering pointer to hang the trigger off, so
+// it goes on the column the player is actually standing on when it fires.
+const LOOP_LEAD = 9;
 
 // DEVIATION: the original lets a power-up slide out sideways from a block set
 // into a ceiling; this engine emerges it upward and would bury it. One tile of
@@ -220,22 +246,23 @@ ${entsBlock(L.entities)}
   const ents = L.entities.slice();
   const rows = seatPodoboos(relieveBlocks(L.rows), ents);
   const sp = findSpawn(rows);
-  // 8-4 is five rooms separated by lava too wide to jump; the pipes are the
-  // route, and taking a wrong one sends you back to the start. The destinations
-  // are in the level's own enemy stream as row-$0e records — area pointer plus
-  // an ENTRANCE PAGE — which for this area read:
-  //   col  56 -> page 1 (column 16)     col  67 -> page 7  (column 112)
-  //   col 133 -> page 1 (column 16)     col 159 -> page 12 (column 192)
-  //   col 212 -> page 1 (column 16)     col 228 -> WaterArea3
-  //   col 271 -> page 1 (column 16)
-  // A record sets a running "where the next pipe goes" pointer as the screen
-  // reaches it, so the two that move you ON are the ones behind the pipes at 51
-  // and 152; every other warp pipe drops you back at column 16.
+  // 8-4 is four rooms separated by lava too wide to jump; the pipes are the
+  // route, and taking the wrong one sends you back to the start. Where each pipe
+  // goes is not guesswork: the level's own enemy stream carries row-$0e records
+  // holding an area pointer and an ENTRANCE PAGE, and one such record sits a few
+  // columns past every warp pipe. ProcessEnemyData reads a record when the
+  // screen's right edge reaches it — about nine columns ahead of the player — so
+  // the record governing a pipe is the last one at or before pipe + 9.
+  const ptrs = pointersFor('8-4');
+  const govern = (col) => {
+    let best = null;
+    for (const p of ptrs) if (p.x <= col + 9) best = p;
+    return best;
+  };
+  // Area pointer 0x02 is WaterArea3 (area type 0, index 2); everything else in
+  // this stream points back at CastleArea6, i.e. at 8-4 itself.
+  const isWater = (p) => (p.pointer & 0x60) === 0x00;
   const wps = L.meta.pipes.filter((p) => p.warp);
-  // The pipe at 228 is the one the data sends to WaterArea3, and that section is
-  // how you get past the last lava: it comes out on the ledge at column 282,
-  // right before Bowser's bridge.
-  const FORWARD = { 51: 112, 152: 192 };
   const water = buildArea('WaterArea3', { theme: 'water' });
   const wrows = water.tiles.map((r) => {
     // Flood the open cells, as every water level does.
@@ -244,10 +271,27 @@ ${entsBlock(L.entities)}
     return out;
   });
   const wpipe = water.meta.waterPipe;
+  // Where the water section puts you back is its own row-$0e record, not a guess:
+  // WaterArea3 carries one record, pointing at CastleArea6 with entrance page 16.
+  const wback = pointersIn('WaterArea3');
+  const wcol = landingNear(rows, wback[0].entrancePage * 16);
+
+  // The surface a walker is standing on at column x, and the row their feet are
+  // on top of.
+  const standRow = (x) => {
+    for (let y = 3; y < rows.length; y++) if (SOLID.has(rows[y][x])) return y - 1;
+    return 12;
+  };
+  const loops = LOOP_PAGES.map((pg) => {
+    const at = pg * 16 - LOOP_LEAD;
+    return { at, y: standRow(at), back: landingNear(rows, (pg - LOOP_BACK_PAGES) * 16) };
+  });
+
   const body = `
 // The underwater section, rendered from WaterArea3. You drop in at the left and
-// swim right; the water pipe at column ${wpipe.x} puts you out on the ledge at 282,
-// past the last lava and at the foot of Bowser's bridge.
+// swim right; the water pipe at column ${wpipe.x} is this area's only row-$0e record,
+// and it points back at 8-4 with entrance page ${wback[0].entrancePage} — column ${wback[0].entrancePage * 16}, the last
+// stretch of castle, with Bowser's bridge ahead of you and the third loop behind.
 const WATER = {
   id: '8-4w',
   name: 'WORLD 8-4',
@@ -263,7 +307,7 @@ ${wrows.map((r) => `    '${r}',`).join('\n')}
 ${entsBlock(water.entities.map((e) => { const [type, variant] = e.type.split(':'); const { type: _t, ...rest } = e; return variant ? { type, ...rest, variant } : { type, ...rest }; }))}
   ],
   warps: [
-    { from: { x: ${wpipe.x - 1}, y: ${wpipe.top} }, dir: 'right', to: { area: 'main', x: 283.5, y: 9, exit: 'up' } },
+    { from: { x: ${wpipe.x - 1}, y: ${wpipe.top} }, dir: 'right', to: { area: 'main', x: ${wcol}.5, y: ${standRow(wcol)}, exit: 'none' } },
   ],
 };
 
@@ -284,16 +328,19 @@ ${contentsBlock(L.contents)}
 ${entsBlock(ents)}
   ],
   warps: [
-${wps.map((p) => (p.x === 228
-    ? `    { from: { x: 228, y: ${p.top} }, dir: 'down', to: { area: '8-4w', x: 5.5, y: 8, exit: 'down' } },`
-    : `    { from: { x: ${p.x}, y: ${p.top} }, dir: 'down', to: { area: 'main', x: ${FORWARD[p.x] || 16}.5, y: 12, exit: 'up' } },`)).join('\n')}
-    // Two dead ends where the level's own logic is "you took the wrong route":
-    // the pillar at 62-65 before the first lava, and the floor past the water
-    // pipe at 228. The original answers both with ProcLoopCommand — world 8's
-    // entries are pages 6, 11 and 16 — so both send you back to the start, the
-    // same way 4-4's corridors do.
-    { from: { x: 66, y: 9 }, dir: 'right', to: { area: 'main', x: 16.5, y: 12, exit: 'none' } },
-    { from: { x: 277, y: 12 }, dir: 'right', to: { area: 'main', x: 16.5, y: 12, exit: 'none' } },
+${wps.map((p) => {
+    const g = govern(p.x);
+    if (isWater(g)) {
+      return `    // record at ${g.x}: WaterArea3\n    { from: { x: ${p.x}, y: ${p.top} }, dir: 'down', to: { area: '8-4w', x: 5.5, y: 8, exit: 'down' } },`;
+    }
+    const col = landingNear(rows, g.entrancePage * 16);
+    return `    // record at ${g.x}: 8-4 page ${g.entrancePage}\n    { from: { x: ${p.x}, y: ${p.top} }, dir: 'down', to: { area: 'main', x: ${col}.5, y: ${standRow(col)}, exit: 'none' } },`;
+  }).join('\n')}
+    // The three loop commands. Walk to the end of a room without taking its pipe
+    // and the original loops the level data back four pages — the same corridor
+    // again — and kills every enemy on the way. Modelled here as a silent warp
+    // back to the page the loopback lands on.
+${loops.map((l) => `    { from: { x: ${l.at}, y: ${l.y} }, dir: 'right', to: { area: 'main', x: ${l.back}.5, y: ${standRow(l.back)}, exit: 'none' } },`).join('\n')}
   ],
   areas: { '8-4w': WATER },
   flagpole: null,

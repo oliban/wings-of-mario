@@ -22,7 +22,7 @@
 import { writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emitLevel, bonusRoomSource, bonusReturn } from './smb-build.mjs';
+import { emitLevel, bonusRoomSource, bonusReturn, buildArea } from './smb-build.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'src', 'data', 'levels');
@@ -335,41 +335,97 @@ ${entsBlock(L.entities)}
 {
   const L = emitLevel('1-2', { theme: 'underground' });
   const side = L.meta.sidePipes[0];
-  const rows12 = relieveBlocks(L.rows);
-  const sp = findSpawn(rows12);
+  // The entrance is the gap the terrain leaves in the ceiling at columns 1-5,
+  // and the original drops you through it rather than standing you on the floor.
+  // Header byte 0 is $48: PlayerEntranceCtrl is (($48 & %00111000) >> 3) = 1, so
+  // PlayerStarting_Y_Pos[1] = $20 = 32px = row 2 (asm:2822-2823), and X is
+  // PlayerStarting_X_Pos[0] = $28 = 40px = column 2.5 (asm:2815-2816).
+  const sp = { x: 2.5, y: 2 };
+  // The pipe at column 103 is a warp pipe — object id 0, `(b1 & $70) == $70`
+  // with d3 set — and 1-2's own enemy stream says where it goes: the row-$0e
+  // record at column 29 is `c2 02`, AreaPointer $c2 (underground, offset 2 =
+  // UndergroundArea3) and EntrancePage 2. The room puts you back at column 115,
+  // the third pipe, which is why the detour is a shortcut.
+  const bonus = bonusReturn(L.meta, 1, 2);
+  const down = L.meta.pipes.find((p) => p.warp && p.x < 170);
   // The original's warp zone: three pipes, worlds 4, 3 and 2 from left to right.
   const wz = L.meta.pipes.filter((p) => p.warp && p.x > 170).sort((a, b) => a.x - b.x);
+  const WZ_WORLDS = [4, 3, 2]; // WarpZoneNumbers, asm:1682-1683
+
+  // The row-$0d ScrollLock object that stands in the warp zone. Everything below
+  // keys off its column rather than off the pipes.
+  const lockObj = buildArea('1-2').objs.find((o) => o.name.startsWith('ScrollLock'));
+
+  // THE SCROLL LOCK. The original stops the camera dead in the warp zone
+  // (ScrollLockObject, asm:3581-3585), which is
+  // what lets you walk the strip and pick any of the three pipes. Without it the
+  // camera follows you right, the left-hand pipe leaves the screen, and the
+  // player is clamped to the screen edge and can never get back to it — which is
+  // exactly what the player hit.
+  //
+  // We have no scroll-lock object, but the camera already has the same limit
+  // built in: it can never scroll past `width - 16` columns. The original parks
+  // the screen on the PAGE the zone sits in — its own text writes the three
+  // numbers at columns 5, 13 and 21 of that screen, which lands them on the
+  // pipes only if the screen starts on the page boundary — so cutting the area
+  // off one screen after that page puts the camera's own right limit on exactly
+  // that column and nothing else is needed. Everything past it is terrain 15,
+  // solid wall the AlterAreaAttributes at 189 raises and no one ever sees.
+  const LOCK_COL = Math.floor(wz[0].x / 16) * 16;
+  const W12 = LOCK_COL + 16;
+  const rows12 = relieveBlocks(L.rows).map((r) => r.slice(0, W12));
+
+  // NO PIRANHA PLANTS IN THE WARP ZONE. Not a special case by column:
+  // ScrollLockObject_Warp ends with `lda #PiranhaPlant / jsr KillEnemies`
+  // (asm:3579-3580), so arming the warp zone wipes every plant on the screen.
+  // VerticalPipe plants one in every pipe it draws, warp pipes included, and
+  // these three are the ones alive when that runs, every one of them standing at
+  // or past the ScrollLock object's own column.
+  const ents12 = L.entities.filter((e) => !(e.type === 'piranha' && e.x >= lockObj.x));
+
+  // The world numbers painted on the background above the pipes. The original
+  // writes them into the nametable at $2625/$262d/$2635 (WarpZoneWelcome,
+  // asm:1668-1676): row 17 and columns 5, 13 and 21 of the locked screen — half
+  // a tile right of each pipe's left edge, and a tile and a half above its lip.
+  // The banner above them is the same block of text, at row 12 column 4.
+  const signs = wz.map((p, i) => ({ x: p.x + 0.5, y: p.top - 1.5, text: String(WZ_WORLDS[i]) }));
+  signs.unshift({ x: LOCK_COL + 2, y: 6, text: 'WELCOME TO WARP ZONE!' });
+
+  // The daylight ending is not a room of ours: it is the last 34 columns of
+  // GroundArea6 — 1-1's own area — which is exactly what the second row-$0e
+  // record in 1-2's stream names. At column 158 it sets AreaPointer $25
+  // (ground, offset 5 = GroundArea6) and EntrancePage 11, so walking into the
+  // sideways pipe puts you at page 11 = column 176 of 1-1, on the pipe at 179,
+  // with 1-1's staircase, flagpole and castle ahead of you. It is where 1-2
+  // actually ends; the warp zone is the OTHER exit, reached by riding the lift
+  // at column 154 to the top and running right over the ceiling.
+  const END_AT = 176;
+  const E = emitLevel('1-1', { theme: 'overworld' });
+  const endRows = relieveBlocks(E.rows).map((r) => r.slice(END_AT));
+  const endEnts = E.entities.filter((e) => e.x >= END_AT).map((e) => ({ ...e, x: e.x - END_AT }));
+  const endContents = E.contents
+    .filter((c) => c.x >= END_AT)
+    .map((c) => ({ ...c, x: c.x - END_AT }));
   const body = `
-// Daylight with the flagpole on it. It is what the two warp-zone pipes for
-// worlds 4 and 3 lead to here, since those worlds do not exist yet.
+${bonusRoomSource('1-2b', 'WORLD 1-2', 2, bonus.col, bonus.top)}
+// The daylight ending, rendered from GroundArea6 — 1-1's area — at page ${END_AT / 16}, the
+// page THIS level's own enemy stream names. You rise out of the pipe at column
+// ${(E.meta.pipes.find((p) => p.x >= END_AT) || {}).x} and walk right to 1-1's staircase, flagpole and castle.
 const SURFACE = {
-  id: '1-2b',
+  id: '1-2e',
   name: 'WORLD 1-2',
   theme: 'overworld',
   music: 'overworld',
-  width: 52,
+  width: ${E.width - END_AT},
   height: 15,
-  spawn: { x: 6, y: 12 },
+  spawn: { x: 3.5, y: 11 },
   tiles: [
-    '....................................................',
-    '....................................................',
-    '................................^...................',
-    '................................|...................',
-    '................................|...................',
-    '................................|...................',
-    '................................|...................',
-    '................................|...................',
-    '................................|...................',
-    '................................|...................',
-    '................................|...................',
-    '..[]............................|...................',
-    '..{}............................|...................',
-    '..{}............................B...................',
-    '####################################################',
+${endRows.map((s) => `    '${s}',`).join('\n')}
   ],
-  entities: [],
-  flagpole: { x: 32 },
-  castle: { x: 37 },
+  contents: [${endContents.length ? '\n' + contentsBlock(endContents) + '\n  ' : ''}],
+  entities: [${endEnts.length ? '\n' + entsBlock(endEnts) + '\n  ' : ''}],
+  flagpole: { x: ${E.meta.flagpole.x - END_AT} },
+  castle: { x: ${E.meta.castle.x - END_AT + 1} },
 };
 
 export default {
@@ -378,7 +434,7 @@ export default {
   time: 400,
   theme: 'underground',
   music: 'underground',
-  width: ${L.width},
+  width: ${W12},
   height: 15,
   spawn: { x: ${sp.x}, y: ${sp.y} },
   tiles: TILES,
@@ -386,32 +442,63 @@ export default {
 ${contentsBlock(L.contents)}
   ],
   entities: [
-${entsBlock(L.entities)}
+${entsBlock(ents12)}
+  ],
+  // The world numbers the original paints on the warp zone's background, and the
+  // banner over them. See WarpZoneWelcome, smbdis.asm:1668-1676.
+  signs: [
+${signs.map((s) => `    ${j(s).replace(/"([a-z]+)":/g, '$1: ').replace(/"/g, "'")},`).join('\n')}
   ],
   warps: [
-    // The original's sideways exit pipe, into the original's own warp zone.
-    { from: { x: ${side.x}, y: ${side.top} }, dir: 'right', to: { area: 'main', x: 177.5, y: 12, exit: 'none' } },
-    // Left to right the warp zone is worlds 4, 3 and 2. Only world 2 exists.
-    { from: { x: ${wz[0].x}, y: ${wz[0].top} }, dir: 'down', to: { area: '1-2b', x: 2.5, y: 10, exit: 'up' } },
-    { from: { x: ${wz[1].x}, y: ${wz[1].top} }, dir: 'down', to: { area: '1-2b', x: 2.5, y: 10, exit: 'up' } },
+    // The warp pipe at ${down.x}, into UndergroundArea3 page 2. You come back up the
+    // pipe at ${bonus.col}, eleven columns further on.
+    { from: { x: ${down.x}, y: ${down.top} }, dir: 'down', to: { area: '1-2b', x: 2.5, y: 3, exit: 'down' } },
+    // The original's sideways exit pipe: the way 1-2 normally ends.
+    { from: { x: ${side.x}, y: ${side.top} }, dir: 'right', to: { area: '1-2e', x: 3.5, y: 11, exit: 'up' } },
+    // Left to right the warp zone is worlds 4, 3 and 2 — WarpZoneNumbers reads
+    // 4, 3, 2 (asm:1682-1683) and ChangeAreaPipe zeroes AreaNumber, so each
+    // pipe is that world's level 1 (asm:12288-12315).
+    { from: { x: ${wz[0].x}, y: ${wz[0].top} }, dir: 'down', to: { level: '4-1' } },
+    { from: { x: ${wz[1].x}, y: ${wz[1].top} }, dir: 'down', to: { level: '3-1' } },
     { from: { x: ${wz[2].x}, y: ${wz[2].top} }, dir: 'down', to: { level: '2-1' } },
   ],
-  areas: { '1-2b': SURFACE },
+  areas: { '1-2b': BONUS, '1-2e': SURFACE },
 };
 `;
   writeFileSync(
     join(OUT, '1-2.js'),
     header(
       '1-2 — underground',
-      "// The sideways exit pipe at column " +
-        side.x +
-        " leads to the original's own warp zone,\n" +
-        '// the strip at 176-188 walled off from the rest of the level, and its three\n' +
-        '// pipes are worlds 4, 3 and 2 from left to right.\n' +
+      "// 1-2 has three exits and the original's own data names all three.\n" +
         '//\n' +
-        '// DEVIATION: worlds 3 to 8 do not exist yet, so only the world-2 pipe warps.\n' +
-        '// The other two drop you into daylight with a flagpole, which is how the\n' +
-        "// level gets an ending at all — the original has no flagpole in this area."
+        '// The warp pipe at column ' +
+        down.x +
+        ' drops into UndergroundArea3 page 2, the coin\n' +
+        '// room, and returns you at column ' +
+        bonus.col +
+        '. The sideways exit pipe at column ' +
+        side.x +
+        '\n' +
+        "// is the ordinary ending: it leads to page 11 of GroundArea6 — 1-1's area —\n" +
+        '// where 1-1\'s own staircase, flagpole and castle finish the level. Both\n' +
+        "// destinations are row-\$0e records in this level's enemy stream.\n" +
+        '//\n' +
+        '// The warp zone is the third exit and it is NOT behind the pipe. Ride the\n' +
+        '// lift at column 154 to the top of the screen, jump right onto the ceiling at\n' +
+        '// column 161 and run over the wall at 170-176; the strip at 177-189 beyond it\n' +
+        '// is the warp zone, and its three pipes are worlds 4, 3 and 2.\n' +
+        '//\n' +
+        '// The area is cut at column ' +
+        W12 +
+        ', not at the ' +
+        L.width +
+        " the object stream's last\n" +
+        '// record implies, so the camera cannot scroll past column ' +
+        LOCK_COL +
+        ' — the\n' +
+        "// original's own scroll lock, done with the limit the camera already has. The\n" +
+        '// three pipes carry no piranha plants because ScrollLockObject_Warp kills\n' +
+        '// every plant on screen when it arms the zone.'
     ) +
       tilesBlock(rows12) +
       body

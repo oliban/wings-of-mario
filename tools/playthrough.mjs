@@ -541,12 +541,31 @@ function brickRuns(lvl) {
   return runs;
 }
 
+// A multi-coin brick is the one brick big Mario CANNOT break. ChkBrick
+// (smbdis.asm:7241-7243) forces the unbreakable block state for both player
+// sizes on any metatile in BrickQBlockMetatiles, and unlike the other item
+// bricks it keeps its BRICK face while its coin timer runs rather than turning
+// into the empty block on the first hit. Standing big Mario under one and
+// demanding rubble tests the harness's assumption, not the level.
+function multicoinTiles(lvl) {
+  const set = new Set();
+  for (const c of lvl.contents || []) {
+    if (!c) continue;
+    if (c.item === 'multicoin' || c.item === 'coins' || (c.item === 'coin' && c.count > 0)) {
+      set.add(c.x + ',' + c.y);
+    }
+  }
+  return set;
+}
+
 if (wanted('bricks')) {
   console.log('\n== bricks: big Mario has the headroom to break every brick run he can stand under ==');
   for (const a of areas) {
     const runs = brickRuns(a.lvl);
     const specs = [];
     const skipped = [];
+    const multicoin = multicoinTiles(a.lvl);
+    let unbreakable = 0;
     for (const r of runs) {
       // Sample the middle of the run, then anything else in it that has a
       // different amount of standing room.
@@ -558,15 +577,23 @@ if (wanted('bricks')) {
       // 1-2's column of bricks at 54-55 leaves exactly a one-tile gap, which
       // small Mario walks under and big Mario cannot enter.
       let picked = null;
+      let anyMulticoin = false;
       for (let x = r.x0; x <= r.x1 && !picked; x++) {
+        if (multicoin.has(x + ',' + r.y)) { anyMulticoin = true; continue; }
         const spot = bumpSpots(a.graph, x, r.y).find((n) => n.x === x && n.y - r.y >= 2);
         if (spot) picked = { x, y: r.y, from: spot, gap: spot.y - r.y };
       }
       if (picked) specs.push(picked);
+      else if (anyMulticoin) unbreakable++;
       else skipped.push(r);
     }
     if (!specs.length) {
-      record('bricks', a.name, true, `no brick run has standing room under it (${runs.length} run(s))`);
+      record(
+        'bricks',
+        a.name,
+        true,
+        `no breakable brick run has standing room under it (${runs.length} run(s), ${unbreakable} multi-coin)`
+      );
       continue;
     }
 
@@ -637,7 +664,8 @@ if (wanted('bricks')) {
                 `with ${r.gap} tile(s) of room, rose ${r.rosePx}px, brick survived`
             )
             .join('; ')
-        : `${out.length} run(s) broke, ${skipped.length} with no standing room (skipped)`
+        : `${out.length} run(s) broke, ${skipped.length} with no standing room (skipped), ` +
+          `${unbreakable} multi-coin (unbreakable by design)`
     );
   }
 }

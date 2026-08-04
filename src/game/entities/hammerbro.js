@@ -15,6 +15,8 @@ import {
   enemyMaxFall,
   fx,
   sfx,
+  hardMode,
+  hardPick,
 } from './index.js';
 
 // 0 outline 1 shell dark 2 shell mid 3 shell lit 4 shell spec
@@ -123,14 +125,20 @@ export default class HammerBro extends Entity {
     this.range = opts.range == null ? 26 : opts.range;
     this.speed = opts.speed == null ? 0.35 : opts.speed;
     this.dir = opts.dir || -1;
-    this.walkT = 40;
+    // InitHammerBro (asm:8184-8192) seeds EnemyIntervalTimer from
+    // HBroWalkingTimerData = $80, $50 — 128 frames before he starts walking at
+    // the player, 80 in secondary hard mode. He comes for you sooner.
+    this.walkT = opts.walkT == null ? hardPick(world, 128, 80) : opts.walkT;
 
     // ProcHammerBro (smbdis.asm:9219-9231): HammerThrowingTimer reloads from
     // HammerThrowTmrData (asm:9207) with $30 and is decremented once per frame,
     // so a hammer leaves his hand every 49 frames — relentlessly, for as long as
     // he is on screen. There is no volley in the original: the bursts-and-gaps
     // pattern this used to have was invention, and it cost him half his output.
-    this.throwPeriod = opts.throwPeriod == null ? 49 : opts.throwPeriod;
+    // HammerThrowTmrData is a TWO-entry table, $30 and $1c, indexed by
+    // SecondaryHardMode: 49 frames between hammers normally, 29 in hard mode.
+    this.throwPeriod =
+      opts.throwPeriod == null ? hardPick(world, 49, 0x1c + 1) : opts.throwPeriod;
     this.throwT = Math.floor(this.throwPeriod * (opts.phase == null ? 0.35 : opts.phase));
     this.windT = -1;
 
@@ -188,7 +196,12 @@ export default class HammerBro extends Entity {
     const below = solid(cx, this.y + this.h + 40) || solid(cx, this.y + this.h + 72);
 
     if (above || !below || !rng.chance(0.45)) {
-      this.vy = -Math.sqrt(2 * enemyGravity() * HOP_RISE);
+      // HammerBroJumpLData = $20, $37 (asm:9238) is how long he stays in the
+      // air. Outside hard mode HJump forces the offset to 0 and he always gets
+      // the short $20 hop; in hard mode the offset comes off the LSFR, so half
+      // his hops are the long $37 one (asm:9262-9271).
+      const long = hardMode(this.world) && rng.chance(0.5);
+      this.vy = -Math.sqrt(2 * enemyGravity() * (long ? HOP_RISE * (0x37 / 0x20) : HOP_RISE));
       this.grounded = false;
       fx(this.world, 'landingDust', cx, this.y + this.h, 0.8);
     } else {

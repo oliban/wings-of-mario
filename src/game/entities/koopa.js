@@ -40,12 +40,35 @@ export default class Koopa extends Entity {
     this.speed = opts.speed == null ? walkSpeed() : opts.speed;
 
     this.winged = !!(opts.winged || opts.wing || opts.para);
-    // Red paratroopas hover on a vertical sine; green ones hop along the floor.
-    this.flying =
-      opts.fly === true || (this.winged && opts.fly !== false && this.variant === 'red');
+    // The original has THREE winged koopas and gives each its own movement sub
+    // (EnemyMovementSubs, smbdis.asm:9086-9106):
+    //
+    //   $0e green, MoveJumpingEnemy      — walks and hops, on the ground
+    //   $0f red,   ProcMoveRedPTroopa    — springs straight up and down, no
+    //                                      horizontal movement whatsoever
+    //   $10 green, MoveFlyGreenPTroopa   — shuttles left and right on the
+    //                                      XMove counters, with a shallow wave
+    //
+    // so `winged` alone does not say how one moves.
+    this.flyMode =
+      opts.fly === 'horizontal'
+        ? 'horizontal'
+        : opts.fly === true || (this.winged && opts.fly !== false && this.variant === 'red')
+          ? 'vertical'
+          : null;
+    this.flying = this.flyMode != null;
     this.homeY = y;
-    this.flyRange = opts.range == null ? 40 : opts.range;
+    // InitRedPTroopa (asm:8214-8226) keeps the written row as the TOP of the
+    // travel and puts the centre 48 pixels BELOW it — or, for one written low on
+    // the screen, 32 pixels above. The bob is around that centre, not around the
+    // written row.
+    this.flyDrop = opts.flyDrop != null ? opts.flyDrop : opts.range != null ? opts.range : y < 128 ? 48 : -32;
     this.flyRate = opts.flyRate == null ? 0.042 : opts.flyRate;
+    // MoveFlyGreenPTroopa sways one pixel every fourth frame and turns the sway
+    // over on bit 6 of the frame counter, i.e. every 64 frames.
+    this.swayRate = opts.swayRate == null ? Math.PI / 64 : opts.swayRate;
+    this.cruiseRange = opts.cruiseRange == null ? 64 : opts.cruiseRange;
+    this.homeX = x;
     this.hopPower =
       opts.hopPower == null ? Math.sqrt(2 * enemyGravity() * HOP_RISE) : opts.hopPower;
 
@@ -61,14 +84,28 @@ export default class Koopa extends Entity {
   update() {
     if (frozen(this.world)) return;
 
-    if (this.winged && this.flying) {
+    if (this.winged && this.flyMode === 'vertical') {
+      // ProcMoveRedPTroopa moves on ONE axis. The old code drifted it sideways
+      // as well, which no red paratroopa in the original does.
       this.flyT++;
       const prev = this.y;
-      this.y = this.homeY + Math.sin(this.flyT * this.flyRate) * this.flyRange;
+      const centre = this.homeY + this.flyDrop;
+      this.y = centre - Math.cos(this.flyT * this.flyRate) * this.flyDrop;
       this.vy = this.y - prev;
-      this.vx = this.speed * this.facing * 0.35;
-      const col = this.moveAndCollide(this.vx, 0);
-      if (col.hitLeft || col.hitRight) this.facing = col.hitLeft ? 1 : -1;
+      this.vx = 0;
+      return;
+    }
+
+    if (this.winged && this.flyMode === 'horizontal') {
+      this.flyT++;
+      const prev = this.x;
+      this.x = this.homeX + Math.sin(this.flyT * this.flyRate) * this.cruiseRange;
+      this.vx = this.x - prev;
+      if (this.vx !== 0) this.facing = this.vx < 0 ? -1 : 1;
+      // The wave is a pixel at a time and shallow enough that it never carries
+      // the troopa into anything; it is decoration on top of the cruise.
+      this.y = this.homeY + Math.sin(this.flyT * this.swayRate) * 4;
+      this.vy = 0;
       return;
     }
 
@@ -111,6 +148,7 @@ export default class Koopa extends Entity {
       // chain was doing.
       this.winged = false;
       this.flying = false;
+      this.flyMode = null;
       this.isWalker = true;
       this.vy = 0;
       this.grounded = false;
