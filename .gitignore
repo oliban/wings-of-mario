@@ -8,6 +8,11 @@ shots/
 
 .DS_Store
 *.log
+
+# The room table between restarts. Runtime state of one machine, never source:
+# it holds live room codes and their reconnect tokens. See server/persist.js.
+server/rooms.json
+server/rooms.json.tmp
 reference/
 
 # Isolated agent worktrees. A background agent given its own worktree gets a

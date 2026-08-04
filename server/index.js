@@ -11,6 +11,7 @@ import { dirname, resolve } from 'node:path';
 import { WebSocketServer } from 'ws';
 
 import { serveStatic } from './static.js';
+import { createSaver, loadState } from './persist.js';
 import { Rooms } from '../src/net/room.js';
 import {
   MSG, PROTOCOL_VERSION, OTHER_SIDE, decode, encode, normalizeRoomCode,
@@ -18,6 +19,11 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '..');
+
+// Where the room table is kept between runs. Beside the server, because that
+// is where the one process that owns it lives; overridable with WOM_STATE for
+// a deployment that mounts its writable directory somewhere else.
+const DEFAULT_STATE_PATH = process.env.WOM_STATE || resolve(HERE, 'rooms.json');
 
 // Housekeeping only. This interval reaps empty rooms; it is NOT a simulation
 // tick and there is deliberately no such thing on this server (spec 7.1).
@@ -38,8 +44,21 @@ function num(v) {
 
 export async function startServer(opts = {}) {
   const root = resolve(opts.root || REPO_ROOT);
-  const rooms = opts.rooms || new Rooms();
   const log = opts.log || console;
+
+  // PERSISTENCE, and the rule for when it is on.
+  //
+  // A caller that brings its own Rooms is saying it owns the room table — that
+  // is every test in this repo, and a test must not write a file into the
+  // working tree or inherit rooms from the last run. So: a supplied `rooms`
+  // means no persistence unless a path is asked for explicitly, and `statePath:
+  // null` turns it off outright. `npm run serve`, which supplies neither, gets
+  // the default file and the whole point of this.
+  const statePath = opts.statePath !== undefined
+    ? opts.statePath
+    : (opts.rooms ? null : DEFAULT_STATE_PATH);
+  const rooms = opts.rooms || loadState(statePath, { now: Date.now(), log });
+  const saver = createSaver({ path: statePath, rooms, log });
   // On by default: this exists so a LAN player can see the room the other one
   // just made. `{ lobby: false }` is the whole of the off switch.
   const lobbyEnabled = opts.lobby !== false;
@@ -306,8 +325,14 @@ export async function startServer(opts = {}) {
     http,
     wss,
     rooms,
+    statePath,
+    // So a test can force the file to be current without waiting two seconds.
+    save: () => saver.flush(),
     port: http.address().port,
     async close() {
+      // Before the sockets go, not after: an orderly shutdown should lose
+      // nothing at all.
+      saver.stop();
       clearInterval(reaper);
       for (const c of wss.clients) c.terminate();
       wss.close();
@@ -318,5 +343,17 @@ export async function startServer(opts = {}) {
 
 // Started directly rather than imported: `npm run serve`, and the Docker image.
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  startServer().then((s) => console.log(`wings-of-mario listening on :${s.port}`));
+  startServer().then((s) => {
+    console.log(`wings-of-mario listening on :${s.port} (rooms in ${s.statePath})`);
+    // Ctrl-C is how this server is stopped in a playtest, and it is the exact
+    // moment the room table is most worth keeping. Without this the saver's
+    // two-second tick is the window; with it there is none. Registered only on
+    // the directly-started server, so nothing in a test suite installs a
+    // process-wide handler.
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+      process.on(sig, () => {
+        s.close().then(() => process.exit(0), () => process.exit(1));
+      });
+    }
+  });
 }
