@@ -490,6 +490,9 @@ export class Scene {
       // x0, so the shape it wants is made here rather than teaching the
       // instrument about a class it should not know.
       islands: sim.islands.map((i) => ({ x: i.x0, x1: i.x1 })),
+      // The hunt: a fuzzy fix, or null for a dark tube. The instrument decides
+      // how to draw uncertainty; the sim only supplies it.
+      contact: sim.radarContact(),
       fuel: clamp(p.fuel / FLIGHT.FUEL_MAX, 0, 1),
       verdict: v && v.inBox ? String(v.reason).toUpperCase() : '',
     }, this.tick);

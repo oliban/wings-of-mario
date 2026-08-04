@@ -186,6 +186,10 @@ function planIcon(ctx, x, y, s, colour) {
 // The radar
 // ---------------------------------------------------------------------------
 
+// Bright enough to find at a glance in a 124x36 window, and a colour that
+// appears nowhere else on the panel so a browser test can count its pixels.
+export const RADAR_BLIP = '#b7ff5a';
+
 // A real instrument, not a decorative rectangle: a plan of the whole operating
 // area with the ship, the aircraft and the current viewport on it. When there
 // are islands to hunt across, this is what the pilot navigates by.
@@ -280,6 +284,26 @@ function radar(ctx, x, y, w, h, sim, world, tick) {
   ctx.moveTo(toX(p.x + 12), py + 2);
   ctx.lineTo(toX(p.x + 12), horizon);
   ctx.stroke();
+
+  // The contact. A fuzzy fix drawn as a fuzzy thing: a ring whose radius is
+  // the uncertainty and a pip at its centre, both dimming as the fix ages.
+  // The pilot is being told "somewhere around here, a moment ago", and the
+  // instrument should look like it means that.
+  const contact = world.contact;
+  if (contact) {
+    const cx = toX(contact.x);
+    const cy = horizon - 5;
+    const spread = 4 + (1 - contact.confidence) * 10;
+    ctx.globalAlpha = 0.25 + contact.confidence * 0.45;
+    ctx.strokeStyle = RADAR_BLIP;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(cx, cy, spread, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = RADAR_BLIP;
+    ctx.fillRect(Math.round(cx) - 1, Math.round(cy) - 1, 2, 2);
+  }
   ctx.restore();
 
   ctx.strokeStyle = PANEL.faceEdge;

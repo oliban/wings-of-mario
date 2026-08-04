@@ -310,6 +310,17 @@ window.__WINGS = {
     return pilot.sim.state();
   },
 
+  // The true contact, as the network will supply it from Mario's snapshot.
+  setFix(fix) {
+    const out = pilot.sim.setFix(fix);
+    pilot.render();
+    return out;
+  },
+
+  radar() {
+    return pilot.sim.radarContact();
+  },
+
   events() {
     return pilot.sim.events.map((e) => ({ ...e }));
   },

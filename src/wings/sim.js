@@ -4,6 +4,7 @@ import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import { landingVerdict, hitsHull, arrest, spotOnDeck } from './carrier.js';
 import { createLoadout, release, stepShot, detonate } from './ordnance.js';
 import { Archipelago } from './archipelago.js';
+import { Radar } from './radar.js';
 
 export const SQUADRON = 5;
 
@@ -26,6 +27,11 @@ export class WingsSim {
       || new Archipelago({ seed: opts.seed, world: opts.world, ids: opts.islands });
     this.islands = this.archipelago.islands();
     this.bounds = worldBounds(this.islands);
+    // The hunt. `_fix` is the true contact, which the network fills in from
+    // Mario's snapshot (Plan 3); until then setFix() is the only writer and
+    // the tube stays dark if nobody calls it.
+    this.radar = new Radar({ seed: opts.seed });
+    this._fix = { present: false };
     this.squadron = opts.squadron != null ? opts.squadron : SQUADRON;
     this.plane = spotOnDeck(createPlane());
     this.tick = 0;
@@ -70,6 +76,7 @@ export class WingsSim {
     this.stepShots();
     if (p.mode !== MODE.DOWN) this.checkPlane();
     this.cam = cameraFor(p.x + PLANE_W / 2, p.y + PLANE_H / 2, this.bounds);
+    this.radar.step(this._fix);
     this.tick++;
     return this;
   }
@@ -198,6 +205,17 @@ export class WingsSim {
     return this.islands.find((isle) => isle.id === id) || null;
   }
 
+  // The true position of the contact. Called once per snapshot, not per tick:
+  // the radar does its own timing.
+  setFix(fix) {
+    this._fix = fix || { present: false };
+    return this._fix;
+  }
+
+  radarContact() {
+    return this.radar.contact();
+  }
+
   // -------------------------------------------------------------------------
 
   checkPlane() {
@@ -317,6 +335,7 @@ export class WingsSim {
       // in ordnance.js, never a second one.
       loadout: { ...this.loadout },
       shots: this.shots.map((s) => ({ kind: s.kind, x: s.x, y: s.y, vx: s.vx, vy: s.vy, age: s.age })),
+      contact: this.radarContact(),
       ...this.turnState(),
     };
   }
