@@ -1,5 +1,6 @@
 import { TILE } from '../core/constants.js';
 import { MarioOverlay } from './mario-overlay.js';
+import { FerryRide } from './ferry-ride.js';
 
 // Loaded from index.html. This module and the one <script> tag that loads it
 // are the ENTIRE upstream footprint of the telegraph.
@@ -12,6 +13,13 @@ import { MarioOverlay } from './mario-overlay.js';
 const POLL_MS = 30;
 
 const overlay = new MarioOverlay();
+
+// The crossing between islands. It takes no host here — window.__GAME is not
+// reliably assigned at module-body time, for the same reason the overlay polls
+// — so it is attached inside boot(). The overlay's hook list is the only fixed
+// timestep anything on this page gets; the ride needs one, so it takes that.
+const ride = new FerryRide();
+overlay.hooks.push((world) => ride.update(world));
 
 // A bounded log of everything the overlay asked to be played, so a browser
 // test can assert the whistle without an audio device. The synth keeps its own
@@ -36,6 +44,7 @@ function boot() {
   const g = window.__GAME;
   if (!ready(g)) return false;
   overlay.attach(g);
+  ride.attach(g);
   if (!running) {
     running = true;
     requestAnimationFrame(frame);
@@ -118,6 +127,40 @@ window.__TELEGRAPH = {
   clear() {
     overlay.reset();
     overlay.synth.log.length = 0;
+    return true;
+  },
+};
+
+// The ferry's scripted surface, alongside the telegraph's and assigned at the
+// same moment and for the same reason. The crossing itself is stepped by the
+// overlay hook above, so a test drives it with __TELEGRAPH.run(n) — there is
+// no separate clock here to keep in sync.
+window.__FERRY = {
+  ride,
+
+  // fromX/toX are WORLD pixels: the boat is on the ocean between two islands,
+  // which is the pilot's coordinate space. The defaults are two plausible
+  // island x's, so board() with no arguments gives a crossing you can watch.
+  async board(opts = {}) {
+    await ride.board({
+      fromX: opts.fromX == null ? 3000 : opts.fromX,
+      toX: opts.toX == null ? 6000 : opts.toX,
+      to: opts.to || null,
+    });
+    return true;
+  },
+
+  state() {
+    return ride.ferry ? ride.ferry.state() : null;
+  },
+
+  sink() {
+    const g = window.__GAME;
+    return ride.sink(g && g.world);
+  },
+
+  clear() {
+    ride.clear();
     return true;
   },
 };
