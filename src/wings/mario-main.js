@@ -1,0 +1,125 @@
+import { TILE } from '../core/constants.js';
+import { MarioOverlay } from './mario-overlay.js';
+
+// Loaded from index.html. This module and the one <script> tag that loads it
+// are the ENTIRE upstream footprint of the telegraph.
+//
+// DO NOT TRUST SCRIPT ORDER. src/game/world.js has a top-level await, so
+// module execution order on this page is not reliable — debug-panel.js hit a
+// real intermittent "sometimes does not appear" bug before it polled for the
+// global instead of assuming it. So: poll.
+
+const POLL_MS = 30;
+
+const overlay = new MarioOverlay();
+
+// A bounded log of everything the overlay asked to be played, so a browser
+// test can assert the whistle without an audio device. The synth keeps its own
+// (see WhistleSynth.log); this is the same list, exposed by name.
+function sounds() {
+  return overlay.synth.log.map((s) => ({ ...s }));
+}
+
+let auto = 0;
+let running = false;
+
+function frame() {
+  overlay.pump();
+  requestAnimationFrame(frame);
+}
+
+function ready(g) {
+  return !!(g && g.game && g.game.loop && g.renderer);
+}
+
+function boot() {
+  const g = window.__GAME;
+  if (!ready(g)) return false;
+  overlay.attach(g);
+  if (!running) {
+    running = true;
+    requestAnimationFrame(frame);
+    // An AudioContext may not start without a gesture. The first key or click
+    // the player makes unlocks the whistle; until then it records and stays
+    // silent, which is the correct behaviour and not a failure.
+    const unlock = () => overlay.synth.unlock();
+    window.addEventListener('keydown', unlock, { once: true });
+    window.addEventListener('pointerdown', unlock, { once: true });
+  }
+  return true;
+}
+
+if (!boot()) {
+  const id = setInterval(() => {
+    if (boot()) clearInterval(id);
+  }, POLL_MS);
+}
+
+// The scripted control surface, mirroring window.__GAME. It is assigned
+// immediately — not inside boot() — so a test can wait on it and every method
+// copes with the game not being up yet. Task 8 replaces drop() with the
+// network's `bombRelease`; the payload shape is identical, which is the point
+// of building it this way round.
+window.__TELEGRAPH = {
+  overlay,
+
+  // Put a bomb in the air above a tile. `height` is how far above the tile's
+  // top edge it starts, `vx` its horizontal velocity in px/frame. This is the
+  // local stand-in for the pilot: it constructs the same {kind,x,y,vx,vy} a
+  // release produces, in island-local pixels.
+  drop(opts = {}) {
+    const tx = opts.tx == null ? 0 : opts.tx;
+    const ty = opts.ty == null ? 13 : opts.ty;
+    const id = opts.id == null ? `local${++auto}` : opts.id;
+    return overlay.add({
+      id,
+      kind: opts.kind || 'bomb',
+      x: tx * TILE + TILE / 2,
+      y: ty * TILE - (opts.height == null ? 200 : opts.height),
+      vx: opts.vx == null ? 0 : opts.vx,
+      vy: opts.vy == null ? 0 : opts.vy,
+    }).id;
+  },
+
+  marks() {
+    return overlay.marks.map((m) => ({ ...m, impact: m.impact ? { ...m.impact } : null }));
+  },
+
+  sounds,
+
+  // Catch up with the engine right now, synchronously.
+  pump() {
+    return overlay.pump();
+  },
+
+  // Advance the engine and the wings layer together, in lockstep, n fixed
+  // steps. THIS is what tests should call. `pump()` caps its catch-up at
+  // MAX_CATCHUP — deliberately, so a backgrounded tab cannot run a thousand
+  // steps in one frame — so handing it a thousand engine ticks at once would
+  // silently drop most of them.
+  // It drives `game.update()` and the loop's tick counter directly rather than
+  // calling `__GAME.tick(1)` n times, because that helper renders the whole
+  // 256x240 frame on every call — a thousand-tick ferry crossing would be a
+  // thousand full renders. The overlay still redraws itself each step (a
+  // clear and a handful of rects), so a pixel assertion after run() is
+  // looking at the current frame.
+  run(n = 1) {
+    const g = window.__GAME;
+    if (!g || !g.game || !g.game.loop) return 0;
+    for (let i = 0; i < n; i++) {
+      g.game.update();
+      g.game.loop.tick++;
+      overlay.pump();
+    }
+    g.game.render(1);
+    return overlay.frame;
+  },
+
+  clear() {
+    overlay.reset();
+    overlay.synth.log.length = 0;
+    return true;
+  },
+};
+
+export default overlay;

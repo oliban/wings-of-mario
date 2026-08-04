@@ -145,7 +145,30 @@ game's modules except through `window.__GAME`.
 - Added one line after the `src/main.js` script tag:
   `<script type="module" src="./src/wings/debug-panel.js"></script>`.
 
-**On conflict:** keep this as the last `<script>` in `<body>`, after
-`src/main.js` — the panel reads `window.__GAME`, which `src/main.js` only
-assigns once its own module body has finished running, and module scripts on
-a page execute in document order.
+**Changed (second line, Wings of Mario telegraph):**
+- Added one more line after the `debug-panel.js` tag:
+  `<script type="module" src="./src/wings/mario-main.js"></script>`.
+
+This is the **entire** upstream footprint of the telegraph, the ferry and the
+match state machine. The three of them draw on a canvas the module creates
+itself — `#wings-overlay`, stacked over `#screen` inside `#stage` — and advance
+off `window.__GAME.game.loop.tick`, the engine's own fixed-step counter, so
+they need no render hook and no update hook.
+
+**Two things a future maintainer will otherwise rediscover the hard way:**
+
+- **`#overlay` could not be reused, and this is not an oversight.**
+  `Game.render()` calls `drawHarryOverlay()` every frame, and its second
+  statement is an unconditional `clearRect` over the whole canvas — before its
+  own `if (!this.harryMode) return`. Anything painted there from another rAF
+  callback is erased by the next engine frame, and the callback ordering is
+  not ours to control. Hence a second, stacked canvas at `z-index: 3`
+  (`#overlay` is 2), whose size and position are copied from `#screen` every
+  frame so the stage padding is never duplicated as a constant.
+- **The module polls for `window.__GAME` rather than trusting script order.**
+  `src/game/world.js` has a top-level `await`, so module execution order on
+  this page is not reliable — the same thing bit `debug-panel.js`.
+
+**On conflict:** keep both wings tags after `src/main.js`, as the last scripts
+in `<body>` — they read `window.__GAME`, which `src/main.js` only assigns once
+its own module body has finished running.
