@@ -132,7 +132,10 @@ function showSpeedBadge(value) {
     speedBadge = document.createElement('div');
     speedBadge.id = 'wings-debug-speed';
     speedBadge.style.cssText = [
-      'position:fixed', 'left:8px', 'bottom:8px', 'z-index:50',
+      // Top left, deliberately: #hint in pilot.html is a full-width legend
+      // pinned to the bottom of the window, and a narrow window would run its
+      // centred text straight through a badge sitting down there.
+      'position:fixed', 'left:8px', 'top:8px', 'z-index:50',
       'padding:4px 8px', 'border-radius:4px', 'pointer-events:none',
       'background:rgba(20,0,0,.82)', 'border:1px solid #d34',
       'color:#ffb0b8', 'font:11px/1.4 ui-monospace,Menlo,monospace',
