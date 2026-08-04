@@ -62,6 +62,45 @@ export function localTileToWorld(originX, tx, ty) {
   return { x: originX + tx * TILE, y: ISLAND_TOP_Y + ty * TILE };
 }
 
+// A guard for the ONE mistake that is both easy to make and invisible when
+// made: passing a world-space y where island-local was expected. The
+// conversion itself is simple enough that it is never wrong; the caller is.
+// And because the arithmetic still runs on a swapped value, nothing throws on
+// its own — the result is just a reticle, a shot, a probe ISLAND_TOP_Y (320)
+// pixels away from where it belongs, which reads as "invisible" rather than
+// "broken."
+//
+// This is only checkable in ONE direction. An island-local level is
+// ISLAND_H (240) px tall, so a local y can never legitimately reach
+// ISLAND_TOP_Y (320) — that band is reachable ONLY by a world-space y over an
+// island. The reverse check does not exist: a world-space y can legitimately
+// sit anywhere from CEILING_Y up through the local-looking 0..240 range (a
+// plane at altitude has a small world y), so a "does this look local" guard
+// on a WORLD value would false-positive on ordinary high-altitude flight and
+// get disabled within a day. Assert only where the confidence is real.
+const warnedLocalY = new Set();
+
+export function assertLocalY(y, label = 'y') {
+  if (y < ISLAND_TOP_Y) return;
+  const msg =
+    `[geo] ${label}=${y} looks like a WORLD-space y passed where island-local ` +
+    `was expected (island-local levels are only ${ISLAND_H}px tall, so ` +
+    `${ISLAND_TOP_Y}+ is reachable only in world space). Did you forget ` +
+    'worldToLocalTile()?';
+  // In tests and other headless/Node contexts, fail immediately and loudly —
+  // there is no in-progress frame to protect and a thrown assertion is the
+  // whole point. In the browser, a thrown error mid-render blanks the game,
+  // which is a worse experience than a misplaced reticle, so warn once per
+  // label and keep going.
+  if (typeof window === 'undefined') {
+    throw new Error(msg);
+  }
+  if (!warnedLocalY.has(label)) {
+    warnedLocalY.add(label);
+    console.error(msg);
+  }
+}
+
 export function clamp(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
 }

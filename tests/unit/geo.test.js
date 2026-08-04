@@ -5,6 +5,7 @@ import {
   VIEW_W, VIEW_H, CEILING_Y, SEA_Y, ISLAND_H, ISLAND_TOP_Y,
   DECK_X0, DECK_X1, DECK_Y,
   layoutIslands, worldToLocalTile, localTileToWorld, cameraFor, worldBounds, clamp,
+  assertLocalY,
 } from '../../src/wings/geo.js';
 
 test('the pilot viewport is 512x240 at 1:1', () => {
@@ -45,6 +46,66 @@ test('world pixels round-trip through island-local tiles', () => {
   assert.deepEqual(worldToLocalTile(originX, x, y), { tx: 20, ty: 13 });
   assert.deepEqual(worldToLocalTile(originX, x + TILE - 1, y + TILE - 1), { tx: 20, ty: 13 });
   assert.deepEqual(worldToLocalTile(originX, x - 1, y - 1), { tx: 19, ty: 12 });
+});
+
+test('the island top-left corner round-trips to tile (0, 0)', () => {
+  const originX = 3000;
+  assert.deepEqual(worldToLocalTile(originX, originX, ISLAND_TOP_Y), { tx: 0, ty: 0 });
+  assert.deepEqual(localTileToWorld(originX, 0, 0), { x: originX, y: ISLAND_TOP_Y });
+});
+
+test('the island bottom-right corner round-trips to its last tile', () => {
+  const originX = 3000;
+  const lastCol = ISLAND_H / TILE - 1; // an arbitrary square island for this test
+  const { x, y } = localTileToWorld(originX, lastCol, lastCol);
+  assert.deepEqual(worldToLocalTile(originX, x, y), { tx: lastCol, ty: lastCol });
+  // One pixel short of the sea floor is still the last row, not the next one.
+  assert.equal(worldToLocalTile(originX, x, ISLAND_TOP_Y + ISLAND_H - 1).ty, lastCol);
+});
+
+test('tiles outside the island still convert consistently, they are just off it', () => {
+  const originX = 3000;
+  // West of the island's left edge, and above its top row: both go negative,
+  // which is correct arithmetic, not a bounds check — geo.js does not know
+  // where an island ends.
+  assert.deepEqual(worldToLocalTile(originX, originX - TILE, ISLAND_TOP_Y - TILE), {
+    tx: -1, ty: -1,
+  });
+  // A tile many rows below the sea floor. Still a well-defined local tile;
+  // whether it is "real" is Island's job (x0/x1/y0/y1), not geo's.
+  assert.deepEqual(worldToLocalTile(originX, originX, ISLAND_TOP_Y + ISLAND_H + TILE), {
+    tx: 0, ty: ISLAND_H / TILE + 1,
+  });
+});
+
+test('negative local tiles convert back to the world pixels they came from', () => {
+  const originX = 3000;
+  const { x, y } = localTileToWorld(originX, -3, -2);
+  assert.equal(x, originX - 3 * TILE);
+  assert.equal(y, ISLAND_TOP_Y - 2 * TILE);
+  assert.deepEqual(worldToLocalTile(originX, x, y), { tx: -3, ty: -2 });
+});
+
+test('assertLocalY passes through any y an island-local level can produce', () => {
+  // A bomb dropped from far above the level (negative local y) and the ground
+  // row of a 15-row island (just under ISLAND_H) are both legitimate.
+  assert.doesNotThrow(() => assertLocalY(-500, 'y'));
+  assert.doesNotThrow(() => assertLocalY(0, 'y'));
+  assert.doesNotThrow(() => assertLocalY(ISLAND_H - 1, 'y'));
+});
+
+test('assertLocalY catches a world-space y passed where island-local was expected', () => {
+  // This is the exact bug the guard exists for: a caller hands island-local
+  // code the WORLD y of a point over an island (ISLAND_TOP_Y and up) instead
+  // of converting it first. In Node/tests that must fail loudly and
+  // immediately, not draw a reticle 320px off-screen.
+  const worldYOverAnIsland = ISLAND_TOP_Y + 13 * TILE; // e.g. a ground row, in world space
+  assert.throws(
+    () => assertLocalY(worldYOverAnIsland, 'reticle.y'),
+    /looks like a WORLD-space y/,
+  );
+  // The boundary itself is already out of range for a local level.
+  assert.throws(() => assertLocalY(ISLAND_TOP_Y, 'y'));
 });
 
 test('the camera centres on the plane and clamps to the world box', () => {
