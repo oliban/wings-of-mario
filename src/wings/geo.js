@@ -30,20 +30,30 @@ export const PLANE_H = 12;
 export const WORLD_LEFT = -256;
 export const WORLD_MARGIN = 512;
 
-// Islands are laid out left to right with open ocean between them. Fixed
-// spacing, no RNG: the seeded archipelago belongs to a later plan.
+// Islands are laid out left to right with open ocean between them. The default
+// spacing is fixed and RNG-free; archipelago.js passes a seeded function for
+// `gap` so the ocean varies per world without there being a SECOND layout
+// function. There must only ever be one: the pilot's sim, the bot and the
+// renderer all read these slots, and a divergent copy would put the two
+// players' islands in different places.
 export const FIRST_ISLAND_X = 3000;
 export const ISLAND_GAP = 1600;
 
+// `gap` is either a number (every crossing the same) or a function
+// (i, level) => px, called once per crossing with the index of the island on
+// the FAR side. It is never called after the last island, so a seeded gap
+// function consumes exactly levels.length - 1 draws.
 export function layoutIslands(levels, firstX = FIRST_ISLAND_X, gap = ISLAND_GAP) {
+  const gapFor = typeof gap === 'function' ? gap : () => gap;
   const out = [];
   let x = firstX;
-  for (const lvl of levels) {
+  for (let i = 0; i < levels.length; i++) {
+    const lvl = levels[i];
     const width = lvl.width * TILE;
     // x1 is the right edge. worldBounds reads it, so a slot without one puts a
     // NaN straight into the camera clamp.
     out.push({ id: lvl.id, level: lvl, x, width, x1: x + width });
-    x += width + gap;
+    if (i + 1 < levels.length) x += width + gapFor(i + 1, levels[i + 1]);
   }
   return out;
 }

@@ -1,16 +1,15 @@
 import { TILE } from '../core/constants.js';
-import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds, layoutIslands } from './geo.js';
+import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import { landingVerdict, hitsHull, arrest, spotOnDeck } from './carrier.js';
 import { createLoadout, release, stepShot, detonate } from './ordnance.js';
-import { Island } from './island.js';
-import { getLevel } from '../data/levels/index.js';
+import { Archipelago } from './archipelago.js';
 
 export const SQUADRON = 5;
 
-// The archipelago, as far as this plan takes it: two real levels dropped into
-// the ocean to fly over and bomb. The seeded, full-length chain is a later
-// plan — these two exist so the mechanics have somewhere to happen.
+// The two-island ocean the bot tests fly in. The real default is now a seeded
+// four-island archipelago (see archipelago.js); this is what you pass as
+// `opts.islands` when you want a small fixed ocean instead.
 export const ISLAND_LEVELS = ['1-1', '2-1'];
 
 // The whole flight sim, with no canvas anywhere in it: the renderer reads
@@ -20,8 +19,12 @@ export const ISLAND_LEVELS = ['1-1', '2-1'];
 // Tasks 2 and 3 add islands and ordnance to this class. Nothing else changes.
 export class WingsSim {
   constructor(opts = {}) {
-    const ids = opts.islands || ISLAND_LEVELS;
-    this.islands = layoutIslands(ids.map(getLevel)).map((slot) => new Island(slot.level, slot.x));
+    // The ocean. `opts.archipelago` shares one with the match; `opts.islands`
+    // is the explicit list the bots and the older tests use; otherwise the
+    // seed lays out the world.
+    this.archipelago = opts.archipelago
+      || new Archipelago({ seed: opts.seed, world: opts.world, ids: opts.islands });
+    this.islands = this.archipelago.islands();
     this.bounds = worldBounds(this.islands);
     this.squadron = opts.squadron != null ? opts.squadron : SQUADRON;
     this.plane = spotOnDeck(createPlane());
@@ -169,6 +172,9 @@ export class WingsSim {
   burst(s, isle, water) {
     const hit = detonate(s);
     const keys = isle && hit.terrain && hit.radius > 0 ? isle.blast(hit.x, hit.y, hit.radius) : [];
+    // Into the permanent record, so the crater outlives this Island object —
+    // the islands are rebuilt from the archipelago on every sail.
+    if (isle && keys.length) this.archipelago.record(isle.id, keys);
     this.emit('detonation', {
       kind: hit.kind,
       x: hit.x,
@@ -249,6 +255,24 @@ export class WingsSim {
     this.rearm();
     this.status = 'ready';
     this.emit('sortieStart', { squadron: this.squadron });
+    return true;
+  }
+
+  // Mario cleared x-4: the carrier group weighs anchor. The squadron is
+  // replenished (spec 3.4), the aeroplane is respotted, and anything still in
+  // the air is left behind with the old ocean.
+  sail() {
+    if (!this.archipelago.sail()) return false;
+    this.islands = this.archipelago.islands();
+    this.bounds = worldBounds(this.islands);
+    this.shots.length = 0;
+    this.squadron = SQUADRON;
+    this.plane = spotOnDeck(createPlane());
+    this.hookArmed = false;
+    this.rearm();
+    this.status = 'ready';
+    this.cam = cameraFor(this.plane.x, this.plane.y, this.bounds);
+    this.emit('worldCleared', { world: this.archipelago.world });
     return true;
   }
 
