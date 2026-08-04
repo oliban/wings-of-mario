@@ -101,6 +101,10 @@ class Pilot {
     this.scene = null;
     this.loop = null;
     this.fatal = null;
+    // A per-tick hook for the network layer to attach itself to
+    // (src/net/pilot-side.js). Null when playing offline, which is what the
+    // capture tool and every pre-network test run as.
+    this.onTick = null;
   }
 
   async boot() {
@@ -122,8 +126,13 @@ class Pilot {
     return this;
   }
 
+  // `opts.seed` is the MATCH seed, which arrives in the server's welcome and
+  // decides the archipelago layout (archipelago.js lays the ocean out from it,
+  // with seeded gaps). Both players must build the same ocean or the pilot
+  // bombs one island and Mario is standing on another, so the network resets
+  // the sim with it the moment it knows it.
   reset(opts = {}) {
-    this.sim = new WingsSim({ squadron: opts.squadron });
+    this.sim = new WingsSim({ squadron: opts.squadron, seed: opts.seed, world: opts.world });
     this.scene = new Scene();
     gear = true;
     scripted = null;
@@ -182,6 +191,20 @@ class Pilot {
       pending.drop = false;
       pending.fire = false;
       this.trackAttitude();
+      // The network layer, if one attached itself (src/net/pilot-side.js).
+      // Called from update() rather than from a timer so it advances at the
+      // simulation's rate and is driven correctly by __WINGS.tick(n) in tests.
+      //
+      // Caught separately from the simulation: crash() stops the loop for good,
+      // and a dropped socket must not ground the aeroplane. A network fault
+      // costs you the other player, never your own game.
+      if (this.onTick) {
+        try {
+          this.onTick();
+        } catch (e) {
+          console.error('[pilot net]', e);
+        }
+      }
       // The model raises the hook on rotation and lowers it again on the wire.
       // Without mirroring that back, the next tick's input would re-assert the
       // player's stale toggle and the hook would never actually come up.

@@ -3,6 +3,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import nodePath from 'node:path';
+import { startServer } from '../../server/index.js';
+import { Rooms } from '../../src/net/room.js';
 
 const PORT = 8199;
 export const BASE = `http://localhost:${PORT}`;
@@ -202,6 +204,78 @@ async function waitForServer() {
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error('static server never came up');
+}
+
+// Two players, one room, one real Node server. Separate browser CONTEXTS, not
+// just separate pages: two clients that share a context share localStorage and
+// a rendering process, and the whole point is that they are two independent
+// clients.
+//
+// This does NOT go through the shared static server on PORT: it needs
+// /room and /ws, which http-server does not have, and an ephemeral port so
+// several of these can never collide with each other or with the user's own
+// running build. It does still take the browser lock — Chromium is the
+// expensive thing here, and it is the same Chromium.
+export async function bootRoom(opts = {}) {
+  const room = opts.room || 'ACDE';
+  const serverErrors = [];
+  await acquireLock();
+  const server = await startServer({
+    // Port 0: the OS picks a free one. Never a fixed port — 8123, 4322 and
+    // 8199 all belong to somebody else on this machine.
+    port: 0,
+    rooms: new Rooms(),
+    log: {
+      info() {},
+      warn() {},
+      // Kept rather than printed: a desync during a run is a test failure, and
+      // this is where the server says so.
+      error(...a) { serverErrors.push(a.join(' ')); },
+    },
+  });
+  server.serverErrors = serverErrors;
+  const base = `http://127.0.0.1:${server.port}`;
+
+  let browser;
+  try {
+    browser = await chromium.launch();
+    const open = async (path, global) => {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (e) => errors.push(e.message));
+      page.on('console', (m) => {
+        if (m.type() === 'error') errors.push(`console: ${m.text()}`);
+      });
+      await page.goto(`${base}${path}?room=${room}`);
+      await page.waitForFunction((g) => window[g] && window[g].ready, global, { timeout: 30000 });
+      await page.evaluate((g) => window[g].ready, global);
+      return { context, page, errors };
+    };
+
+    // Mario first, so he takes the mario seat deterministically.
+    const mario = await open('/', '__GAME');
+    const pilot = await open('/pilot.html', '__WINGS');
+    await mario.page.waitForFunction(
+      () => window.__NET && window.__NET.state().connected, null, { timeout: 20000 }
+    );
+    await pilot.page.waitForFunction(
+      () => window.__WINGS.net && window.__WINGS.net.state().connected, null, { timeout: 20000 }
+    );
+
+    return { server, browser, base, room, mario, pilot };
+  } catch (err) {
+    if (browser) await browser.close().catch(() => {});
+    await server.close();
+    releaseLock();
+    throw err;
+  }
+}
+
+export async function shutdownRoom(ctx) {
+  await ctx.browser.close();
+  await ctx.server.close();
+  releaseLock();
 }
 
 export async function shutdown(ctx) {

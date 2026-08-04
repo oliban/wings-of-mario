@@ -1,6 +1,12 @@
 import { TILE } from '../core/constants.js';
 import { MarioOverlay } from './mario-overlay.js';
 import { FerryRide } from './ferry-ride.js';
+// The networked half of Mario's page (window.__NET). Imported here rather than
+// given its own <script> tag because index.html is upstream and this module is
+// already the wings layer's entry point on it: the ENTIRE upstream footprint of
+// two plans stays at the one tag that loads this file. It polls for __GAME on
+// its own and does nothing at all without a `?room=` code.
+import '../net/mario-side.js';
 
 // Loaded from index.html. This module and the one <script> tag that loads it
 // are the ENTIRE upstream footprint of the telegraph.

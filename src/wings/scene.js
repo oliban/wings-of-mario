@@ -11,6 +11,7 @@ import {
 import { drawPlane } from './art/plane.js';
 import { drawLandmass } from './art/land.js';
 import { drawBomb, drawTracer, drawRocket, drawFireball } from './art/ordnance.js';
+import { MARIO_CONTACT } from './art/contact.js';
 import { drawPanel, HUD_H } from './art/hud.js';
 
 // Composition only. Every mark on screen is made by a function in art/; this
@@ -215,6 +216,9 @@ export class Scene {
     this.rollDir = 1;
     this.wasTurning = false;
     this.prevAngle = 0;
+    // The networked peer, in WORLD pixels, or null when playing offline.
+    // src/net/pilot-side.js writes it; nothing else touches it.
+    this.remoteMario = null;
   }
 
   // THE TRIGGER, and the only part of the roll that knows WHY the aeroplane is
@@ -397,6 +401,9 @@ export class Scene {
     r.draw(LAYER.BG_TILES, world((ctx) => this.drawShip(ctx, cam, f)));
     r.draw(LAYER.TILES, world((ctx) => this.drawIslands(ctx, sim, cam, f)));
     r.draw(LAYER.ENTITIES, world((ctx) => this.drawShots(ctx, sim, cam, f)));
+    // After the entities and before the aeroplane, so a contact on the ground
+    // reads as being beneath the aircraft rather than pasted over it.
+    r.draw(LAYER.ENTITIES, world((ctx) => this.drawContact(ctx, cam, f)));
     r.draw(LAYER.PLAYER, world((ctx) => this.drawAircraft(ctx, sim, cam)));
     r.draw(LAYER.OVERLAY, world((ctx) => {
       drawSea(ctx, f.vw, f.vh, cam, SEA_Y, this.tick);
@@ -435,6 +442,25 @@ export class Scene {
   // Ordnance in the air, each round pointed along its own velocity — which is
   // what makes a bomb visibly tip over onto its nose as it falls, and is the
   // pilot's only cue about where it is actually going.
+  // The other player, drawn only when he is actually in the viewport. The
+  // pilot does not automatically know where Mario is (spec 3): the long-range
+  // picture is radar's job. Off-camera he is simply not drawn — no arrow, no
+  // ghost at the screen edge.
+  //
+  // `f.vw`/`f.vh` are the ZOOMED viewport, which is the space every other draw
+  // call here culls against; VIEW_W/VIEW_H are the unzoomed constants and would
+  // clip the contact early at altitude, exactly when the pilot is looking for
+  // it hardest.
+  drawContact(ctx, cam, f) {
+    const m = this.remoteMario;
+    if (!m) return;
+    const sx = Math.floor(m.x - cam.x);
+    const sy = Math.floor(m.y - cam.y);
+    if (sx < -MARIO_CONTACT.w || sy < -MARIO_CONTACT.h) return;
+    if (sx > f.vw || sy > f.vh) return;
+    MARIO_CONTACT.draw(ctx, sx, sy, m.facing < 0, false);
+  }
+
   drawShots(ctx, sim, cam, f) {
     for (const s of sim.shots) {
       // The drawn position IS the simulated position, moved into view space
