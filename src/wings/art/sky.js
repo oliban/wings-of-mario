@@ -59,13 +59,20 @@ const DECKS = [
 // its condensation level — soft radial falloff in every direction is a smudge,
 // which is what the first two attempts looked like. So the lobes are unioned
 // into a single path with a rectangle across the base, filled with a vertical
-// ramp, and only the top edge gets a crisp lighter stroke. The lobe layout is a
-// fixed function of the bank's own x, so no two banks are alike and every bank
-// is the same on every run.
-function bankPath(ctx, x, y, w, h) {
+// ramp, and only the top edge gets a crisp lighter stroke.
+//
+// `seed` is the bank's IDENTITY — its own fixed position in the world — and it
+// is what the lobe layout is hashed from, so no two banks are alike and every
+// bank is the same on every run. It is a separate argument from `x` on purpose,
+// and this is the whole bug this file had: the layout used to be hashed from
+// the SCREEN x, which drifts every single tick with the parallax and the
+// camera. A hash of a value that moves is a new hash every frame, so all six
+// lobes jumped to new offsets and radii sixty times a second — the clouds
+// boiled. The seed must never be anything that moves.
+function bankPath(ctx, x, y, w, h, seed) {
   ctx.beginPath();
   for (let i = 0; i < 6; i++) {
-    const k = ((x * 2654435761) >>> 0) + i * 0x9e3779b1;
+    const k = ((seed * 2654435761) >>> 0) + i * 0x9e3779b1;
     const t = i / 5;
     const lx = x + (t - 0.5) * (w - h) + (((k >>> 5) % 12) - 6);
     const r = Math.max(1, h * (0.62 + ((k >>> 13) % 70) / 100));
@@ -76,7 +83,7 @@ function bankPath(ctx, x, y, w, h) {
   ctx.rect(x - w * 0.38, y - h * 0.42, w * 0.76, h * 0.42);
 }
 
-function drawBank(ctx, x, y, w, h) {
+function drawBank(ctx, x, y, w, h, seed) {
   // A cumulus has a lumpy, DEFINED top and a flat base. Soft in every direction
   // is a smudge, which is what this was for three rounds. The lobes are unioned
   // into one path with a rectangle across the base, filled with a vertical ramp
@@ -88,7 +95,7 @@ function drawBank(ctx, x, y, w, h) {
   g.addColorStop(1, 'rgba(143,189,224,0)');
   ctx.globalAlpha = 0.62;
   ctx.fillStyle = g;
-  bankPath(ctx, x, y, w, h);
+  bankPath(ctx, x, y, w, h, seed);
   ctx.fill();
 
   // The crown, clipped so it never draws along the flat base.
@@ -99,20 +106,52 @@ function drawBank(ctx, x, y, w, h) {
   ctx.globalAlpha = 0.85;
   ctx.strokeStyle = CLOUD.crown;
   ctx.lineWidth = 0.9;
-  bankPath(ctx, x, y, w, h);
+  bankPath(ctx, x, y, w, h, seed);
   ctx.stroke();
   ctx.restore();
   ctx.globalAlpha = 1;
 }
 
-export function drawClouds(ctx, viewW, viewH, cam, tick) {
-  ctx.save();
-  for (const d of DECKS) {
+// How far a bank's ink reaches beyond the (x, y, w, h) box it nominally
+// occupies. A lobe is offset by up to (w - h)/2 + 6 from the centre and has a
+// radius of up to 1.32h, and the crown stroke is clipped to 5h above the base.
+// The cull has to use these rather than the nominal box: a bank culled while
+// any part of it is still on screen pops, and a pop at the edge of the frame is
+// indistinguishable from a flicker.
+function reach(d) {
+  const lobe = Math.max(1, d.h * 1.32);
+  return { x: (d.w - d.h) / 2 + 6 + lobe + 2, up: d.h * 5 + 2, down: lobe + 2 };
+}
+
+// Which banks are inside the frame. Split out from the drawing so it can be
+// tested directly: the cull is a performance optimisation and has to be
+// invisible, which is only checkable if you can ask it what it decided.
+//
+// viewW/viewH are in WORLD pixels — the caller draws through the zoom
+// transform, so these already grow as the world is drawn smaller, and the
+// margins below are world pixels too. Nothing here is in device units, which
+// is what would otherwise make the cull scale-dependent.
+export function visibleBanks(viewW, viewH, cam, tick) {
+  const out = [];
+  for (let id = 0; id < DECKS.length; id++) {
+    const d = DECKS[id];
     const sx = d.x - tick * 0.05 * d.m - cam.x * d.m;
     const sy = d.y - cam.y * d.m * 0.75;
-    if (sy - d.h * 2.4 > viewH || sy - d.h * 2.4 < -60) continue;
-    if (sx + d.w / 2 < -20 || sx - d.w / 2 > viewW + 20) continue;
-    drawBank(ctx, sx, sy, d.w, d.h);
+    const r = reach(d);
+    if (sy - r.up > viewH || sy + r.down < 0) continue;
+    if (sx + r.x < 0 || sx - r.x > viewW) continue;
+    // `id` is which bank this is and never changes; `seed` is what its shape
+    // is hashed from and must not change either. They are separate so a test
+    // can hold the first still and watch the second.
+    out.push({ id, x: sx, y: sy, w: d.w, h: d.h, seed: d.x });
+  }
+  return out;
+}
+
+export function drawClouds(ctx, viewW, viewH, cam, tick) {
+  ctx.save();
+  for (const b of visibleBanks(viewW, viewH, cam, tick)) {
+    drawBank(ctx, b.x, b.y, b.w, b.h, b.seed);
   }
   ctx.restore();
 }

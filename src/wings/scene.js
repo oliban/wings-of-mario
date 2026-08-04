@@ -343,9 +343,27 @@ export class Scene {
     const scale = this.zoom;
     const vw = VIEW_W / scale;
     const vh = VIEW_H / scale;
-    // Horizontally the simulation's own camera still decides; it is the
-    // VERTICAL framing the composition rule owns.
-    const x = sim.cam.x + VIEW_W / 2 - vw / 2;
+    // Horizontally: the simulation's own camera rule — centre the aeroplane,
+    // clamped to the world box — but recomputed here CONTINUOUSLY and for the
+    // frame's real width.
+    //
+    // `sim.cam.x` is floored to a whole world pixel, which was right when the
+    // world was drawn at one fixed scale and is wrong now. Floored, the camera
+    // holds still for several ticks and then steps a whole world pixel, and
+    // that step lands on a FRACTION of a device pixel once a zoom is in the way
+    // (a third of one at the ceiling) — so every edge on screen re-antialiases
+    // in a lump, every few frames, forever. It is small, it is everywhere, and
+    // it is the shimmer left over once the clouds stop boiling. Sub-pixel
+    // motion is not a problem for this renderer — it is a supersampled vector
+    // pipeline, not a pixel-art one — but QUANTISED sub-pixel motion is.
+    //
+    // The width matters too: cameraFor clamps against a 512-wide view, and the
+    // view is 512/scale wide, so at the zoomed-out end the old clamp let the
+    // frame run past the edge of the world box it was meant to hold.
+    const centreX = sim.plane.x + PLANE_W / 2;
+    const minX = sim.bounds.minX;
+    const maxX = Math.max(minX + vw, sim.bounds.maxX);
+    const x = clamp(centreX - vw / 2, minX, maxX - vw);
 
     // Pin the sea line to its row. At and below the dead band the scale is
     // clamped, so this is the same fixed horizon the framing always had; above
