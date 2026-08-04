@@ -1,6 +1,9 @@
 node_modules
 shots
 tools
+tests
+docs
+.superpowers
 
 # ROM-derived working reference (the disassembly and everything extracted from
 # it). Gitignored too. The Dockerfile copies an explicit allow-list so this is
@@ -11,8 +14,9 @@ reference
 .git
 .github
 *.md
-!index.html
-package-lock.json
+# package-lock.json is deliberately NOT ignored: the image runs `npm ci`, which
+# refuses to install without it. Ignoring it silently turns the build into
+# `npm install` territory or fails it outright.
 .DS_Store
 _j*.js
 **/tmpjudge

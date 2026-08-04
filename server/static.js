@@ -2,9 +2,10 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 
-// The same map as deploy/nginx.conf, and for the same reason: an ES module
-// served as text/plain is refused by the browser and the whole game silently
-// fails to boot with no console error worth reading.
+// The map the deleted deploy/nginx.conf used to own, kept for the same reason
+// it gave: an ES module served as text/plain is refused by the browser and the
+// whole game silently fails to boot with no console error worth reading. This
+// process is now the only thing standing between the game and that failure.
 export const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -57,8 +58,8 @@ export async function serveStatic(req, res, root) {
     'Content-Length': info.size,
     'X-Content-Type-Options': 'nosniff',
     // The art modules are large string-literal files that change on every art
-    // pass, so they are revalidated rather than cached hard — same policy the
-    // nginx config had.
+    // pass, so they are revalidated rather than cached hard — the policy the
+    // nginx config had, carried over deliberately.
     'Cache-Control': 'public, max-age=0, must-revalidate',
   });
   createReadStream(full).pipe(res);

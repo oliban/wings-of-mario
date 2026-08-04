@@ -6,13 +6,34 @@ repo — there are no image files and no audio files, and no Nintendo ROM data i
 
 Faithful silhouettes and physics. Original pixels and melodies.
 
-## Run it
+## Running
 
 ```bash
-npm start           # serves on http://127.0.0.1:8123
+npm run serve
 ```
 
-Any static file server works; the game is plain ES modules loaded natively by the browser.
+Serves the game and the multiplayer rooms on <http://localhost:8090>. Mario is at `/`, the pilot
+at `/pilot.html`. Open the pilot first: it mints a four-character room code and puts it in the
+address bar. Give that code to the other player as `/?room=CODE`. Add `?solo` to either page to
+play offline.
+
+`npm start` still runs the old static-only server on port 8123 for single-page work like
+`npm run shots`; it has no WebSocket endpoint, so multiplayer does not work against it.
+
+The game itself is plain ES modules loaded natively by the browser with no build step — but it is
+served by a real server now, not any static file server, because the WebSocket rooms live in the
+same process on the same origin.
+
+## Deploying
+
+```bash
+fly deploy
+```
+
+**Never run without explicit approval.** The image is a single Node process serving both the
+static assets and the WebSocket endpoint on port 8080. `fly.toml` keeps one machine always
+running and suspends rather than stops it when idle: rooms are in-process memory, so a stopped
+machine drops every open socket and evaporates every live match.
 
 ## Controls
 
