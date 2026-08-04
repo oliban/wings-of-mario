@@ -239,7 +239,9 @@ test('the altitude zoom is a render transform and nothing else', { timeout: 1200
     // Flown under power, not teleported: the rate the scale actually moves at
     // is the rate the aeroplane can actually climb, and the two are only the
     // same if it is the flight model doing the moving.
-    const r = await page.evaluate(() => {
+    const r = await page.evaluate(async () => {
+      const { zoomFor, ZOOM } = await import('/src/wings/scene.js');
+      const { FLIGHT } = await import('/src/wings/flight.js');
       const W = window.__WINGS;
       W.reset();
       W.hold({ pitch: 1, thrust: 1 });
@@ -249,9 +251,20 @@ test('the altitude zoom is a render transform and nothing else', { timeout: 1200
       const before = W.scene.zoom;
       const seen = [before];
       const at = [];
+      // Drift, if there were any, has to come from somewhere: the only way the
+      // scale can depend on anything but the current altitude is if something
+      // integrates or smooths it. So check that directly, every tick, rather
+      // than inferring it from the endpoints.
+      let impure = null;
+      const checkPure = () => {
+        if (impure === null && W.scene.zoom !== zoomFor(W.state().y)) {
+          impure = { zoom: W.scene.zoom, expected: zoomFor(W.state().y), y: W.state().y };
+        }
+      };
       for (let i = 0; i < 900 && W.state().y > 8; i++) {
         W.hold({ pitch: W.state().angle > -0.5 ? 1 : 0, thrust: 1 });
         W.tick(1);
+        checkPure();
         seen.push(W.scene.zoom);
         at.push(W.state().y);
       }
@@ -259,6 +272,7 @@ test('the altitude zoom is a render transform and nothing else', { timeout: 1200
       for (let i = 0; i < 600 && W.state().y < 460 && W.state().mode === 'air'; i++) {
         W.hold({ pitch: W.state().angle < 0.5 ? -1 : 0, thrust: 1 });
         W.tick(1);
+        checkPure();
         seen.push(W.scene.zoom);
         at.push(W.state().y);
       }
@@ -269,15 +283,42 @@ test('the altitude zoom is a render transform and nothing else', { timeout: 1200
         const d = Math.abs(seen[i] - seen[i - 1]);
         if (d > worst) { worst = d; worstAt = at[i - 1]; }
       }
-      return { before, top, worst, worstAt, low: W.scene.zoom, y: W.state().y };
+      // The steepest step the geometry PERMITS: the fastest the aeroplane can
+      // descend, taken across the steepest point of the curve. Derived rather
+      // than guessed, so it tracks the flight model instead of going stale
+      // behind it — see the note on the assertion below.
+      const dive = Math.sqrt((FLIGHT.THRUST + FLIGHT.GRAVITY) / FLIGHT.DRAG) - FLIGHT.THRUST;
+      const limit = Math.abs(zoomFor(ZOOM.FROM_Y - dive) - zoomFor(ZOOM.FROM_Y));
+      return { before, top, worst, worstAt, limit, impure, low: W.scene.zoom, y: W.state().y };
     });
     assert.ok(r.before > 1.1, 'the climb did not start inside the dead band');
     assert.ok(r.top < 0.4, `never zoomed out on the way up (${r.before} -> ${r.top})`);
+    // THE HYSTERESIS ASSERTION, and the reason this test has the name it does.
+    // Exact equality, deliberately: the scale must come back to where it
+    // started, not to within a tolerance of it.
     assert.equal(r.low, 1.15, `coming back down to y=${r.y} did not restore full scale`);
-    // Flown rather than teleported, the steepest single tick is well under a
-    // fiftieth of the scale — and it happens just above the dead band, where
-    // 1/height is steepest, exactly as the unit tests describe.
-    assert.ok(r.worst < 0.02, `the zoom stepped by ${r.worst} in a single tick at y=${r.worstAt}`);
+    // And the mechanism behind it, checked directly rather than inferred: the
+    // scale is `zoomFor(altitude)` and nothing else, on every tick of the climb
+    // and the dive. Nothing integrates it and nothing smooths it, so there is
+    // no state for a round trip to accumulate error in. This is a stronger
+    // guarantee than the endpoints alone can give — a zoom that drifted would
+    // have to fail here first.
+    assert.equal(r.impure, null, `the zoom is not a pure function of altitude: ${JSON.stringify(r.impure)}`);
+    // The steepest single tick, DERIVED from the flight model rather than
+    // hard-coded. It used to be a flat 0.02, which was "well under a fiftieth
+    // of the scale" at the vertical speeds the aeroplane had when that number
+    // was written; doubling the aeroplane's speed doubled the step to ~0.034
+    // and the constant went stale. Widening it is legitimate here precisely
+    // BECAUSE of the assertion above: the step is |zoomFor(y) - zoomFor(y+vy)|
+    // to five decimal places, which is the curve being sampled further apart,
+    // not drift creeping in. `limit` is the worst the geometry can produce —
+    // terminal-velocity descent across the steepest point of the curve — so
+    // this still fails loudly on a step that the shape of the curve cannot
+    // account for, which is what it is really for.
+    assert.ok(
+      r.worst <= r.limit + 1e-9,
+      `the zoom stepped by ${r.worst} in a single tick at y=${r.worstAt}, above the ${r.limit} the curve permits`
+    );
     assert.ok(r.worstAt > 300, `the steepest tick was at y=${r.worstAt}, not down near the dead band`);
   });
 
