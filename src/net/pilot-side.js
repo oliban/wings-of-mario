@@ -10,6 +10,7 @@ import { DamageSync, applyToIsland } from './damage-sync.js';
 import { noteDesync } from './desync.js';
 import { MatchVerdict, pilotWireEvent, applyWire, mayEmitFrom } from './match-events.js';
 import { contactFrom, REACH_SNAP } from './reach.js';
+import { worldOfIsland } from '../wings/sail.js';
 
 // The pilot's half of the match. It reaches into the game only through the
 // `pilot` instance that pilot-main.js already exports, exactly as
@@ -65,6 +66,13 @@ export class PilotNet {
   get squadron() {
     const sim = this.host.sim;
     return sim ? sim.squadron : null;
+  }
+
+  // Which archipelago this client is flying over. The invariant the sail has to
+  // keep is that this and Mario's world number are the same on both screens.
+  get world() {
+    const sim = this.host.sim;
+    return sim ? sim.archipelago.world : null;
   }
 
   get matchStatus() {
@@ -181,8 +189,50 @@ export class PilotNet {
       // The ferry is a later plan; the event is carried now so the torpedo has
       // something to sink when it arrives.
       this.marioIsland = null;
+    } else if (m.type === 'worldCleared') {
+      this.onWorldCleared(m.d || {});
     }
     this._announce(before);
+  }
+
+  // THE SAIL, and the whole of this side's part in it: obey.
+  //
+  // Mario's client owns Mario, so it is the one that declares a world cleared
+  // (spec 7.3, and EVENT_OWNER.worldCleared === 'mario'). This side never
+  // infers it — there is nothing it could infer it FROM, since it does not
+  // have Mario's level loaded and cannot see a flagpole.
+  //
+  // THE DESTINATION IS TAKEN FROM THE EVENT, not counted. `d.next` is the
+  // island Mario has actually stepped onto, so a warp zone that puts him on
+  // 4-1 out of 1-2 sails the group to world 4 and the two clients still lay out
+  // the same ocean. Counting would put the pilot over world 2 with Mario in
+  // world 4 — and the desync detector could not catch it, because it compares
+  // destroyed-tile sets and two fresh oceans are both empty.
+  //
+  // `d.final` is 8-4: the match is over and there is no ninth archipelago, so
+  // the group does not move. The verdict is applyWire's business, above.
+  onWorldCleared(d) {
+    this.marioIsland = d.next || null;
+    if (d.final) return false;
+    const to = worldOfIsland(d.next);
+    if (to == null) return false;
+    return this.host.sailTo(to);
+  }
+
+  // The one tick the ocean is replaced, from src/wings/pilot-main.js. Mario is
+  // between two levels and his last snapshot describes an island that no
+  // longer exists; interpolating toward it would draw a contact over the new
+  // world's water until his next packet arrives.
+  onSailSwap() {
+    this.marioInterp.clear();
+    this.remote = null;
+    this.host.scene.remoteMario = null;
+    // A fresh sim keeps the same event array, so the cursor is still valid —
+    // but every crater the server has told us about is re-applied, because the
+    // Islands are new objects built from the archipelago and a DAMAGE that
+    // arrived for a new-world island before the swap landed on nothing.
+    this.applyKnownDamage();
+    return true;
   }
 
   // The authoritative crater coming back — including for our OWN proposal, so
@@ -300,6 +350,7 @@ export class PilotNet {
       remote: this.remote ? { ...this.remote } : null,
       marioLives: this.marioLives,
       marioIsland: this.marioIsland,
+      world: this.world,
       squadron: this.squadron,
       matchStatus: this.matchStatus,
       winner: this.winner(),
@@ -347,6 +398,8 @@ async function boot() {
   net.session.on('peer', (m) => say(m.present));
   // One pump per simulation tick, driven by the game loop rather than a timer.
   pilot.onTick = () => net.pump();
+  // The moment the archipelago is replaced, half way through the sail.
+  pilot.onSailSwap = () => net.onSailSwap();
   return welcome;
 }
 

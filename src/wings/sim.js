@@ -389,8 +389,15 @@ export class WingsSim {
   // Mario cleared x-4: the carrier group weighs anchor. The squadron is
   // replenished (spec 3.4), the aeroplane is respotted, and anything still in
   // the air is left behind with the old ocean.
-  sail() {
-    if (!this.archipelago.sail()) return false;
+  //
+  // `toWorld` names the DESTINATION rather than assuming the next one along;
+  // see Archipelago#sail for why (warp zones, and resent events). Whatever the
+  // pilot was doing ends here: mid-sortie, mid-stall-turn, half way through a
+  // landing, with bombs still falling. All of it, deliberately — a bomb from
+  // the last ocean must not detonate into this one, and `shots` is the only
+  // place ordnance in the air exists.
+  sail(toWorld) {
+    if (!this.archipelago.sail(toWorld)) return false;
     this.islands = this.archipelago.islands();
     this.bounds = worldBounds(this.islands);
     this.shots.length = 0;
@@ -398,8 +405,15 @@ export class WingsSim {
     this.squadron = SQUADRON;
     this.plane = spotOnDeck(createPlane());
     this.hookArmed = false;
+    this.lastVerdict = null;
+    // A dead pilot is not dead in the new world: `over` would refuse to step
+    // and 'lost' would leave the HUD reading a loss he no longer has.
     this.rearm();
     this.status = 'ready';
+    // The tube has no contact until Mario's next snapshot arrives, and holding
+    // the last one would put a blip over the old world's coordinates.
+    this._fix = { present: false };
+    this.radar.fix = null;
     this.cam = cameraFor(this.plane.x, this.plane.y, this.bounds);
     this.emit('worldCleared', { world: this.archipelago.world });
     return true;

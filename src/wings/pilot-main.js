@@ -66,6 +66,31 @@ const KEYMAP = {
   // matching the moment anyone played on a US keyboard.
   IntlBackslash: 'speedReset',
   Backquote: 'speedReset',
+  // DEBUG, not a game control — step the archipelago one world back or one
+  // world on. See jumpTo(). The brackets were unbound, they sit together under
+  // the right hand next to the arrows, and they are not a browser shortcut on
+  // any platform.
+  BracketLeft: 'worldPrev',
+  BracketRight: 'worldNext',
+};
+
+// DEBUG, not a game control — SHIFT plus a digit jumps the archipelago straight
+// to that world. This deliberately does NOT go in KEYMAP: 1 and 2 are already
+// the speed tuning, and the two controls are told apart by the shift key alone
+// (see key(), which checks this table before the KEYMAP lookup so a shifted
+// digit never reaches speedTune). Digits 3-9 were unbound entirely.
+//
+// Shift is safe to overload where Cmd/Ctrl/Alt are not — shift-plus-a-digit is
+// nobody's browser shortcut — and the modifier guard in key() still hands
+// Cmd-1 back to Chrome untouched, shift or no shift.
+//
+// Nine entries rather than eight: ARCHIPELAGO.WORLDS is read from the level
+// registry, so a ninth world arriving upstream should be reachable without
+// anyone remembering this table exists. jumpTo() clamps to what actually
+// exists, so the spare binding is inert until it is not.
+const WORLD_KEYS = {
+  Digit1: 1, Digit2: 2, Digit3: 3, Digit4: 4, Digit5: 5,
+  Digit6: 6, Digit7: 7, Digit8: 8, Digit9: 9,
 };
 
 const keys = Object.create(null);
@@ -207,6 +232,49 @@ function speedReset(sim) {
   return v;
 }
 
+// ---------------------------------------------------------------------------
+// DEBUG world jump readout — [ ] and shift+digit.
+// ---------------------------------------------------------------------------
+// The same shape of thing as the speed badge above, and for the same reason: a
+// developer control that LOOKS like one, absent until the first press, red so
+// it cannot be mistaken for an instrument.
+//
+// The readout is not optional here. The ocean holds one world at a time and
+// world 5's four islands look like four islands; without the number on screen
+// the tool is guesswork. It sits under the speed badge rather than beside it so
+// the two never overlap on a narrow window, and once it exists it is refreshed
+// on EVERY archipelago change — a real sail as well as a jump — so it cannot
+// go stale and quietly report the wrong ocean.
+let worldBadge = null;
+
+function showWorldBadge(world, note = '') {
+  if (typeof document === 'undefined') return;
+  if (!worldBadge) {
+    worldBadge = document.createElement('div');
+    worldBadge.id = 'wings-debug-world';
+    worldBadge.style.cssText = [
+      'position:fixed', 'left:8px', 'top:46px', 'z-index:50',
+      'padding:4px 8px', 'border-radius:4px', 'pointer-events:none',
+      'background:rgba(20,0,0,.82)', 'border:1px solid #d34',
+      'color:#ffb0b8', 'font:11px/1.4 ui-monospace,Menlo,monospace',
+      'letter-spacing:.08em', 'white-space:pre',
+    ].join(';');
+    document.body.appendChild(worldBadge);
+  }
+  const tail = note ? `\n${note}` : '';
+  worldBadge.textContent =
+    `DEBUG  ARCHIPELAGO  WORLD ${world} of ${ARCHIPELAGO.WORLDS}\n`
+    + '[ back   ] on   shift+1..8 jump'
+    + tail;
+}
+
+// Refresh it if — and only if — the player has already asked for it. A world
+// number appearing on screen the first time Mario clears a world would be a
+// debug tool switching itself on in a real match.
+function refreshWorldBadge(world, note = '') {
+  if (worldBadge) showWorldBadge(world, note);
+}
+
 class Pilot {
   constructor() {
     this.renderer = null;
@@ -226,6 +294,10 @@ class Pilot {
     // Fired on the one tick the ocean is replaced, so the network layer can
     // drop everything it was holding about the old one (src/net/pilot-side.js).
     this.onSailSwap = null;
+    // DEBUG. The world a jump in progress is bound for, or null when the
+    // crossing under way is a real sail. See jumpTo(); read by stepCrossing on
+    // the swap tick, and it is what makes ONE crossing serve both.
+    this.jump = null;
   }
 
   async boot() {
@@ -256,6 +328,7 @@ class Pilot {
     this.sim = new WingsSim({ squadron: opts.squadron, seed: opts.seed, world: opts.world });
     this.scene = new Scene();
     this.crossing.cancel();
+    this.jump = null;
     gear = true;
     scripted = null;
     pending.drop = false;
@@ -290,6 +363,15 @@ class Pilot {
       if (!down && held) keys[held] = false;
       return;
     }
+    // DEBUG. Shift plus a digit, checked BEFORE the keymap so that shift-1 is a
+    // world jump and plain 1 is still the speed tuning. Handled and returned
+    // here, so nothing below ever sees a shifted digit and the two debug
+    // controls cannot both fire on one press.
+    if (e.shiftKey && WORLD_KEYS[e.code]) {
+      e.preventDefault();
+      if (down) this.jumpTo(WORLD_KEYS[e.code]);
+      return;
+    }
     const name = KEYMAP[e.code];
     if (!name) return;
     e.preventDefault();
@@ -300,6 +382,8 @@ class Pilot {
       if (name === 'speedDown') speedTune(this.sim, -1);
       if (name === 'speedUp') speedTune(this.sim, +1);
       if (name === 'speedReset') speedReset(this.sim);
+      if (name === 'worldPrev') this.jumpTo(this.sim.archipelago.world - 1);
+      if (name === 'worldNext') this.jumpTo(this.sim.archipelago.world + 1);
       if (name === 'respawn' && this.sim.plane.mode === 'down') {
         this.sim.respawn();
       }
@@ -368,6 +452,89 @@ class Pilot {
     });
   }
 
+  // Is the network layer attached? It hooks itself on here once, and only once
+  // it has actually joined a room (src/net/pilot-side.js, at the end of boot);
+  // `?solo`, the capture tool and a failed connect all leave it null. Read
+  // rather than imported, so pilot-main.js still knows nothing about the net.
+  connected() {
+    return !!this.onTick;
+  }
+
+  // ---------------------------------------------------------------------------
+  // DEBUG — jump the archipelago to any world. [ ] and shift+1..8.
+  // ---------------------------------------------------------------------------
+  // Not a game control. The ocean holds one world at a time and the only honest
+  // way to reach world 8 is for Mario to clear the twenty-eight levels in front
+  // of it, so without this a playtester cannot see thirty of the thirty-two
+  // islands the game already draws.
+  //
+  // REFUSED IN MULTIPLAYER, deliberately, and this is the important decision in
+  // the whole control. The two clients share one ocean and nothing tells them
+  // so — they each lay it out from the match seed and the world number, and the
+  // desync detector compares destroyed-tile SETS, which would be empty and
+  // equal on both sides of exactly this divergence. A pilot who jumped to world
+  // 5 while Mario stood on 1-1 would have craters landing nowhere, a radar
+  // plotting the wrong islands, and a screen full of plausible-looking rubbish.
+  //
+  // The two alternatives were both worse. Carrying Mario along would mean this
+  // side declaring a world cleared, and worldCleared is Mario's client's event
+  // to send (spec 7.3, EVENT_OWNER) precisely because only it can actually load
+  // a level; the pilot inventing one would be a second authority for the one
+  // fact the whole match hangs off. And it cannot go BACKWARDS at all — Mario's
+  // engine progresses, so "jump to world 2" from world 5 is not a thing the
+  // other side can obey even in principle. Refusing keeps the tool honest about
+  // what it is: a way to look at the pilot's own thirty-two islands.
+  //
+  // Multiplayer has the real thing anyway. Clearing a world sails the group for
+  // both players, and that path is untouched by any of this.
+  jumpTo(toWorld) {
+    const from = this.sim.archipelago.world;
+    if (this.connected()) {
+      showWorldBadge(from, 'REFUSED — MULTIPLAYER, MARIO WOULD BE LEFT BEHIND');
+      return false;
+    }
+    // Clamped rather than rejected, so holding ] at world 8 parks there instead
+    // of doing something surprising, and so shift-9 is inert until a ninth
+    // world exists upstream.
+    const to = Math.max(1, Math.min(ARCHIPELAGO.WORLDS, Math.round(Number(toWorld))));
+    if (!Number.isFinite(to)) return false;
+    if (to === from) {
+      // Still show the badge: a key that appears to do nothing is worse than a
+      // key that says "you are already here".
+      showWorldBadge(from);
+      return false;
+    }
+    // ONE CROSSING SERVES BOTH. The scene the player sees is the real sail from
+    // src/wings/sail.js — same fade, same durations, same card — because a
+    // debug jump that skipped it would be testing a transition the players
+    // never experience, which is the opposite of useful.
+    //
+    // The from/to handed to Sail#begin are a CLOCK, not the destination: begin
+    // refuses anything that is not strictly forward (that refusal is what makes
+    // a resent worldCleared a no-op, and it is worth more than this), and a
+    // debug jump is allowed to go back. So `this.jump` carries the real
+    // destination and the words on the card are supplied below. Nothing in
+    // sail.js needed changing for it.
+    if (!this.crossing.begin({ from, to: from + 1 })) return false;
+    this.jump = to;
+    showWorldBadge(from, `MAKING FOR WORLD ${to}…`);
+    return true;
+  }
+
+  // What a debug jump says on the card, in place of sailText(). It must not
+  // read "WORLD 4 SECURED" — nobody secured anything, and on a backwards jump
+  // that sentence would be an outright lie about the state of the match.
+  jumpText(from, to) {
+    return {
+      title: 'DEBUG — ARCHIPELAGO JUMP',
+      lines: [
+        `THE CARRIER GROUP IS REPOSITIONING TO WORLD ${to}`,
+        `WORLD ${from} WAS NOT CLEARED — TESTING ONLY`,
+        `SQUADRON REPLENISHED — ${SQUADRON} AIRCRAFT ON DECK`,
+      ],
+    };
+  }
+
   // One tick of the crossing, on the simulation's clock. The swap is an EDGE
   // reported by Sail#step and happens exactly once, under a fully opaque veil.
   stepCrossing() {
@@ -375,20 +542,42 @@ class Pilot {
       this.scene.sailView = null;
       return null;
     }
+    const from = this.crossing.from;
+    const jump = this.jump;
+    const to = jump == null ? this.crossing.to : jump;
     const f = this.crossing.step();
     if (f.swap) {
       // The whole of the changeover: a new ocean from the seed, a full
       // squadron, the aeroplane respotted, and nothing left in the air.
-      this.sim.sail(this.crossing.to);
-      // Explosions and splashes from the last world would otherwise finish
-      // burning at world pixels that are now somewhere else entirely.
-      this.scene.clearFx(this.sim);
+      //
+      // A debug jump FORWARDS is exactly that, unaltered — the real sail. Only
+      // a jump backwards needs anything else, because Archipelago#sail refuses
+      // to run the group's world number down and must go on refusing it: that
+      // guard is what makes a resent worldCleared idempotent. Going back is
+      // therefore a REBUILD from the same match seed rather than a sail, which
+      // lands on the identical ocean seedFor(seed, world) would have given —
+      // the layout is a pure function of the two, so there is no third way for
+      // world 2 to look.
+      if (jump != null && jump <= this.sim.archipelago.world) {
+        this.sim = new WingsSim({ seed: this.sim.archipelago.seed, world: jump });
+        // A whole new Scene rather than clearFx: every cached thing in it —
+        // craters, wakes, the camera — belongs to a sim that no longer exists.
+        // (reset() is not used here: it would cancel the crossing we are
+        // standing inside, and the fade has two seconds still to run.)
+        this.scene = new Scene();
+      } else {
+        this.sim.sail(to);
+        // Explosions and splashes from the last world would otherwise finish
+        // burning at world pixels that are now somewhere else entirely.
+        this.scene.clearFx(this.sim);
+      }
       mirrored = false;
       wasTurning = false;
       gear = this.sim.plane.gear;
+      refreshWorldBadge(this.sim.archipelago.world);
       if (this.onSailSwap) {
         try {
-          this.onSailSwap(this.crossing.to);
+          this.onSailSwap(to);
         } catch (e) {
           console.error('[pilot net]', e);
         }
@@ -396,7 +585,9 @@ class Pilot {
     }
     // Null the moment the scene ends, so a finished crossing costs the
     // renderer nothing at all.
-    this.scene.sailView = f.done ? null : { ...f, ...this.crossing.text() };
+    const text = jump == null ? this.crossing.text() : this.jumpText(from, jump);
+    this.scene.sailView = f.done ? null : { ...f, ...text };
+    if (f.finished) this.jump = null;
     return f;
   }
 
@@ -568,14 +759,30 @@ window.__WINGS = {
     return ok;
   },
 
+  // DEBUG world jump, the same thing [ ] and shift+1..8 do — exposed so a test
+  // can drive it without synthesising key events. Refused in multiplayer, for
+  // the reasons written out at Pilot#jumpTo. No argument reads the world the
+  // archipelago is currently laid out for.
+  world(toWorld) {
+    if (toWorld == null) return pilot.sim.archipelago.world;
+    const ok = pilot.jumpTo(toWorld);
+    pilot.render();
+    return ok;
+  },
+
   // The crossing as it stands: null when there is none. `world` is where the
-  // group is now, which after the swap is the destination.
+  // group is now, which after the swap is the destination. `to` is the real
+  // destination whether this is a sail or a debug jump — a jump's Sail carries
+  // a clock rather than a course, see Pilot#jumpTo — and `debug` says which.
   crossing() {
     const c = pilot.crossing;
     if (!c.active) return null;
     const f = c.frame();
     return {
-      from: c.from, to: c.to, world: pilot.sim.archipelago.world,
+      from: c.from,
+      to: pilot.jump == null ? c.to : pilot.jump,
+      debug: pilot.jump != null,
+      world: pilot.sim.archipelago.world,
       phase: f.phase, veil: f.veil, text: f.text, elapsed: f.elapsed,
     };
   },

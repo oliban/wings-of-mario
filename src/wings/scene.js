@@ -13,6 +13,7 @@ import { drawLandmass } from './art/land.js';
 import { drawBomb, drawTracer, drawRocket, drawFireball } from './art/ordnance.js';
 import { MARIO_CONTACT } from './art/contact.js';
 import { drawPanel, HUD_H } from './art/hud.js';
+import { drawSailCard } from './art/sail-card.js';
 
 // Composition only. Every mark on screen is made by a function in art/; this
 // file decides where those marks go and in what order.
@@ -219,6 +220,25 @@ export class Scene {
     // The networked peer, in WORLD pixels, or null when playing offline.
     // src/net/pilot-side.js writes it; nothing else touches it.
     this.remoteMario = null;
+    // THE SAIL, as a picture: { veil, text, title, lines } or null. Written
+    // once a frame by pilot-main.js from the Sail counter, which is stepped on
+    // the SIMULATION clock — so the alpha at sim tick N is the same alpha
+    // whatever the frame rate did. See src/wings/sail.js.
+    this.sailView = null;
+  }
+
+  // Everything in the air on the old ocean, forgotten. Called at the moment the
+  // archipelago is replaced, under a fully opaque veil: an explosion left over
+  // from the last world would otherwise finish burning at its old world-pixel
+  // coordinates, which in the new one is somewhere else entirely.
+  clearFx(sim) {
+    this.fx.length = 0;
+    // FORWARD, never to zero: sim.events is an append-only log that nothing
+    // drains (src/net/pilot-side.js keeps a cursor over the same array), so
+    // rewinding would replay every explosion of the match at once.
+    if (sim) this.consumed = sim.events.length;
+    this.remoteMario = null;
+    return this;
   }
 
   // THE TRIGGER, and the only part of the roll that knows WHY the aeroplane is
@@ -417,6 +437,14 @@ export class Scene {
       this.drawFx(ctx, cam);
     }));
     r.draw(LAYER.HUD, (ctx) => this.drawHud(ctx, sim));
+    // OVER the instrument panel as well as the world: the group is under way
+    // and there is nothing to fly, so leaving a lit panel showing through the
+    // black would say otherwise. Submitted last on the topmost layer, and
+    // costing nothing at all when there is no crossing in progress.
+    if (this.sailView) {
+      const view = this.sailView;
+      r.draw(LAYER.HUD, (ctx) => drawSailCard(ctx, VIEW_W, VIEW_H, view));
+    }
     return this;
   }
 

@@ -68,11 +68,12 @@ export class MarioNet {
     this.onDeath = null;
     this.onCleared = null;
     this.onMatchOver = null;
-    // Callbacks for whatever wants to draw the end of a match. Presentation,
-    // not state: the verdict above is the state.
-    this.onDeath = null;
-    this.onCleared = null;
-    this.onMatchOver = null;
+    // THE SAIL. Fired when this client declares a world cleared and the
+    // carrier group is therefore weighing anchor — not on 8-4, which is Mario
+    // winning outright and not a crossing (see MarioEvents in match-events.js
+    // for where `final` is decided). src/wings/mario-main.js hangs the fade off
+    // it; this class does not know a screen exists.
+    this.onSail = null;
     // Which level our retained craters have been pushed into, and how much
     // damage that level held when we did it. `world.damage` is CLEARED by
     // world.loadLevel on every load, sub-areas included, so a shrinking set is
@@ -448,6 +449,11 @@ export class MarioNet {
       this.emit(e.type, e.d);
       if (e.type === 'marioDeath' && this.onDeath) this.onDeath(e.d);
       if (e.type === 'islandCleared' && this.onCleared) this.onCleared(e.d);
+      // The group sails. Announced from HERE — the same place, on the same
+      // tick, as the wire event the pilot's client obeys — so the two fades
+      // start from one decision rather than from two clients each noticing
+      // something. `final` is 8-4: the match is over, nothing sails.
+      if (e.type === 'worldCleared' && !e.d.final && this.onSail) this.onSail(e.d);
     }
     return out;
   }

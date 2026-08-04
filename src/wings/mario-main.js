@@ -7,6 +7,8 @@ import { FerryRide } from './ferry-ride.js';
 // two plans stays at the one tag that loads this file. It polls for __GAME on
 // its own and does nothing at all without a `?room=` code.
 import net from '../net/mario-side.js';
+import { SailScreen } from '../net/sail-screen.js';
+import { worldOfIsland } from './sail.js';
 
 // Loaded from index.html. This module and the one <script> tag that loads it
 // are the ENTIRE upstream footprint of the telegraph.
@@ -35,13 +37,29 @@ overlay.hooks.push((world) => ride.update(world));
 // timestep this page has, which is why the ferry is already on it.
 overlay.hooks.push((world) => net.stepGun(world));
 
+// THE CARRIER GROUP SAILING, on Mario's screen. On the same hook list as the
+// ferry and the gun, and for the same reason: it is the only fixed 60.0988Hz
+// timestep this page has, and the fade must be counted in ticks so that the
+// two screens agree and a screenshot at tick N is reproducible.
+//
+// The trigger is this client's OWN worldCleared — Mario's client owns Mario,
+// so it declares the world cleared and the pilot's client obeys the same
+// event. Nothing here waits on the network to come back: the fade and the wire
+// event leave the same line of mario-side.js.
+const sailScreen = new SailScreen();
+overlay.hooks.push((world) => sailScreen.step(world));
+net.onSail = (d) => sailScreen.begin({
+  from: worldOfIsland(d.island),
+  to: worldOfIsland(d.next),
+  note: `MARIO GOES ASHORE ON ${d.next}`,
+});
+
 // Being shot should be audible. One short, hard, falling chirp per round —
 // through the whistle's own synth rather than the engine's playSfx, because
 // that graph is already here and takes live parameters. It is deliberately not
 // the whistle: a bomb coming down and a round landing on you must not sound
 // alike, so this is short, low and dry where the whistle is long and swept.
 net.onGunHit = () => overlay.synth.play({ freq: 300, to: 90, dur: 0.05, tag: 'gun-hit' });
-
 
 // A bounded log of everything the overlay asked to be played, so a browser
 // test can assert the whistle without an audio device. The synth keeps its own
@@ -150,6 +168,32 @@ window.__TELEGRAPH = {
     overlay.reset();
     overlay.synth.log.length = 0;
     return true;
+  },
+};
+
+// The sail's scripted surface. `begin()` is what a test calls to put the group
+// under way without playing through a whole world; in a match nothing on this
+// page calls it — net.onSail above does, off the wire event this client sends.
+window.__SAIL = {
+  screen: sailScreen,
+  begin(opts = {}) {
+    const to = opts.to == null ? 2 : opts.to;
+    return sailScreen.begin({
+      from: opts.from == null ? to - 1 : opts.from,
+      to,
+      note: opts.note == null ? `MARIO GOES ASHORE ON ${to}-1` : opts.note,
+    });
+  },
+  state() {
+    return sailScreen.state();
+  },
+  // The text on screen right now, as one string, for a test that would rather
+  // assert what it says than where it is.
+  text() {
+    return sailScreen.card ? sailScreen.card.textContent : '';
+  },
+  cancel() {
+    return sailScreen.cancel();
   },
 };
 

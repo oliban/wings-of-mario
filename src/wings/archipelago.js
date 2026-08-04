@@ -113,12 +113,27 @@ export class Archipelago {
     return this.damage[id];
   }
 
-  // The carrier group weighs anchor for the next world. Returns false at the
-  // end of the last world — there is no ninth ocean, and arriving there means
-  // Mario has won; the group does not move.
-  sail() {
-    if (this.world >= ARCHIPELAGO.WORLDS) return false;
-    this.world++;
+  // The carrier group weighs anchor. Returns false at the end of the last
+  // world — there is no ninth ocean, and arriving there means Mario has won;
+  // the group does not move.
+  //
+  // `toWorld` is the DESTINATION, and it is named rather than assumed for two
+  // reasons. A warp zone can put Mario on 4-1 straight out of 1-2, and a blind
+  // increment would leave the pilot flying over world 2 while Mario stood in
+  // world 4 — two different oceans, which the desync detector cannot catch
+  // because it compares destroyed-tile sets and both would be empty. And a
+  // resent worldCleared must be a no-op rather than a second sail: naming the
+  // destination makes arriving there IDEMPOTENT, where counting is not.
+  sail(toWorld = this.world + 1) {
+    const to = Number(toWorld);
+    if (!Number.isFinite(to) || to <= this.world || to > ARCHIPELAGO.WORLDS) return false;
+    if (!worldIds(to).length) return false;
+    this.world = to;
+    // An explicit island list belongs to the world it was handed in for — it
+    // is how the bots and the older tests pin world 1 to a fixed ocean. Sailing
+    // past that world drops it and reads the registry, or every archipelago
+    // from here on would be world 1's four levels with different gaps.
+    this.ids = null;
     this.slots = layoutArchipelago(this.world, this.seed, this.ids);
     return true;
   }
