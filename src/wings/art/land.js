@@ -1,7 +1,7 @@
 import { TILE } from '../../core/constants.js';
 import { LAND } from './palette.js';
 import {
-  COMPOSITE, drawTileChar, isInvisible, lodFor, themeFor, castleKeep, flag, LOD,
+  COMPOSITE, VSTACK, drawTileChar, isInvisible, lodFor, themeFor, castleKeep, flag, LOD,
 } from './mario-tiles.js';
 
 // An island, seen from an aeroplane. It is drawn straight off the level's own
@@ -104,7 +104,7 @@ function drawCastle(ctx, isle, arg, tx0, tx1) {
   const h = (tall ? 11 : 5) * TILE;
   const x = cs.x * TILE + TILE / 2 - w / 2;
   const y = groundRow(isle, tx) * TILE - h;
-  castleKeep(ctx, x, y, w, h, arg.lod, arg.pal);
+  castleKeep(ctx, x, y, w, h, arg.lod);
 }
 
 // The flag hangs from the ball at the top of the pole, so it is found from the
@@ -134,8 +134,8 @@ export function drawLandmass(ctx, isle, cam, vw, vh, tick = 0, seaY = 560, scale
   // The area palette. The level knows whether it is overworld, underground,
   // castle or water, and in the original that is the ONLY thing that separates
   // an orange brick from a blue one.
-  const pal = themeFor(isle.level && isle.level.theme);
-  const arg = { lod, tick, pal, open: false };
+  const theme = themeFor(isle.level && isle.level.theme);
+  const arg = { lod, tick, theme, open: false, tx: 0, ty: 0, rows: 1 };
 
   // The window is widened by four tiles rather than one: a scenery run is
   // drawn by its anchor tile, and the anchor of a five-wide hill can be off
@@ -179,7 +179,18 @@ export function drawLandmass(ctx, isle, cam, vw, vh, tick = 0, seaY = 560, scale
       const ch = isle.charAt(tx, ty);
       if (AIR.has(ch) || COMPOSITE[ch] || isInvisible(ch)) continue;
       const above = isle.charAt(tx, ty - 1);
+      arg.rows = 1;
+      if (VSTACK.has(ch)) {
+        // One object per vertical run, drawn by the top tile of it. Skipping
+        // the rest is what removes the seam across a pipe every 16 pixels.
+        if (above === ch) continue;
+        let n = 1;
+        while (isle.charAt(tx, ty + n) === ch) n++;
+        arg.rows = n;
+      }
       arg.open = ty === 0 || AIR.has(above) || !!COMPOSITE[above];
+      arg.tx = tx;
+      arg.ty = ty;
       drawTileChar(ctx, tx * TILE, ty * TILE, ch, arg);
     }
   }

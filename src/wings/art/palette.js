@@ -183,53 +183,136 @@ export const LAND = {
 };
 
 // ---------------------------------------------------------------------------
-// The island's TILE palette — Super Mario Bros., not "generic terrain".
+// The island's TILE palette — Super Mario Bros., and specifically THIS GAME'S
+// Super Mario Bros.
 //
 // LAND above is a landscape palette: earth, sand, scrub, chosen so a landmass
 // reads as land from a mile up. It is still what the surf and the coastline
-// use. But the blocks standing on that land are not landscape — they are the
-// most recognisable graphics in the medium, and they are recognisable by their
-// COLOUR RELATIONSHIPS as much as by their shapes: one orange for ground and
-// brick, one gold for the question block, one green for pipe and bush and
-// hill, and a near-black outline around every one of them.
+// use. But the blocks standing on that land are not landscape, and they are
+// not the pilot's to invent either: the player on the ground is looking at
+// these same tiles from six feet away, in artwork that is already authored,
+// already approved, and guarded by a boot-time assertion. Two halves of one
+// game drawing the same brick from two disjoint colour systems is the fault
+// this palette exists to end.
 //
-// So this is a second, deliberately narrow palette, matched to the overworld's
-// NES colours rather than to the sea and sky. Three notes on the choices:
+// SOURCE. Every ramp below is copied from `src/data/tiles.js` (EARTH, BRICK,
+// ASHLAR, STONE, QUARRY, PIPE, TIMBER, GOLD, GLYPH) and `src/data/scenery.js`
+// (P_GREEN, P_CLOUD, P_STONE, P_FLAG). COPIED, not imported: those modules are
+// the Mario engine's sprite pipeline, authored for a 256x240 NES framebuffer,
+// and the pilot's renderer must not depend on them. If they change, these
+// change — the values are the contract, and `tests/unit/island-tiles.test.js`
+// holds them to the same separation the Mario side asserts on itself.
 //
-//   ONE ORANGE, TWO ROLES. Ground and brick share `orange` in the original —
-//   they are told apart by pattern (speckle vs mortar), never by hue. Giving
-//   them separate colours here would be easier to read and instantly wrong.
+// RAMP SHAPE. Five slots, dark to light:
 //
-//   THE OUTLINE IS WARM, NOT BLACK. #1a0f04 rather than #000000. Against a
-//   bright cyan sea a pure black grid buzzes; a very dark brown reads as the
-//   same hard line and sits in the same family as the blocks it surrounds.
+//   0 outline   1 shadow   2 body   3 lit   4 bright
 //
-//   THE GOLD IS THE BRIGHTEST THING ON THE ISLAND, on purpose. A question
-//   block is a target, and at 5 screen pixels the only thing that survives of
-//   it is that it is brighter and yellower than everything around it.
+// and five themes, because in this game a material is a different hue in every
+// area — that is a rule `tiles.js` states and measures, not a decoration.
 // ---------------------------------------------------------------------------
-export const SMB = {
-  ink: '#1a0f04',
-  orange: '#c84c0c',
-  orangeLit: '#e39b48',
-  orangeDark: '#8b3a0e',
-  mortar: '#3d1c07',
-  gold: '#f0a01c',
-  goldLit: '#fbd66b',
-  goldDark: '#a85c08',
-  green: '#00a800',
-  greenLit: '#5cd44c',
-  greenDark: '#00680c',
-  white: '#fcfcfc',
-  cloudShade: '#94d0f4',
-  stone: '#b4b4bc',
-  stoneLit: '#e0e0e8',
-  stoneDark: '#6c6c78',
-  iron: '#3c3c48',
-  ironLit: '#787888',
-  lava: '#e05010',
-  lavaLit: '#fca044',
-  lavaDark: '#8b2408',
+
+// Ground. The floor of every level.
+const EARTH = {
+  overworld: ['#100400', '#281004', '#70380e', '#b86e22', '#d49a54'],
+  underground: ['#020e0a', '#0a221a', '#1e5e48', '#3c9e7a', '#6abea0'],
+  castle: ['#06060a', '#1c1c2c', '#40405e', '#6e6e92', '#9a9ab6'],
+  water: ['#0a0806', '#201c16', '#524638', '#887662', '#ac9e8c'],
+  athletic: ['#040e02', '#0e220a', '#2a601c', '#4aa23a', '#76c268'],
+};
+
+// The one thing the player is allowed to smash, so it is the one warm
+// saturated masonry in every theme — and never gold, or it would eat the
+// question block's "this one is special".
+const BRICK = {
+  overworld: ['#26100a', '#a02a06', '#ee5814', '#ff9254', '#ffc49a'],
+  underground: ['#140806', '#7a3a24', '#b46844', '#d89a70', '#f0c8a0'],
+  castle: ['#2a0818', '#84264e', '#c8467e', '#e08aa8', '#f4c0d0'],
+  water: ['#1a0202', '#96221c', '#f45240', '#ffa69a', '#ffdad2'],
+  athletic: ['#18061c', '#742a7e', '#b854c0', '#d894dc', '#f0c6f4'],
+};
+
+// The castle wall: cold dressed stone, a full value tier ABOVE the breakable
+// brick, so "I can smash this" and "I cannot" separate in greyscale alone.
+const ASHLAR = {
+  overworld: ['#02060e', '#3a68c6', '#84a4e2', '#c0d2f4', '#e8f0fc'],
+  underground: ['#141e24', '#4a6272', '#88a0b2', '#c2d2dc', '#e8f2f8'],
+  castle: ['#1c1028', '#7a58aa', '#ac8ad4', '#d0bcee', '#ecdeff'],
+  water: ['#10040e', '#b442a2', '#dc80cc', '#f2b8e8', '#ffe4fa'],
+  athletic: ['#04322c', '#1e8670', '#38ccac', '#74f2d4', '#b4ffe8'],
+};
+
+// The plain solid block.
+const STONE = {
+  overworld: ['#0e080c', '#6a4458', '#9e768c', '#cab0be', '#f4e0ea'],
+  underground: ['#160e20', '#5c3e7a', '#8c64ac', '#b496ce', '#dacaea'],
+  castle: ['#1c1410', '#5e4438', '#8e6c58', '#b89484', '#dcc0b0'],
+  water: ['#06080c', '#465a76', '#6e84a2', '#9caec4', '#c2d2e4'],
+  athletic: ['#121c10', '#344832', '#5c7e56', '#8aac84', '#b6d0b0'],
+};
+
+// The staircase block, and the light tier of every theme. Cut sandstone above
+// ground, because the 1-1 staircase in the original is warm brown masonry.
+const QUARRY = {
+  overworld: ['#221a14', '#6a5038', '#9c7c5c', '#c8a884', '#f0dcbc'],
+  underground: ['#0c160e', '#3e7c56', '#66ac80', '#98cca8', '#c8ecd4'],
+  castle: ['#14140c', '#6e6c48', '#9c9a7c', '#c4c4b2', '#dcdcd0'],
+  water: ['#1c0a10', '#8a4450', '#b87280', '#d6a4ac', '#f8d0d4'],
+  athletic: ['#0a0e10', '#466472', '#729aa8', '#a6c6d2', '#d2e8f0'],
+};
+
+const PIPE = {
+  overworld: ['#0a3010', '#0a5a12', '#22a028', '#66d84e', '#c8f79a'],
+  underground: ['#062010', '#0e4a2c', '#1a8452', '#3cc078', '#9cecb4'],
+  castle: ['#0a1a10', '#204028', '#3a6a44', '#68a072', '#b4d8b8'],
+  water: ['#04281c', '#0a6650', '#12a07c', '#48d0a0', '#a8f0cc'],
+  athletic: ['#123008', '#2c7010', '#54b420', '#92e04c', '#daf89a'],
+};
+
+// The one-way platform, and nothing else. Always the lightest ramp in its
+// theme: a platform you can jump THROUGH must not look like terrain.
+const TIMBER = {
+  overworld: ['#301806', '#aa6428', '#d69c64', '#ecc6a0', '#fff2d4'],
+  underground: ['#0a0e04', '#56762c', '#8ebe5a', '#bedea0', '#f0ffdc'],
+  castle: ['#040a0c', '#426e88', '#7eaabe', '#bcd6e0', '#f0ffff'],
+  water: ['#101008', '#828444', '#b2b27c', '#d2d2b2', '#f0f0e4'],
+  athletic: ['#16080e', '#86405a', '#c2869c', '#eaccda', '#fff8ff'],
+};
+
+export const MARIO = {
+  EARTH,
+  BRICK,
+  ASHLAR,
+  STONE,
+  QUARRY,
+  PIPE,
+  TIMBER,
+
+  // Gold stays gold in every area — only its outline picks up the theme — so
+  // the question block always reads as "special". Four slots; the theme's
+  // outline is prepended at draw time.
+  GOLD: ['#7e5804', '#c08c0e', '#f0c832', '#fff2ac'],
+  GLYPH: ['#3d1a00', '#fff6d2'],
+
+  // Scenery. Bush, hill and tree canopy share one ramp, as they share one
+  // silhouette; the cloud is that silhouette in the cloud ramp.
+  GREEN: ['#001e00', '#077704', '#3fb52e', '#8fd96a', '#bdf4ab'],
+  BARK: ['#32190c', '#48280e', '#6d4116', '#93601e', '#bb832f'],
+  CLOUD: ['#101f8c', '#5c82ee', '#b3c4fc', '#d8e3ff', '#ffffff'],
+
+  // The end-of-level keep: warm castle stone, with a true black for the
+  // doorway and a rim so no opening is flat black.
+  KEEP: ['#28130a', '#5e2b0e', '#b3651f', '#d98c3a', '#f2b567'],
+  VOID: '#000000',
+  VOID_RIM: '#241209',
+
+  // The flag: cool linen, with a red mushroom badge on it.
+  FLAG: ['#1e2440', '#8598cc', '#dfe8f8', '#ffffff'],
+  BADGE: ['#2a1108', '#c62c22', '#f7e8d2'],
+
+  // No authoritative ramp on the Mario side for these three, so they are the
+  // pilot's own, kept in the same idiom.
+  IRON: ['#0a0a10', '#2a2a34', '#4c4c5a', '#84848e', '#b8b8c0'],
+  LAVA: ['#3a0c02', '#8b2408', '#e05010', '#fca044', '#ffd89a'],
 };
 
 export const ORD = {

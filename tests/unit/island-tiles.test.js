@@ -5,16 +5,17 @@ import { getLevel, LEVELS } from '../../src/data/levels/index.js';
 import { Island } from '../../src/wings/island.js';
 import { drawLandmass } from '../../src/wings/art/land.js';
 import {
-  LOD, PAINT, THEME, COMPOSITE, lodFor, themeFor, isInvisible,
+  LOD, PAINT, THEMES, COMPOSITE, lodFor, themeFor, isInvisible, mat,
 } from '../../src/wings/art/mario-tiles.js';
-import { SMB, luma } from '../../src/wings/art/palette.js';
+import { MARIO, luma } from '../../src/wings/art/palette.js';
 import { ZOOM } from '../../src/wings/scene.js';
 
 // The island art had no test of any kind before this file, which is how a
 // character that six castle levels use ended up rendering as a grey slab
-// hanging in mid air for as long as it did. These are the three cheap guards:
-// every character a level can contain has a painter, the pilot can still tell
-// his targets apart by colour, and the same tick draws the same picture.
+// hanging in mid air for as long as it did. The guards here are: every
+// character a level can contain has a painter, the material ramps copied from
+// the Mario side do not drift from it, and the same tick draws the same
+// picture.
 
 const ORIGIN = 3000;
 
@@ -22,11 +23,10 @@ const ORIGIN = 3000;
 // art, and every call is captured in order so two frames can be compared.
 function recorder() {
   const ops = [];
-  const push = (name) => (...args) => ops.push(`${name}(${args.map(fmt).join(',')})`);
   const fmt = (v) => (typeof v === 'number' ? v.toFixed(3) : String(v));
+  const push = (name) => (...args) => ops.push(`${name}(${args.map(fmt).join(',')})`);
   const ctx = {
     ops,
-    _style: '',
     save: push('save'),
     restore: push('restore'),
     translate: push('translate'),
@@ -66,6 +66,14 @@ function render(isle, scale = 1.15, tick = 0, cam = WIDE) {
   return ctx.ops;
 }
 
+// Euclidean RGB distance — the metric src/data/tiles.js states and asserts on
+// itself ("mean Euclidean RGB over slots 1-4", `tiles.js:180-186`).
+function apart(a, b) {
+  const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  const [x, y] = [p(a), p(b)];
+  return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
+}
+
 // ---------------------------------------------------------------------------
 
 test('every character any level can contain has a painter of its own', () => {
@@ -86,43 +94,63 @@ test('the invisible blocks are not drawn, because the original never shows them'
   assert.ok(!isInvisible('?'), 'a question block is not hidden');
 });
 
-test('every theme supplies a whole palette', () => {
-  for (const [name, pal] of Object.entries(THEME)) {
-    for (const slot of ['body', 'lit', 'dark', 'mortar']) {
-      assert.match(pal[slot], /^#[0-9a-f]{6}$/i, `THEME.${name}.${slot}`);
+// The ramps in palette.js are COPIED out of src/data/tiles.js rather than
+// imported — the pilot must not depend on the Mario engine's sprite pipeline.
+// These tests are what stops the copy rotting: the same shape, the same
+// dark-to-light ordering, and the same separation the Mario side asserts.
+const RAMPS = ['EARTH', 'BRICK', 'ASHLAR', 'STONE', 'QUARRY', 'PIPE', 'TIMBER'];
+
+test('every material has a whole ramp in every area, ordered dark to light', () => {
+  for (const name of RAMPS) {
+    for (const theme of THEMES) {
+      const r = mat(MARIO[name], theme);
+      assert.equal(r.length, 5, `${name}.${theme} is not a five-slot ramp`);
+      for (const hex of r) assert.match(hex, /^#[0-9a-f]{6}$/i, `${name}.${theme}`);
+      for (let i = 1; i < r.length; i++) {
+        assert.ok(luma(r[i]) > luma(r[i - 1]), `${name}.${theme} slot ${i} is not lighter`);
+      }
     }
-    assert.ok(luma(pal.lit) > luma(pal.body), `${name}: the lit tone must be lighter`);
-    assert.ok(luma(pal.dark) < luma(pal.body), `${name}: the shaded tone must be darker`);
   }
-  assert.equal(themeFor('castle'), THEME.castle);
-  assert.equal(themeFor(undefined), THEME.overworld, 'an unlabelled level is an overworld one');
-  assert.equal(themeFor('nonsense'), THEME.overworld);
+  assert.equal(themeFor('castle'), 'castle');
+  assert.equal(themeFor(undefined), 'overworld', 'an unlabelled level is an overworld one');
+  assert.equal(themeFor('nonsense'), 'overworld');
 });
 
-// The pilot picks bomb targets off these colours, so the ones that mean
-// different things have to stay apart. Deliberately NOT on this list: ground
-// versus brick. In the original they are the SAME orange and are told apart by
-// pattern alone, and matching that was the point of the rewrite.
-test('the materials a pilot must tell apart stay apart', () => {
-  const dist = (a, b) => {
-    const p = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-    const [x, y] = [p(a), p(b)];
-    return (Math.abs(x[0] - y[0]) + Math.abs(x[1] - y[1]) + Math.abs(x[2] - y[2])) / 3;
-  };
-  const pairs = [
-    ['gold', 'orange'], ['gold', 'green'], ['green', 'orange'],
-    ['orange', 'stone'], ['green', 'stone'], ['gold', 'stone'],
-    ['lava', 'green'], ['iron', 'orange'],
-  ];
-  for (const [a, b] of pairs) {
-    const d = dist(SMB[a], SMB[b]);
-    assert.ok(d >= 45, `${a} vs ${b} is only ${d.toFixed(1)} apart; the pilot cannot tell them apart`);
+test('no two materials in one area are the same paint', () => {
+  for (const theme of THEMES) {
+    for (let i = 0; i < RAMPS.length; i++) {
+      for (let j = i + 1; j < RAMPS.length; j++) {
+        const a = mat(MARIO[RAMPS[i]], theme);
+        const b = mat(MARIO[RAMPS[j]], theme);
+        let sum = 0;
+        for (let k = 1; k < 5; k++) sum += apart(a[k], b[k]);
+        const d = sum / 4;
+        assert.ok(d >= 45,
+          `${RAMPS[i]} and ${RAMPS[j]} are only ${d.toFixed(1)} apart in ${theme}`);
+      }
+    }
   }
-  // And the underground/castle repaints must not collide with the pipe, which
-  // keeps its green in every area exactly as the original does.
-  for (const name of ['underground', 'castle', 'water']) {
-    const d = dist(THEME[name].body, SMB.green);
-    assert.ok(d >= 40, `${name} blocks are only ${d.toFixed(1)} from a pipe`);
+});
+
+test('the question block stays gold, and its glyph stays legible on it', () => {
+  const gold = MARIO.GOLD;
+  assert.equal(gold.length, 4);
+  assert.ok(luma(MARIO.GLYPH[1]) - luma(gold[1]) > 60,
+    'the cream glyph must carry against the gold face');
+  // Gold shares more screen with brick than with anything else in the game.
+  for (const theme of THEMES) {
+    const d = apart(gold[1], mat(MARIO.BRICK, theme)[2]);
+    assert.ok(d >= 45, `gold is only ${d.toFixed(1)} from the ${theme} brick`);
+  }
+});
+
+test('the ground and the brick are two different materials from the air', () => {
+  // What the pilot is choosing bomb targets off: the floor he cannot break and
+  // the block he can. On the Mario side these are EARTH and BRICK and they are
+  // deliberately different paint; the pilot used to draw both in one brown.
+  for (const theme of THEMES) {
+    const d = apart(mat(MARIO.EARTH, theme)[2], mat(MARIO.BRICK, theme)[2]);
+    assert.ok(d >= 45, `ground and brick are only ${d.toFixed(1)} apart in ${theme}`);
   }
 });
 
@@ -146,7 +174,7 @@ test('an island draws identically for the same tick, and differs by tick only wh
   assert.notDeepEqual(
     render(isle, 1.15, 0),
     render(isle, 1.15, 12),
-    'nothing on the island animates — the question blocks should pulse'
+    'nothing on the island animates — the question blocks should cycle'
   );
 });
 
@@ -183,4 +211,23 @@ test('a run of scenery is one shape at the run’s full width', () => {
   assert.equal(calls[0].w, 5 * TILE, 'and at the full width of its run');
   assert.equal(calls[0].x, 11 * TILE);
   assert.equal(calls[0].h, TILE);
+});
+
+// The ground's joints course THROUGH the tile seam, which is what makes a row
+// of ground tiles read as one wall rather than a row of squares. The pattern
+// is therefore a function of the tile's place in the world, and two tiles an
+// odd number of columns apart must not draw the same marks.
+test('the ground courses across tile seams instead of repeating per tile', () => {
+  const at = (tx) => render({
+    level: { theme: 'overworld' },
+    w: 40,
+    h: 15,
+    x0: ORIGIN,
+    x1: ORIGIN + 40 * TILE,
+    y0: 400,
+    charAt: (x, y) => (x === tx && y === 13 ? '#' : '.'),
+    blocksTile: () => false,
+  }).filter((o) => o.startsWith('fillRect'));
+  assert.ok(at(10).length > 4, 'a ground tile should draw its courses');
+  assert.notDeepEqual(at(10), at(11), 'every ground tile drew the identical pattern');
 });
