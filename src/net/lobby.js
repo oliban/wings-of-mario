@@ -376,6 +376,14 @@ export function renderLobby(doc, entries) {
       'position:fixed', 'top:30px', 'left:0', 'right:0', 'text-align:center',
       'font:600 10px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace',
       'letter-spacing:.18em', 'color:#46527a', 'pointer-events:none', 'z-index:9',
+      // The iOS treatment, mirroring #joypad in index.html. This strip sits over
+      // the top of the game on Mario's page, so on a phone a press aimed at a
+      // room code that lands a moment too long would otherwise select the text
+      // and raise the copy / paste / Look Up / SEARCH GOOGLE callout over the
+      // level. These three inherit down to the links; touch-action does not, so
+      // the <a> below repeats it.
+      'user-select:none', '-webkit-user-select:none',
+      '-webkit-touch-callout:none', '-webkit-tap-highlight-color:transparent',
     ].join(';');
     doc.body.appendChild(el);
   }
@@ -396,7 +404,10 @@ export function renderLobby(doc, entries) {
     const a = doc.createElement('a');
     a.href = entry.href;
     a.textContent = entry.text;
-    a.style.cssText = 'pointer-events:auto;color:#7f92c9;text-decoration:none;border-bottom:1px solid #2b3552';
+    // `manipulation`, not `none`: this is a link over the top of the page, and
+    // `none` there would take the page's scroll and pinch away from a player who
+    // happened to start the gesture on a room code.
+    a.style.cssText = 'pointer-events:auto;touch-action:manipulation;color:#7f92c9;text-decoration:none;border-bottom:1px solid #2b3552';
     el.appendChild(a);
   });
   return el;

@@ -57,6 +57,25 @@ export function shouldOpen({ search = '', webdriver = false } = {}) {
 
 const ID = 'net-front-door';
 
+// The iOS treatment, mirroring what index.html puts on #joypad. On a phone this
+// screen is entirely made of things you press, and iOS Safari's default reading
+// of a press held a fraction too long is "the player wants to select this text",
+// which raises the copy / paste / Look Up / SEARCH GOOGLE callout over the front
+// door instead of taking them into a game. The tap-highlight is the grey box
+// that flashes over a link; transparent because every row here already has its
+// own :active-less styling and the flash only reads as a glitch.
+//
+// `touch-action` does NOT inherit, so every pressable element repeats it. It is
+// `manipulation` everywhere on this screen and never `none`: this is a LIST that
+// can outgrow a phone in landscape, and `none` would kill the scroll that gets
+// the player to the bottom of it. `none` is for a game canvas that must swallow
+// drags — see #screen on both pages — and this is the opposite of that.
+const TOUCH = [
+  'touch-action:manipulation',
+  'user-select:none', '-webkit-user-select:none',
+  '-webkit-touch-callout:none', '-webkit-tap-highlight-color:transparent',
+].join(';');
+
 const CSS = {
   veil: [
     'position:fixed', 'inset:0', 'z-index:50',
@@ -65,6 +84,7 @@ const CSS = {
     'background:radial-gradient(120% 90% at 50% 0%,#101a2e 0%,#06080f 55%,#04050a 100%)',
     'font:600 12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace',
     'letter-spacing:.2em', 'color:#7f92c9', 'text-align:center',
+    TOUCH,
   ].join(';'),
   title: 'font-size:15px;letter-spacing:.42em;color:#cdd6f4',
   note: 'font-size:10px;letter-spacing:.18em;color:#46527a;max-width:34em',
@@ -72,17 +92,28 @@ const CSS = {
   row: [
     'display:block', 'padding:9px 16px', 'border:1px solid #2b3552', 'border-radius:6px',
     'color:#7f92c9', 'text-decoration:none', 'background:#0b1020', 'cursor:pointer',
+    TOUCH,
   ].join(';'),
   rowDead: [
     'display:block', 'padding:9px 16px', 'border:1px solid #1b2238', 'border-radius:6px',
     'color:#46527a', 'background:#080c17', 'opacity:.7',
+    TOUCH,
   ].join(';'),
   button: [
     'display:block', 'padding:11px 20px', 'border:1px solid #3d4c78', 'border-radius:6px',
     'background:#141d36', 'color:#cdd6f4', 'font:inherit', 'letter-spacing:.2em',
     'cursor:pointer',
+    // -webkit-appearance:none stops iOS from imposing its own button chrome
+    // over the border and background set above.
+    '-webkit-appearance:none', 'appearance:none',
+    TOUCH,
   ].join(';'),
-  quiet: 'background:none;border:none;color:#46527a;font:inherit;letter-spacing:.18em;cursor:pointer;text-decoration:underline',
+  quiet: [
+    'background:none', 'border:none', 'color:#46527a', 'font:inherit',
+    'letter-spacing:.18em', 'cursor:pointer', 'text-decoration:underline',
+    '-webkit-appearance:none', 'appearance:none',
+    TOUCH,
+  ].join(';'),
 };
 
 function el(doc, tag, style, text) {

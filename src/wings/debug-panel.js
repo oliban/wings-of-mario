@@ -47,6 +47,22 @@ const STYLE = `
   width: 232px;
   max-height: calc(100vh - 32px);
   overflow-y: auto;
+  /* The iOS treatment, mirroring #joypad in index.html. Without it a press on
+     a bombing-run button held a fraction too long selects its label and raises
+     Safari's copy / paste / Look Up / SEARCH GOOGLE callout instead of dropping
+     a bomb, and a grey tap-highlight flashes over every button.
+
+     STYLE is a template literal, so no backticks below this line.
+
+     manipulation and not none: the panel is taller than a short window and has
+     overflow-y: auto right above, so none would kill the scroll that reaches
+     the lower half of it. none belongs on a canvas that must swallow drags
+     (#screen), which this is not. */
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
   background: linear-gradient(180deg, #12151f 0%, #0a0c12 100%);
   color: #cdd6f4;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -80,8 +96,25 @@ const STYLE = `
   gap: 5px;
   margin-bottom: 5px;
 }
+/* touch-action does not inherit, so the pressables repeat it. */
+#wdp-panel button,
+#wdp-panel select,
+#wdp-panel input {
+  touch-action: manipulation;
+}
+/* …and the radius field is the one control on the panel where selection and the
+   callout are the RIGHT behaviour: it is a text field, and a player who wants to
+   paste a number into it must be able to reach Paste. Only this element opts
+   back in; everything around it stays unselectable. */
+#wdp-panel input {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
 #wdp-panel button {
   flex: 1 1 auto;
+  -webkit-appearance: none;
+  appearance: none;
   background: #181c29;
   color: #cdd6f4;
   border: 1px solid rgba(255,255,255,.08);
