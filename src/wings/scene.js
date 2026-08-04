@@ -518,8 +518,10 @@ export class Scene {
       seaY: SEA_Y,
       // The radar plots islands as {x, x1} spans; Island calls its left edge
       // x0, so the shape it wants is made here rather than teaching the
-      // instrument about a class it should not know.
-      islands: sim.islands.map((i) => ({ x: i.x0, x1: i.x1 })),
+      // instrument about a class it should not know. `island` rides along so
+      // the instrument can read the terrain profile off it — it is optional,
+      // and a caller without one still gets a plain span drawn.
+      islands: sim.islands.map((i) => ({ x: i.x0, x1: i.x1, island: i })),
       // The hunt: a fuzzy fix, or null for a dark tube. The instrument decides
       // how to draw uncertainty; the sim only supplies it.
       contact: sim.radarContact(),

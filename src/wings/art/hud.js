@@ -1,4 +1,5 @@
-import { PANEL, SHIP, SEA, PLANE } from './palette.js';
+import { PANEL, SHIP, SEA, PLANE, LAND } from './palette.js';
+import { profileFor } from '../radar-terrain.js';
 
 // The instrument panel. In the original this is not a status line — it is a
 // boxed panel across the BOTTOM of the screen in a bright green bezel with
@@ -190,6 +191,105 @@ function planIcon(ctx, x, y, s, colour) {
 // appears nowhere else on the panel so a browser test can count its pixels.
 export const RADAR_BLIP = '#b7ff5a';
 
+// How tall a fully solid island stands above the radar's horizon. Ten of the
+// eighteen pixels between the horizon and the top of the window: enough that a
+// castle towers over an overworld shoreline, and it still leaves the aircraft
+// clear sky to fly in above the tallest terrain.
+const TERRAIN_H = 10;
+
+// Scorched land. Deliberately a long way from the orange — at one pixel wide
+// the only difference anyone will ever see is value, so a bombed stretch is
+// dark where clean land is bright, and loses its lit crest as well. Exported
+// for the same reason RADAR_BLIP is: it appears nowhere else on the panel, so
+// a browser test can count its pixels.
+export const RADAR_SCORCH = '#4d2417';
+const BURNT = RADAR_SCORCH;
+const BURNT_LIT = '#7d3d24';
+// Where a bomb has taken more than this share of a column's tiles, the column
+// reads as wrecked rather than merely dented. One bomb's crater is a couple of
+// dozen tiles against a bucket of ~160, so this is roughly "more than a single
+// hit here".
+const BURNT_AT = 0.06;
+// A bucket is ~10 tile columns wide. Half of them floorless is a hole you
+// could put an aeroplane through; a third would flag every ordinary two-tile
+// pit in 1-1 and break the coastline everywhere.
+const GAP_AT = 0.5;
+const ROOF_AT = 0.5;
+
+// One island, drawn as the level it actually is rather than as a bar.
+//
+// The strip is a ground silhouette with the coastline broken where there is no
+// floor, a thin lid over the stretches that are enclosed overhead, and
+// scorching where the pilot has already been. See radar-terrain.js for what
+// that keeps and what it throws away, and why.
+//
+// The height curve is sqrt, not linear. It is a display choice and it lives
+// here rather than in the profile: real terrain spends almost all its time in
+// the bottom third of a fifteen-row band, so linear scaling squashes 1-1's
+// entire landscape into one pixel and hands the other nine to a castle nobody
+// needs that much resolution on.
+function radarIsland(ctx, isle, toX, horizon) {
+  const px0 = toX(isle.x);
+  const px1 = toX(isle.x1);
+  const pw = Math.max(2, px1 - px0);
+  const n = Math.max(2, Math.round(pw));
+  const profile = isle.island ? profileFor(isle.island, n) : null;
+
+  // No island object — a caller that only had spans. Fall back to the old
+  // solid bar rather than drawing nothing.
+  if (!profile) {
+    ctx.fillStyle = 'rgba(226,112,58,0.8)';
+    ctx.fillRect(px0, horizon - 4, pw, 4);
+    return;
+  }
+
+  for (let i = 0; i < profile.length; i++) {
+    const c = profile[i];
+    const cx = Math.round(px0 + (i * pw) / profile.length);
+    const cw = Math.max(1, Math.round(px0 + ((i + 1) * pw) / profile.length) - cx);
+    const burnt = c.damage >= BURNT_AT;
+
+    // The waterline. It breaks where there is genuinely no floor — which is
+    // what a hole in 1-3 looks like from above — but a stretch the pilot has
+    // BLOWN to nothing keeps a scorched line instead of disappearing. An
+    // island flattened end to end would otherwise read as open sea, and the
+    // pilot would lose both the landmark and the record of his own work.
+    if (c.gap < GAP_AT || c.damage > 0) {
+      ctx.fillStyle = burnt || c.damage > 0 ? BURNT : LAND.earthDark;
+      ctx.fillRect(cx, horizon, cw, 1);
+    }
+
+    const gh = Math.round(TERRAIN_H * Math.sqrt(Math.max(0, Math.min(1, c.ground))));
+    if (gh > 0) {
+      ctx.fillStyle = burnt ? BURNT : 'rgba(226,112,58,0.85)';
+      ctx.fillRect(cx, horizon - gh, cw, gh);
+      // A lit crest, so a one-pixel step in the silhouette is a step and not a
+      // smudge. Scorched land does not get one: losing the highlight is half
+      // of what makes a bombed stretch read as bombed.
+      ctx.fillStyle = burnt ? BURNT_LIT : LAND.sandLit;
+      ctx.fillRect(cx, horizon - gh, cw, 1);
+    }
+
+    // A walkway over a void. Only drawn where the coastline is broken, so it
+    // never competes with the silhouette: it is there to say "the void here
+    // has a floor suspended in it", which is 1-3 in one mark and is the
+    // difference between that island and open sea.
+    if (c.gap >= GAP_AT && c.shelf > 0) {
+      const sh = Math.round(TERRAIN_H * Math.sqrt(Math.min(1, c.shelf)));
+      ctx.fillStyle = burnt ? BURNT_LIT : LAND.sand;
+      ctx.fillRect(cx, horizon - Math.max(1, sh), cw, 1);
+    }
+
+    // The lid. Underground and castle levels are roofed nearly end to end, and
+    // this single line is the whole difference between 1-2 and 1-1 at fifteen
+    // pixels wide.
+    if (c.roof >= ROOF_AT) {
+      ctx.fillStyle = burnt ? BURNT_LIT : LAND.rock;
+      ctx.fillRect(cx, horizon - TERRAIN_H, cw, 1);
+    }
+  }
+}
+
 // A real instrument, not a decorative rectangle: a plan of the whole operating
 // area with the ship, the aircraft and the current viewport on it. When there
 // are islands to hunt across, this is what the pilot navigates by.
@@ -258,11 +358,8 @@ function radar(ctx, x, y, w, h, sim, world, tick) {
   ctx.fillStyle = 'rgba(255,255,255,0.45)';
   ctx.fillRect(sx0 - 9, horizon - 1, 8, 1);
 
-  // Islands, once there are any.
-  ctx.fillStyle = 'rgba(226,112,58,0.8)';
-  for (const isle of world.islands || []) {
-    ctx.fillRect(toX(isle.x), horizon - 4, Math.max(2, toX(isle.x1) - toX(isle.x)), 4);
-  }
+  // Islands, once there are any — each one drawn as its own terrain.
+  for (const isle of world.islands || []) radarIsland(ctx, isle, toX, horizon);
 
   // The viewport, so the pilot can see what part of the plan is on screen.
   ctx.strokeStyle = 'rgba(223,233,242,0.35)';
