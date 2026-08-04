@@ -555,8 +555,13 @@ window.__GAME = {
   options,
   rng,
 
-  async loadLevel(id, areaId = null) {
-    const ok = await game.loadLevel(id, areaId);
+  async loadLevel(id, areaId = null, damage = []) {
+    // Pass damage THROUGH the options bag, not after the fact: game.loadLevel
+    // forwards opts to world.loadLevel, which subtracts the damage right after
+    // the tile map is rebuilt and before decor, landmarks, the player and the
+    // entities read it. Applying it after the load returns would place all of
+    // them on ground that only vanishes afterwards.
+    const ok = await game.loadLevel(id, areaId, damage && damage.length ? { damage } : {});
     screens.hide();
     game.started = true;
     game.world.state = 'playing';
@@ -579,6 +584,21 @@ window.__GAME = {
     game.world.rcam.x = cam.x;
     game.world.rcam.y = cam.y;
     return true;
+  },
+
+  blast(cx, cy, radiusTiles) {
+    const w = game.world;
+    return w ? w.blast(cx, cy, radiusTiles) : [];
+  },
+
+  destroyTiles(keys) {
+    const w = game.world;
+    return w ? w.destroyTiles(keys) : [];
+  },
+
+  damageKeys() {
+    const w = game.world;
+    return w ? [...w.damage].sort() : [];
   },
 
   setPower(power) {

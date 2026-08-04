@@ -17,6 +17,8 @@
 import { SCREEN_W, SCREEN_H, TILE, LAYER } from '../core/constants.js';
 import { Camera } from './camera.js';
 import { BlockSystem, tileKey } from './blocks.js';
+import { blastTiles, parseTileKey } from '../wings/blast.js';
+import { enemyDie, isStarPlayer } from './entities/index.js';
 
 // ---------------------------------------------------------------------------
 // Cross-agent modules. Every one of these is authored in parallel, so each is
@@ -580,6 +582,9 @@ export class World {
     this.recByCode = new Array(128).fill(null);
     this.contents = new Map();
     this.decor = [];
+    // Destroyed tile keys for the level currently loaded. Cleared by loadLevel
+    // and re-seeded from opts.damage.
+    this.damage = new Set();
 
     this.entities = [];
     this.popups = [];
@@ -747,6 +752,8 @@ export class World {
     }
 
     this._buildTiles(lvl);
+    this.damage.clear();
+    if (opts.damage && opts.damage.length) this.applyDamage(opts.damage);
     this._buildDecor();
     this._buildContents(lvl);
 
@@ -1451,6 +1458,125 @@ export class World {
 
   breakBlock(tx, ty, by) {
     return this.blocks.shatter(tx | 0, ty | 0, by || this.player);
+  }
+
+  // -------------------------------------------------------------------------
+  // Destructible terrain — see MODS.md
+  // -------------------------------------------------------------------------
+  // Clear tiles without any feedback. Used when loading a level that was
+  // already bombed, where a hundred simultaneous explosions would be absurd.
+  applyDamage(keys) {
+    for (const key of keys) {
+      const parsed = parseTileKey(key);
+      if (!parsed) continue;
+      const { tx, ty } = parsed;
+      if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
+      this.damage.add(key);
+      this.setTile(tx, ty, '.');
+    }
+  }
+
+  // A live detonation. Everything in the radius goes: ground, brick, pipe,
+  // castle stone, flagpole base. Returns only the keys that actually removed
+  // something, so callers can tell a direct hit from a splash into open air.
+  destroyTiles(keys) {
+    const changed = [];
+    for (const key of keys) {
+      const parsed = parseTileKey(key);
+      if (!parsed) continue;
+      const { tx, ty } = parsed;
+      if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) continue;
+      if (this.damage.has(key)) continue;
+      const rec = this.recAt(tx, ty);
+      // Any non-air tile is destructible — coins, decor, lava, hidden blocks,
+      // all of it. Checking `rec.name` rather than `rec.solid` is what makes
+      // this correct: most of those tiles have `solid: false` but are still
+      // real tiles, not air. `rec.unknown` catches tile characters `_makeRec`
+      // didn't recognise — those are also tagged `name: 'air'`, so without
+      // this they would read as air and survive every blast.
+      const wasSomething = rec.name !== 'air' || rec.unknown;
+      // Record ONLY what was actually removed. `applyDamage` clears its keys
+      // unconditionally, so a key recorded here but skipped below would vanish
+      // on the next load — lava pools and hidden blocks disappearing on reload
+      // when the live blast left them alone.
+      if (!wasSomething) continue;
+      this.damage.add(key);
+      this.setTile(tx, ty, '.');
+      this.contents.delete(tileKey(tx, ty));
+      this.fx('brickShatter', tx * TILE + TILE / 2, ty * TILE + TILE / 2, this.theme);
+      changed.push(key);
+    }
+    if (changed.length) {
+      this.sfx('break');
+      this.shake(3, 10);
+      // Decor and the flagpole/castle landmarks are both compiled once from
+      // the tile map at load time, not read from it live like everything
+      // else in this class. A blast clears the map but leaves those snapshots
+      // untouched, so a bombed cloud kept drawing and a bombed flagpole stayed
+      // at its original height forever — until the level reloaded and rebuilt
+      // them fresh. Rebuilding here keeps a live blast and a reload agreeing,
+      // the same property `destroyTiles`/`applyDamage` already guarantee for
+      // the tile map itself.
+      this._buildDecor();
+      // Skip while the flag is mid-slide: `_findLandmarks` unconditionally
+      // resets `flagY` to the pole's resting top, which would yank the
+      // animation back up. The level is already ending at that point, so the
+      // pole's tiles no longer need to track a live blast.
+      if (!this.flagFalling) this._findLandmarks(this.level, this.rootLevel);
+    }
+    return changed;
+  }
+
+  blast(cx, cy, radiusTiles) {
+    const changed = this.destroyTiles(blastTiles(cx, cy, radiusTiles));
+    this._blastKill(cx, cy, radiusTiles * TILE);
+    return changed;
+  }
+
+  // Anything whose hitbox overlaps the blast circle dies — enemies and Mario
+  // alike (design spec §3.1, "crater terrain and kill on contact"). This is
+  // deliberately NOT part of destroyTiles(): a networked client replays a
+  // peer's destroyed-tile list through destroyTiles() and must not re-kill
+  // entities locally when it does, whereas only a live detonation, which
+  // knows the blast's centre and radius, gets to kill.
+  _blastKill(cx, cy, radiusPx) {
+    const r2 = radiusPx * radiusPx;
+    // Closest point on the hitbox to the blast centre — catches a large
+    // entity that overlaps the circle without its corner being inside it.
+    const inBlast = (e) => {
+      const nx = Math.max(e.x, Math.min(cx, e.x + e.w));
+      const ny = Math.max(e.y, Math.min(cy, e.y + e.h));
+      const dx = cx - nx;
+      const dy = cy - ny;
+      return dx * dx + dy * dy <= r2;
+    };
+    for (const e of this.entities) {
+      // Not yet activated entities aren't really "there" yet (SMB's forward
+      // enemy cursor hasn't reached them); a dead/removed one is already gone.
+      if (!e || e.dead || e.removed || !e.isEnemy || !e.active) continue;
+      if (!inBlast(e)) continue;
+      enemyDie(e, 'fireball', null, 0);
+    }
+    // A blast on Mario is lethal at any power — small, big or fire alike — not
+    // a power-down, so this calls die() directly rather than routing through
+    // hurtPlayer()/hurt() (which would only demote a big or fire Mario, the
+    // same as a Goomba's touch). die() has no gate of its own (that's how a
+    // pit fall or the level timeout already kill through any power state and
+    // any mercy-invulnerability window), so the only check made here is for
+    // star: star stays a deliberate exception, not an oversight — it is a
+    // core contract of the game we're homaging, the design spec (§5) means
+    // for a star Mario to threaten the plane, and it gives Mario earned,
+    // temporary counterplay against an otherwise one-sided weapon. The
+    // post-hit mercy window (invulnFrames) is NOT checked, so it does not
+    // accidentally make Mario bomb-proof for a second after every hit.
+    const roster = this.players && this.players.length ? this.players : [this.player];
+    for (const p of roster) {
+      if (!p || p.dead) continue;
+      if (!inBlast(p)) continue;
+      if (isStarPlayer(p)) continue;
+      if (typeof p.die === 'function') p.die('bomb');
+      else this.hurtPlayer(p);
+    }
   }
 
   // -------------------------------------------------------------------------

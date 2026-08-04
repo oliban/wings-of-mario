@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>WINGS OF MARIO — PILOT</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    background: #04050a;
+    color: #cdd6f4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    overflow: hidden;
+  }
+  body {
+    display: grid;
+    place-items: center;
+    background: radial-gradient(120% 90% at 50% 0%, #101a2e 0%, #06080f 55%, #04050a 100%);
+  }
+  #stage {
+    position: relative;
+    display: grid;
+    place-items: center;
+    padding: 18px;
+    border-radius: 18px;
+    background: linear-gradient(180deg, #121722 0%, #0a0c12 100%);
+    box-shadow: 0 0 0 1px rgba(255,255,255,.05), 0 30px 80px -20px rgba(0,0,0,.9);
+  }
+  #screen {
+    display: block;
+    image-rendering: pixelated;
+    border-radius: 4px;
+    background: #000;
+    box-shadow: 0 0 0 2px #000;
+    touch-action: none;
+  }
+  #hint {
+    position: fixed;
+    bottom: 18px; left: 0; right: 0;
+    text-align: center;
+    font-size: 10px;
+    letter-spacing: .2em;
+    color: #46527a;
+    pointer-events: none;
+  }
+  #hint b { color: #7f92c9; font-weight: 600; }
+  body.headless { background: #000; }
+  body.headless #stage { box-shadow: none; background: none; padding: 0; border-radius: 0; }
+  body.headless #screen { box-shadow: none; border-radius: 0; }
+  body.headless #hint { display: none; }
+</style>
+</head>
+<body>
+  <div id="stage"><canvas id="screen" width="1024" height="480"></canvas></div>
+  <div id="hint">
+    <b>&darr;</b> PULL BACK / CLIMB &nbsp;·&nbsp; <b>&uarr;</b> PUSH / DIVE &nbsp;·&nbsp;
+    <b>&rarr;</b> THRUST EAST &nbsp;·&nbsp; <b>&larr;</b> THRUST WEST &nbsp;·&nbsp;
+    <b>SPACE</b> BOMB &nbsp;·&nbsp; <b>X</b> GUNS &nbsp;·&nbsp;
+    <b>G</b> HOOK &nbsp;·&nbsp; <b>R</b> NEXT PLANE
+  </div>
+  <script type="module" src="./src/wings/pilot-main.js"></script>
+</body>
+</html>
