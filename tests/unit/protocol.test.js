@@ -103,3 +103,15 @@ test('the cadences are the ones the spec asks for', () => {
   assert.equal(SNAPSHOT_INTERVAL_TICKS, 3);
   assert.equal(HASH_INTERVAL_TICKS, 60);
 });
+
+test('a damage broadcast may carry the blast that caused it', () => {
+  // The centre rides on the AUTHORITATIVE broadcast rather than on the pilot's
+  // proposal, so both clients resolve the same bomb against the same circle:
+  // the server consumes a `detonate` instead of relaying it, so this frame is
+  // the only thing Mario's client ever sees of the pilot's bomb.
+  assert.equal(validate({ t: MSG.DAMAGE, island: '1-1', keys: [], cx: 900, cy: 210, r: 2 }), null);
+  assert.equal(validate({ t: MSG.DAMAGE, island: '1-1', keys: [] }), null, 'geometry is optional');
+  assert.ok(validate({ t: MSG.DAMAGE, island: '1-1', keys: [], cx: '900', cy: 1, r: 2 }));
+  assert.ok(validate({ t: MSG.DAMAGE, island: '1-1', keys: [], cx: NaN, cy: 1, r: 2 }));
+  assert.ok(validate({ t: MSG.DAMAGE, island: '1-1', keys: [], cx: 1, cy: 1, r: Infinity }));
+});

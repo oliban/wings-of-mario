@@ -86,6 +86,13 @@ function isInt(v) {
   return typeof v === 'number' && Number.isInteger(v);
 }
 
+// Strict, unlike the global isFinite, which says yes to the string '900'. A
+// coordinate off the wire that arrives as a string would land a crater at NaN
+// on one client and nowhere on the other.
+function isNum(v) {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
 // null means valid. A string is the reason it is not, and that reason is what
 // the server puts in its ERROR reply, so it has to be safe to say out loud.
 export function validate(msg) {
@@ -131,6 +138,15 @@ export function validate(msg) {
       // skip the nulls.
       if (typeof msg.island !== 'string' || !msg.island) return 'bad island';
       if (!Array.isArray(msg.keys)) return 'bad keys';
+      // The blast that caused it, in WORLD pixels plus a radius in tiles.
+      // Optional: a catch-up dump on join carries keys and no geometry. When it
+      // IS present, Mario's client resolves the kill against it (spec 7.3), so
+      // it travels on the authoritative broadcast rather than on the pilot's
+      // proposal — the server consumes a `detonate` instead of relaying it, so
+      // this frame is the only thing Mario's client ever sees of that bomb.
+      if (msg.cx != null || msg.cy != null || msg.r != null) {
+        if (!isNum(msg.cx) || !isNum(msg.cy) || !isNum(msg.r)) return 'bad blast centre';
+      }
       return null;
     case MSG.HASH:
       if (!isInt(msg.tick)) return 'bad tick';

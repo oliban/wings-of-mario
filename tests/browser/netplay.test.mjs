@@ -186,6 +186,144 @@ test('two browsers in one room', { timeout: 180000 }, async (t) => {
     assert.deepEqual(box, { w: 256, h: 240 });
   });
 
+  // Hit resolution follows ownership (spec 7.3). The pilot PROPOSES a
+  // detonation; the server records it; and whether it killed anybody is decided
+  // on MARIO'S machine, against Mario's own hitbox and his own power state. The
+  // pilot's client never calls anything that can kill Mario — these two tests
+  // are what would fail first if it ever did.
+
+  // Aim a bomb at wherever Mario actually is, in the pilot's world frame, and
+  // let both halves do their real jobs with it.
+  const bombMario = async () => {
+    const at = await mario.page.evaluate(() => {
+      const p = window.__GAME.world.player;
+      return { x: p.x + p.w / 2, y: p.y + p.h / 2, island: window.__NET.state().island };
+    });
+    await pilot.page.evaluate(({ x, y, island }) => {
+      const isle = window.__WINGS.sim.islandById(island);
+      const cx = isle.originX + x;
+      const cy = isle.y0 + y;
+      // The pilot's own terrain goes first, exactly as sim.burst() does it.
+      const keys = isle.blast(cx, cy, window.__BOMB_R);
+      window.__WINGS.sim.emit('detonation', {
+        kind: 'bomb', x: cx, y: cy, radius: window.__BOMB_R, water: false, island, keys,
+      });
+      window.__WINGS.net.pump();
+    }, at);
+    return at;
+  };
+
+  await t.test("a bomb kills Mario because MARIO'S client said so", async () => {
+    await mario.page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      window.__GAME.teleport(30, 12);
+      window.__GAME.tick(30);
+    });
+    await settle();
+    const livesBefore = await mario.page.evaluate(() => window.__GAME.world.lives);
+    await pilot.page.evaluate(() => { window.__BOMB_R = 2; });
+
+    await bombMario();
+
+    // The kill ran inside world.blast()'s _blastKill on Mario's machine.
+    //
+    // THE CAUSE IS ASSERTED, not just the death. Removing the ground under
+    // Mario kills him a second later by dropping him down the hole, so a test
+    // that waited for `dying` alone passes with the kill deleted outright —
+    // it did, when that was tried. `_deathCause` is what die('bomb') was
+    // called with, and only _blastKill calls it with that.
+    await mario.page.waitForFunction(
+      () => {
+        const p = window.__GAME.world.player;
+        return (p.state === 'dying' || p.dead) && p._deathCause === 'bomb';
+      },
+      null,
+      { timeout: 10000 }
+    );
+
+    // And the pilot learns of it from Mario, rather than deciding it himself.
+    await mario.page.evaluate(() => {
+      for (let i = 0; i < 5; i++) window.__NET.pump();
+    });
+    await pilot.page.waitForFunction(
+      () => window.__WINGS.net.state().marioLives != null,
+      null,
+      { timeout: 10000 }
+    );
+    const seen = await pilot.page.evaluate(() => window.__WINGS.net.state().marioLives);
+    assert.equal(
+      seen,
+      livesBefore - 1,
+      `the pilot saw lives=${seen}; Mario had ${livesBefore} and spent one`
+    );
+
+    // Both clients cratered the same ground, from the server's key list.
+    const craters = await Promise.all([
+      mario.page.evaluate(() => window.__NET.damage('1-1').length),
+      pilot.page.evaluate(() => window.__WINGS.net.damage('1-1').length),
+    ]);
+    assert.ok(craters[0] > 0, 'Mario recorded no crater');
+    assert.equal(craters[0], craters[1], 'the two clients recorded different craters');
+  });
+
+  await t.test('a star Mario survives the same bomb, and the pilot is told nothing', async () => {
+    // The engine's one deliberate exception (MODS.md), and it has to hold over
+    // the wire too — which it can only do if the kill runs on Mario's machine,
+    // against Mario's state. The pilot's client has no idea he has a star.
+    const before = await pilot.page.evaluate(() => window.__WINGS.net.state().marioLives);
+    await mario.page.evaluate(async () => {
+      await window.__GAME.loadLevel('1-1');
+      window.__GAME.teleport(30, 12);
+      window.__GAME.tick(30);
+      window.__GAME.setPower('star');
+    });
+    await settle();
+    await pilot.page.evaluate(() => { window.__BOMB_R = 3; });
+
+    await bombMario();
+    await mario.page.waitForTimeout(800);
+    await mario.page.evaluate(() => {
+      for (let i = 0; i < 5; i++) window.__NET.pump();
+    });
+    await pilot.page.waitForTimeout(300);
+
+    const alive = await mario.page.evaluate(() => {
+      const p = window.__GAME.world.player;
+      return p.state !== 'dying' && !p.dead;
+    });
+    assert.ok(alive, 'a star Mario was killed by a networked blast');
+    const after = await pilot.page.evaluate(() => window.__WINGS.net.state().marioLives);
+    assert.equal(after, before, 'the pilot was told about a death that never happened');
+  });
+
+  await t.test('both clients reach the same verdict when the squadron is gone', async () => {
+    // The end of a match. The pilot's client owns the aeroplane and announces
+    // its loss; Mario's client mirrors the count it is given rather than
+    // keeping one of its own. Both then read the same verdict.
+    await pilot.page.evaluate(() => {
+      const sim = window.__WINGS.sim;
+      // Straight down into the sea, as many times as there are aeroplanes.
+      for (let i = sim.squadron; i > 0; i--) {
+        sim.lose('sea');
+        window.__WINGS.net.pump();
+      }
+    });
+    await mario.page.waitForFunction(
+      () => window.__NET.state().winner === 'mario',
+      null,
+      { timeout: 10000 }
+    );
+    const verdicts = await Promise.all([
+      mario.page.evaluate(() => window.__NET.state()),
+      pilot.page.evaluate(() => window.__WINGS.net.state()),
+    ]);
+    assert.equal(verdicts[0].winner, 'mario');
+    assert.equal(verdicts[1].winner, 'mario');
+    assert.equal(verdicts[0].matchStatus, verdicts[1].matchStatus);
+    // Mirrored, not recomputed: Mario's side has the pilot's number.
+    assert.equal(verdicts[0].squadron, 0);
+  });
+
   await t.test('a peer that leaves is announced and stops being drawn', async () => {
     await pilot.page.evaluate(() => window.__WINGS.net.session.close());
     await mario.page.waitForFunction(() => window.__NET.state().peer === false, null, { timeout: 10000 });

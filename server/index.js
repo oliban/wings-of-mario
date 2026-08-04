@@ -31,6 +31,11 @@ function fail(ws, reason) {
   send(ws, { t: MSG.ERROR, reason });
 }
 
+// Strict, unlike the global isFinite: '900' off a socket is not a coordinate.
+function num(v) {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
 export async function startServer(opts = {}) {
   const root = resolve(opts.root || REPO_ROOT);
   const rooms = opts.rooms || new Rooms();
@@ -149,6 +154,19 @@ export async function startServer(opts = {}) {
             // to BOTH clients, including the one that proposed it, so every
             // client's set is written by exactly one code path.
             const dmg = { t: MSG.DAMAGE, island: msg.d.island, keys: rec.added, seq: msg.seq };
+            // The blast's centre, carried through untouched. The server does
+            // not simulate and does not check it against the keys: it is the
+            // pilot's statement about his own bomb (spec 7.1), and Mario's
+            // client is the one that resolves a kill from it (spec 7.3). Both
+            // clients get the SAME numbers, which is the only thing this hop
+            // is for. Non-numbers are dropped rather than relayed, so a client
+            // cannot make the peer's protocol validator reject the broadcast.
+            const g = msg.d;
+            if (num(g.cx) && num(g.cy) && num(g.r)) {
+              dmg.cx = g.cx;
+              dmg.cy = g.cy;
+              dmg.r = g.r;
+            }
             send(ws, dmg);
             relay(dmg);
           } else {

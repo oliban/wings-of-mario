@@ -5,6 +5,8 @@ import { NetOverlay } from './mario-overlay.js';
 import { roomFromLocation, wsUrl, mintRoom, showRoom, banner, bootFailure } from './lobby.js';
 import { ISLAND_TOP_Y } from '../wings/geo.js';
 import { layoutArchipelago } from '../wings/archipelago.js';
+import { DamageSync, applyToWorld } from './damage-sync.js';
+import { MatchVerdict, MarioEvents, applyWire, mayEmitFrom } from './match-events.js';
 
 // Mario's half of the match. Like src/wings/debug-panel.js, this file talks to
 // the game ONLY through window.__GAME and builds any DOM it needs itself, so
@@ -29,6 +31,54 @@ export class MarioNet {
     // peer's Interp reads as "he reloaded".
     this.tick = 0;
     this._layout = null;
+
+    // Match bookkeeping. Each number is mirrored from whichever side owns it
+    // and NEVER recomputed here: `lives` is ours, `squadron` is the pilot's.
+    this.lives = null;
+    this.squadron = null;
+    this.verdict = new MatchVerdict();
+    this.events = new MarioEvents();
+    // This client's replica of the server's destroyed-tile map (decision D3).
+    this.damage = new DamageSync();
+    // The last blast that landed on the island Mario is standing on, for the
+    // shadow marker and the whistle to hang off (spec 4.2, Plan 4).
+    this.lastBlast = null;
+    this.lastBombRelease = null;
+    // Callbacks for whatever wants to draw the end of a match. Presentation,
+    // not state: the verdict above is the state.
+    this.onDeath = null;
+    this.onCleared = null;
+    this.onMatchOver = null;
+  }
+
+  get matchStatus() {
+    return this.verdict.status;
+  }
+
+  winner() {
+    return this.verdict.winner();
+  }
+
+  // Every outgoing event goes through here, so ownership is checked before a
+  // claim is made rather than after the server has refused it. The reducer runs
+  // on our own events too: both clients feed the SAME function the SAME set of
+  // events, which is what makes the two verdicts one verdict computed twice.
+  emit(type, d = {}) {
+    if (!this.session || !this.session.connected) return false;
+    if (!mayEmitFrom(this.session.side, type)) {
+      console.error('[mario net] refusing to claim', type, '- not ours to say');
+      return false;
+    }
+    const before = this.verdict.status;
+    applyWire(this.verdict, type, d);
+    this.session.sendEvent(type, d);
+    this._announce(before);
+    return true;
+  }
+
+  _announce(before) {
+    if (this.verdict.status === before || !this.verdict.over) return;
+    if (this.onMatchOver) this.onMatchOver(this.verdict.winner(), this.verdict.facts());
   }
 
   // Which island Mario is on. The engine calls it a level id; the network calls
@@ -81,12 +131,102 @@ export class MarioNet {
       this.desyncs.push(m);
       console.error('[DESYNC]', m.island, 'server', m.server, 'client', m.client);
     });
+    this.session.on('event', (m) => this.onPeerEvent(m));
+    this.session.on('damage', (m) => this.onDamage(m));
 
     const welcome = await this.session.connect();
     this.seed = welcome.seed;
     this._layout = null;
+    // Everything already destroyed in this match, from the welcome. Recorded,
+    // not applied: the tiles of a level that is not loaded have nowhere to go,
+    // and the engine subtracts them itself on the next load.
+    for (const [island, keys] of Object.entries(welcome.damage || {})) {
+      this.damage.record(island, keys);
+    }
     this.overlay.attach();
     return welcome;
+  }
+
+  // ---- the pilot's news ----------------------------------------------------
+
+  // Read, never recomputed. The squadron is the pilot's number and the plane's
+  // fate is the pilot's client's decision (spec 7.3); this side mirrors both.
+  onPeerEvent(m) {
+    const before = this.verdict.status;
+    applyWire(this.verdict, m.type, m.d);
+    if (m.type === 'planeLost') {
+      this.squadron = m.d.squadron;
+    } else if (m.type === 'sortieStart' || m.type === 'landed') {
+      this.squadron = m.d.squadron;
+    } else if (m.type === 'bombRelease') {
+      // Telegraphing (spec 4.2) is Plan 4. Recorded so the whistle and the
+      // shadow marker have something to hang off when it lands.
+      this.lastBombRelease = m.d;
+    }
+    this._announce(before);
+  }
+
+  // THE HIT RESOLUTION, and the reason this method is on Mario's side of the
+  // wire and not the pilot's.
+  //
+  // The pilot PROPOSED a detonation; the server recorded it and this is the
+  // fact coming back. `keys` is authoritative and identical on both clients.
+  // Whether it KILLED anything is decided here, on Mario's machine, against
+  // Mario's own hitbox, his own power state and the engine's own star
+  // exception — which is why the pilot's client never calls anything that can
+  // kill Mario, and could not do so correctly if it tried.
+  onDamage(m) {
+    // The replica first, and unconditionally: it is a copy of the server's set,
+    // not a record of what this client managed to draw (decision D1).
+    this.damage.record(m.island, m.keys);
+
+    const world = this.game && this.game.world;
+    if (!world || !m.island || m.island !== this.islandId()) return;
+    const originX = this.originOf(m.island);
+    const live = originX != null
+      && typeof m.cx === 'number' && typeof m.cy === 'number' && typeof m.r === 'number';
+
+    if (live) {
+      // Into the level-local frame Mario's engine works in.
+      const cx = m.cx - originX;
+      const cy = m.cy - ISLAND_TOP_Y;
+      this.lastBlast = { island: m.island, cx, cy, r: m.r, tick: this.tick };
+      // world.blast() = destroyTiles() + _blastKill(). The KILL is the half
+      // that only a live detonation is allowed to run, and only on the client
+      // that owns the thing being killed.
+      world.blast(cx, cy, m.r);
+    }
+    // The server's key list is the fact, so it is applied whatever the local
+    // radius arithmetic reached. SILENT — applyDamage, not destroyTiles or
+    // blast — because a second pass over the same crater must not be a second
+    // chance to kill anything standing in it.
+    applyToWorld(world, m.keys);
+  }
+
+  // ---- our own news --------------------------------------------------------
+
+  // Mario's client owns Mario, so it is the one that announces what happened to
+  // him. Everything is edge-triggered off state the engine already maintains;
+  // nothing new is simulated to produce an event.
+  emitOwnEvents() {
+    const world = this.game && this.game.world;
+    const p = world && world.player;
+    if (!p) return [];
+    this.lives = world.lives;
+    const out = this.events.step({
+      island: this.islandId(),
+      lives: world.lives,
+      dying: p.state === 'dying' || !!p.dead,
+      gameOver: world.state === 'gameover',
+      x: p.x,
+      y: p.y,
+    });
+    for (const e of out) {
+      this.emit(e.type, e.d);
+      if (e.type === 'marioDeath' && this.onDeath) this.onDeath(e.d);
+      if (e.type === 'islandCleared' && this.onCleared) this.onCleared(e.d);
+    }
+    return out;
   }
 
   pump() {
@@ -102,6 +242,7 @@ export class MarioNet {
         grounded: p.grounded ? 1 : 0, lives: world.lives,
       });
     }
+    this.emitOwnEvents();
     this.session.pump(this.tick);
 
     // The pilot's snapshot is in WORLD pixels. Convert into this island's local
@@ -136,6 +277,11 @@ export class MarioNet {
       peer: this.session ? this.session.peerPresent : false,
       island: this.islandId(),
       remote: this.remote ? { ...this.remote } : null,
+      lives: this.lives,
+      squadron: this.squadron,
+      matchStatus: this.matchStatus,
+      winner: this.winner(),
+      lastBlast: this.lastBlast ? { ...this.lastBlast } : null,
       desyncs: this.desyncs.length,
       stats: this.session ? this.session.stats() : null,
     };
@@ -224,6 +370,8 @@ window.__NET = {
   state: () => net.state(),
   remote: () => (net.remote ? { ...net.remote } : null),
   pump: () => net.pump(),
+  winner: () => net.winner(),
+  damage: (island) => net.damage.keys(island),
   latency: (ms) => (net.transport ? net.transport.latency(ms) : 0),
   drop: (pct) => (net.transport ? net.transport.drop(pct) : 0),
   disconnect: () => (net.transport ? net.transport.disconnect() : false),
