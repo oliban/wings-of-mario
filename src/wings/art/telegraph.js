@@ -1,5 +1,5 @@
-// Layers 2 and 3 of the telegraph: the shadow marker on the ground and the
-// screen-edge arrow.
+// Layers 2, 3 and 4 of the telegraph: the shadow marker on the ground, the
+// screen-edge arrow, and the bomb itself once it is low enough to be in shot.
 //
 // Everything here works in 256x240 GAME pixels on whole-pixel fillRects. The
 // overlay applies the display scale as a canvas transform before calling in,
@@ -17,6 +17,15 @@ export const TG_ART = {
   arrow: '#ff3b2f',
   // A one-pixel drop shadow under both, for legibility over bright ground.
   shadow: '#2a0a06',
+  // The bomb. Cold steel against a warm reticle: they are the two ends of the
+  // same warning and must never be confused for one another at a glance. All
+  // three are darker than SMB's sky and brighter than its pipe green, so the
+  // silhouette holds against both.
+  bombBody: '#4a5160',
+  bombLit: '#cfd6e2',
+  bombFin: '#20242e',
+  // The moment of arrival, one frame before the crater.
+  flash: '#fff3c4',
 };
 
 // Pointing +X (right). +Y is DOWN throughout this repo.
@@ -84,6 +93,23 @@ function stamp(ctx, grid, x, y, colour) {
   }
 }
 
+// The same, for a grid with more than one ink. `'*'` in the palette paints
+// every lit pixel regardless of its char, which is how the drop shadow is
+// stamped from the same grid as the sprite.
+function stampInks(ctx, grid, x, y, inks) {
+  for (let gy = 0; gy < grid.length; gy++) {
+    const row = grid[gy];
+    for (let gx = 0; gx < row.length; gx++) {
+      const ch = row[gx];
+      if (ch === '.') continue;
+      const colour = inks['*'] || inks[ch];
+      if (!colour) continue;
+      ctx.fillStyle = colour;
+      ctx.fillRect(x + gx, y + gy, 1, 1);
+    }
+  }
+}
+
 // The shadow marker. (cx, cy) is the CENTRE OF THE IMPACT TILE'S TOP EDGE in
 // game pixels — the reticle sits ON the ground it is about to remove, not
 // floating over it. `r` is the half-width from reticleRadius().
@@ -126,4 +152,115 @@ export function drawEdgeArrow(ctx, x, y, angle) {
   const oy = Math.round(y) - 3;
   stamp(ctx, grid, ox + 1, oy + 1, TG_ART.shadow);
   stamp(ctx, grid, ox, oy, TG_ART.arrow);
+}
+
+// ---------------------------------------------------------------------------
+// The bomb itself.
+//
+// Nine pixels, on the same sprite-grid principle as the arrows and for the
+// same reason: a rotated rect antialiases, and a bomb that goes soft at the
+// edges stops reading as a hard object against 8-bit scenery. `0` is the body,
+// `1` the specular line down its spine — dead centre, so it survives every
+// mirror and transpose below — and `2` the tail fins, which are what tell the
+// eye which end is the nose.
+const BOMB_S = [
+  '..2...2..',
+  '..2.1.2..',
+  '..22122..',
+  '...010...',
+  '...010...',
+  '...010...',
+  '...010...',
+  '...000...',
+  '....0....',
+];
+
+// Nose to the bottom-right. A three-wide band down the diagonal with the fins
+// stepped off the tail; drawn by hand rather than derived, because a rotated
+// 45-degree sprite has to be redrawn to stay readable.
+const BOMB_SE = [
+  '2.2......',
+  '0102.....',
+  '2010.....',
+  '.2010....',
+  '...010...',
+  '....010..',
+  '.....010.',
+  '......010',
+  '........0',
+];
+
+export const BOMBS = {
+  S: BOMB_S,
+  N: mirrorY(BOMB_S),
+  E: transpose(BOMB_S),
+  W: mirrorX(transpose(BOMB_S)),
+  SE: BOMB_SE,
+  SW: mirrorX(BOMB_SE),
+  NE: mirrorY(BOMB_SE),
+  NW: mirrorX(mirrorY(BOMB_SE)),
+};
+
+export function bombFor(angle) {
+  const turn = Math.PI * 2;
+  const a = ((angle % turn) + turn) % turn;
+  const octant = Math.round(a / (Math.PI / 4)) % 8;
+  return BOMBS[BY_OCTANT[octant]];
+}
+
+// Below this the bomb is hanging rather than falling and a speed streak behind
+// it would be a lie. Two px/frame is an eighth of terminal velocity.
+const TRAIL_SPEED = 2;
+const TRAIL_AT = [8, 12, 16];
+
+// (x, y) is the bomb's centre in GAME pixels, already camera-relative;
+// `angle` is atan2(vy, vx). opts: { speed } in px/frame, for the streak.
+export function drawFallingBomb(ctx, x, y, angle, opts = {}) {
+  const grid = bombFor(angle);
+  const cx = Math.round(x);
+  const cy = Math.round(y);
+
+  // The streak first, so the bomb sits on top of it: three dots receding along
+  // the reversed velocity, which is the path it has just come down. It is what
+  // makes a 9px sprite read as MOVING in a still frame — and a still frame is
+  // exactly what a player gets when he is deciding which way to run.
+  const speed = opts.speed || 0;
+  if (speed >= TRAIL_SPEED) {
+    ctx.fillStyle = TG_ART.shadow;
+    const ux = Math.cos(angle);
+    const uy = Math.sin(angle);
+    for (const d of TRAIL_AT) {
+      ctx.fillRect(Math.round(x - ux * d), Math.round(y - uy * d), 1, 1);
+    }
+  }
+
+  const ox = cx - 4;
+  const oy = cy - 4;
+  stampInks(ctx, grid, ox + 1, oy + 1, { '*': TG_ART.shadow });
+  stampInks(ctx, grid, ox, oy, {
+    0: TG_ART.bombBody,
+    1: TG_ART.bombLit,
+    2: TG_ART.bombFin,
+  });
+}
+
+// Arrival. `t` runs 0..1 over the handful of frames between the bomb reaching
+// its mark and the crater appearing, which is a network round trip away: this
+// is what stops those frames reading as the bomb having simply vanished.
+// A cross of whole pixels punching outward, no curves and no alpha.
+export function drawImpactFlash(ctx, x, y, t) {
+  if (t < 0 || t >= 1) return;
+  const cx = Math.round(x);
+  const cy = Math.round(y);
+  const r = Math.round(3 + 11 * t);
+  const arm = Math.max(1, Math.round(4 * (1 - t)));
+  ctx.fillStyle = t < 0.5 ? TG_ART.flash : TG_ART.core;
+  ctx.fillRect(cx - r, cy - 1, r * 2, 2);
+  ctx.fillRect(cx - 1, cy - r, 2, r * 2);
+  for (const sx of [-1, 1]) {
+    for (const sy of [-1, 1]) {
+      const d = Math.round(r * 0.7);
+      ctx.fillRect(cx + sx * d - (sx < 0 ? arm : 0), cy + sy * d, arm, 1);
+    }
+  }
 }

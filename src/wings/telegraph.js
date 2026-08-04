@@ -104,6 +104,25 @@ export function edgeArrow(shotX, shotY, cam) {
   return { x: sx, y: sy, angle: Math.atan2(shotY - cam.y - sy, shotX - cam.x - sx) };
 }
 
+// How far outside the camera a bomb is still worth drawing: half a sprite, so
+// it is already sliding into view while the edge arrow is still up. The two
+// are otherwise exact complements — edgeArrow() returns null precisely when
+// the bomb's centre is inside — and a hard swap on the same pixel makes the
+// thing the player is tracking blink out for a frame.
+export const BOMB_PAD = 6;
+
+// The falling bomb's own position on Mario's screen, in game pixels, or null
+// when it is not worth drawing. Same camera, same island-local input and the
+// same clamp arithmetic as edgeArrow, because the bomb and the arrow are two
+// halves of one indicator and must never both be missing.
+export function bombOnScreen(shotX, shotY, cam, pad = BOMB_PAD) {
+  if (!cam) return null;
+  const x = shotX - cam.x;
+  const y = shotY - cam.y;
+  if (x < -pad || x > cam.w + pad || y < -pad || y > cam.h + pad) return null;
+  return { x, y };
+}
+
 // Every bomb Mario knows about, integrated locally.
 //
 // He is TOLD a release — position, velocity, kind — and works out the rest
@@ -195,6 +214,12 @@ export class Telegraph {
         kind: shot.kind,
         x: shot.x,
         y: shot.y,
+        vx: shot.vx,
+        vy: shot.vy,
+        // A falling bomb points along its velocity. Same convention as the
+        // pilot's renderer, so the same object is drawn nose-down on both
+        // screens at the same instant.
+        angle: Math.atan2(shot.vy, shot.vx),
         pan: panFor(shot.x, marioX),
         impact: m,
         radius: m ? reticleRadius(m.ticks) : null,

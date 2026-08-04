@@ -4,6 +4,7 @@ import { WhistleVoice } from './whistle.js';
 import { WhistleSynth } from './whistle-audio.js';
 import { assertLocalY } from './geo.js';
 import { drawReticle, drawEdgeArrow } from './art/telegraph.js';
+import { BombSight } from './bomb-sight.js';
 
 // Mario's side of the telegraph.
 //
@@ -37,6 +38,7 @@ export class MarioOverlay {
     // themselves in here rather than each growing their own rAF loop.
     this.hooks = [];
     this.telegraph = new Telegraph({ surfaceAt: (px) => this.surfaceAt(px) });
+    this.sight = new BombSight(); // the falling bomb itself; owns no physics
     this.synth = opts.synth || new WhistleSynth();
     this.whistle = new WhistleVoice(opts.sink || ((o) => this.synth.play(o)));
   }
@@ -136,6 +138,7 @@ export class MarioOverlay {
 
   reset() {
     this.telegraph.clear();
+    this.sight.clear();
     this.whistle.reset();
     this.marks = [];
   }
@@ -189,7 +192,9 @@ export class MarioOverlay {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     const world = this.world;
-    if (!world || !world.level || !this.marks.length) return;
+    // No `!this.marks.length` here: the frame a bomb ARRIVES is a frame with
+    // no marks in it, and the sight has to be run on it to notice.
+    if (!world || !world.level) return;
     const cam = world.rcam;
     // From here on the context is in GAME pixels: the art module draws whole
     // 256x240 pixels and the transform scales them to the display.
@@ -208,6 +213,8 @@ export class MarioOverlay {
       const arrow = edgeArrow(m.x, m.y, cam);
       if (arrow) drawEdgeArrow(ctx, arrow.x, arrow.y, arrow.angle);
     }
+    // Last, over the reticle it is falling into.
+    this.sight.draw(ctx, this.marks, cam, this.frame);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
 }
