@@ -1,4 +1,5 @@
-import { PANEL, SHIP, SEA, PLANE, LAND } from './palette.js';
+import { PANEL, SHIP, SEA, PLANE, MARIO } from './palette.js';
+import { themeFor } from './mario-tiles.js';
 import { profileFor } from '../radar-terrain.js';
 
 // The instrument panel. In the original this is not a status line — it is a
@@ -191,20 +192,66 @@ function planIcon(ctx, x, y, s, colour) {
 // appears nowhere else on the panel so a browser test can count its pixels.
 export const RADAR_BLIP = '#b7ff5a';
 
+// The window's own sky and sea. Named because the terrain palette below is
+// chosen against them by measurement rather than by eye.
+export const RADAR_SKY = '#0f9be0';
+export const RADAR_SEA = '#123f70';
+
 // How tall a fully solid island stands above the radar's horizon. Ten of the
 // eighteen pixels between the horizon and the top of the window: enough that a
 // castle towers over an overworld shoreline, and it still leaves the aircraft
 // clear sky to fly in above the tallest terrain.
 const TERRAIN_H = 10;
 
-// Scorched land. Deliberately a long way from the orange — at one pixel wide
-// the only difference anyone will ever see is value, so a bombed stretch is
-// dark where clean land is bright, and loses its lit crest as well. Exported
-// for the same reason RADAR_BLIP is: it appears nowhere else on the panel, so
-// a browser test can count its pixels.
-export const RADAR_SCORCH = '#4d2417';
+// ---------------------------------------------------------------------------
+// The terrain palette: Mario's own ground, seen from the air
+// ---------------------------------------------------------------------------
+//
+// An island on this map used to be one invented orange whatever the level was.
+// It is now painted out of MARIO.EARTH — the same five-slot ramp the island
+// renderer draws the floor with, per theme — so the map and the thing the map
+// is OF agree about what colour a level is. One palette, two scales.
+//
+// That is worth more here than consistency alone: SMB's areas are colour-coded
+// and world 1 uses four different ones, so at a glance the strip now reads
+// brown / teal / green / blue-grey and the pilot has told 1-1 from 1-2 from
+// 1-3 from 1-4 before he has read a single silhouette.
+//
+// WHICH SLOTS, and why they are not the obvious ones. The ramp runs
+// [outline, shadow, body, lit, bright]. The natural choice for a landmass is
+// `lit` — and measured against this window's sky it is a trap. RADAR_SKY has a
+// luma of 130 and the `lit` slot of the five themes runs 113 to 136: every one
+// of them is within seventeen of the sky behind it. Faithful, and mud — a bar
+// the same value as its background has nothing but hue left to read with, at
+// three pixels tall. So the strip is built from the tiers that clear it:
+//
+//   shadow  the waterline and the lid overhead. 20-29 luma against a sea of
+//           57 — dark, and darker than the water it meets.
+//   body    the landmass itself. 65-80 in every theme, a step of ~60 down
+//           from the sky, and still the material's own hue.
+//   bright  the crest and the walkways. 156-171, a step of ~30 back up.
+//
+// Those numbers are asserted in tests/unit/radar-terrain.test.js, so a repaint
+// on the Mario side cannot quietly turn this window to mud.
+//
+// Legibility beats fidelity, and this is what that costs: the island is drawn
+// in its own colours, one tier darker than a screenshot would have it.
+const SHADOW = 1;
+const BODY = 2;
+const BRIGHT = 4;
+
+function earth(theme) {
+  return MARIO.EARTH[themeFor(theme)] || MARIO.EARTH.overworld;
+}
+
+// Scorched land. Deliberately NOT theme-aware, and deliberately darker than
+// every theme's body tone: damage has to mean the same thing on all four
+// islands, and it has to survive being read against a teal level and a
+// blue-grey one, not just against a brown one. It appears nowhere else on the
+// panel, so — like RADAR_BLIP — a browser test can count its pixels.
+export const RADAR_SCORCH = '#3a1a10';
 const BURNT = RADAR_SCORCH;
-const BURNT_LIT = '#7d3d24';
+const BURNT_LIT = '#6b3018';
 // Where a bomb has taken more than this share of a column's tiles, the column
 // reads as wrecked rather than merely dented. One bomb's crater is a couple of
 // dozen tiles against a bucket of ~160, so this is roughly "more than a single
@@ -234,11 +281,12 @@ function radarIsland(ctx, isle, toX, horizon) {
   const pw = Math.max(2, px1 - px0);
   const n = Math.max(2, Math.round(pw));
   const profile = isle.island ? profileFor(isle.island, n) : null;
+  const ramp = earth(isle.island && isle.island.level && isle.island.level.theme);
 
-  // No island object — a caller that only had spans. Fall back to the old
-  // solid bar rather than drawing nothing.
+  // No island object — a caller that only had spans. Fall back to a plain bar
+  // rather than drawing nothing.
   if (!profile) {
-    ctx.fillStyle = 'rgba(226,112,58,0.8)';
+    ctx.fillStyle = ramp[BODY];
     ctx.fillRect(px0, horizon - 4, pw, 4);
     return;
   }
@@ -255,18 +303,18 @@ function radarIsland(ctx, isle, toX, horizon) {
     // island flattened end to end would otherwise read as open sea, and the
     // pilot would lose both the landmark and the record of his own work.
     if (c.gap < GAP_AT || c.damage > 0) {
-      ctx.fillStyle = burnt || c.damage > 0 ? BURNT : LAND.earthDark;
+      ctx.fillStyle = burnt || c.damage > 0 ? BURNT : ramp[SHADOW];
       ctx.fillRect(cx, horizon, cw, 1);
     }
 
     const gh = Math.round(TERRAIN_H * Math.sqrt(Math.max(0, Math.min(1, c.ground))));
     if (gh > 0) {
-      ctx.fillStyle = burnt ? BURNT : 'rgba(226,112,58,0.85)';
+      ctx.fillStyle = burnt ? BURNT : ramp[BODY];
       ctx.fillRect(cx, horizon - gh, cw, gh);
       // A lit crest, so a one-pixel step in the silhouette is a step and not a
       // smudge. Scorched land does not get one: losing the highlight is half
       // of what makes a bombed stretch read as bombed.
-      ctx.fillStyle = burnt ? BURNT_LIT : LAND.sandLit;
+      ctx.fillStyle = burnt ? BURNT_LIT : ramp[BRIGHT];
       ctx.fillRect(cx, horizon - gh, cw, 1);
     }
 
@@ -276,7 +324,7 @@ function radarIsland(ctx, isle, toX, horizon) {
     // difference between that island and open sea.
     if (c.gap >= GAP_AT && c.shelf > 0) {
       const sh = Math.round(TERRAIN_H * Math.sqrt(Math.min(1, c.shelf)));
-      ctx.fillStyle = burnt ? BURNT_LIT : LAND.sand;
+      ctx.fillStyle = burnt ? BURNT_LIT : ramp[BRIGHT];
       ctx.fillRect(cx, horizon - Math.max(1, sh), cw, 1);
     }
 
@@ -284,7 +332,7 @@ function radarIsland(ctx, isle, toX, horizon) {
     // this single line is the whole difference between 1-2 and 1-1 at fifteen
     // pixels wide.
     if (c.roof >= ROOF_AT) {
-      ctx.fillStyle = burnt ? BURNT_LIT : LAND.rock;
+      ctx.fillStyle = burnt ? BURNT_LIT : ramp[SHADOW];
       ctx.fillRect(cx, horizon - TERRAIN_H, cw, 1);
     }
   }
@@ -307,9 +355,9 @@ function radar(ctx, x, y, w, h, sim, world, tick) {
 
   // Sea and sky, so the window reads as the same world you are flying in.
   // The window shows the same world: bright sky above, dark sea below.
-  ctx.fillStyle = '#0f9be0';
+  ctx.fillStyle = RADAR_SKY;
   ctx.fillRect(x, y, w, horizon - y);
-  ctx.fillStyle = '#123f70';
+  ctx.fillStyle = RADAR_SEA;
   ctx.fillRect(x, horizon, w, h - (horizon - y));
   ctx.strokeStyle = SEA.crest;
   ctx.lineWidth = 0.8;

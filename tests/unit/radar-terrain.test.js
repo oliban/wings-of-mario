@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TILE } from '../../src/core/constants.js';
 import { getLevel } from '../../src/data/levels/index.js';
+import { MARIO, luma } from '../../src/wings/art/palette.js';
+import { themeFor } from '../../src/wings/art/mario-tiles.js';
+import { RADAR_SKY, RADAR_SEA, RADAR_SCORCH } from '../../src/wings/art/hud.js';
 import { ISLAND_TOP_Y } from '../../src/wings/geo.js';
 import { Island } from '../../src/wings/island.js';
 import {
@@ -191,6 +194,78 @@ test('damage rebuilt from the wire matches damage done live', () => {
   const rebuilt = isle('1-1', live.keys());
   assert.deepEqual(terrainProfile(rebuilt, COLS), terrainProfile(live, COLS),
     'a bombed island looks different depending on how it got that way');
+});
+
+// ---------------------------------------------------------------------------
+// The palette
+//
+// The radar paints islands out of MARIO.EARTH, the same ramp the island
+// renderer uses, so the map and the thing it is a map OF agree about what
+// colour a level is. These guard the two things that can go wrong with that:
+// a repaint on the Mario side turning this window to mud, and craters being
+// swallowed by the new colours.
+// ---------------------------------------------------------------------------
+
+const SLOT = { shadow: 1, body: 2, lit: 3, bright: 4 };
+const sky = luma(RADAR_SKY);
+const sea = luma(RADAR_SEA);
+const themes = Object.keys(MARIO.EARTH);
+
+test('the landmass clears the sky it is drawn against', () => {
+  for (const t of themes) {
+    const body = luma(MARIO.EARTH[t][SLOT.body]);
+    assert.ok(sky - body > 40,
+      `${t} ground is luma ${body.toFixed(0)} against a sky of ${sky.toFixed(0)} — that is mud at three pixels tall`);
+  }
+});
+
+test('the obvious slot really is the trap the palette comment says it is', () => {
+  // If this ever stops holding, the radar should go back to `lit`, which is
+  // the more faithful choice. Until then the comment in hud.js has to be
+  // measurably true rather than merely plausible.
+  for (const t of themes) {
+    assert.ok(Math.abs(luma(MARIO.EARTH[t][SLOT.lit]) - sky) < 25,
+      `${t}'s lit tone now separates from the sky; reconsider which slot the radar draws`);
+  }
+});
+
+test('the crest reads above the sky and the waterline below the sea', () => {
+  for (const t of themes) {
+    assert.ok(luma(MARIO.EARTH[t][SLOT.bright]) - sky > 20, `${t} has no crest`);
+    assert.ok(sea - luma(MARIO.EARTH[t][SLOT.shadow]) > 20, `${t}'s waterline vanishes into the water`);
+  }
+});
+
+test('the four islands of world 1 are four different colours', () => {
+  // World 1 is overworld / underground / athletic / castle, so colour alone
+  // separates them before a silhouette is read. Compared on the body tone,
+  // which is the one that fills the strip.
+  const ids = ['1-1', '1-2', '1-3', '1-4'];
+  const body = (id) => MARIO.EARTH[themeFor(getLevel(id).theme)][SLOT.body];
+  const seen = new Set(ids.map(body));
+  assert.equal(seen.size, 4, `world 1 paints ${seen.size} distinct island colours, not 4`);
+  // Distinct hex is not distinct to an eye. Require a real channel spread too.
+  const rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const [a, b] = [rgb(body(ids[i])), rgb(body(ids[j]))];
+      const d = Math.max(...a.map((v, k) => Math.abs(v - b[k])));
+      assert.ok(d >= 25,
+        `${ids[i]} and ${ids[j]} differ by only ${d} in their strongest channel — same colour on the map`);
+    }
+  }
+});
+
+test('a crater still reads on every theme, not just the brown one', () => {
+  const scorch = luma(RADAR_SCORCH);
+  for (const t of themes) {
+    const body = luma(MARIO.EARTH[t][SLOT.body]);
+    assert.ok(body - scorch > 25,
+      `scorched land is luma ${scorch.toFixed(0)} against ${t} ground at ${body.toFixed(0)} — the damage disappears`);
+  }
+  // And it must not read as sea either: a bombed-flat stretch keeps a scorched
+  // waterline precisely so it does not turn into open water.
+  assert.ok(Math.abs(scorch - sea) > 15, 'scorched ground is the same value as the sea');
 });
 
 // ---------------------------------------------------------------------------
