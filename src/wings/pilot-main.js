@@ -4,6 +4,7 @@ import { PilotRenderer } from './pilot-renderer.js';
 import { Scene } from './scene.js';
 import { WingsSim } from './sim.js';
 import { takeoff, flyTo, bombTile, autoLand } from './bot.js';
+import { SPEED_TUNE, getMaxSpeed, setMaxSpeed } from './flight.js';
 
 const HEADLESS = new URLSearchParams(location.search).has('headless');
 if (HEADLESS) document.body.classList.add('headless');
@@ -32,6 +33,13 @@ const KEYMAP = {
   KeyK: 'drop',
   KeyX: 'fire',
   KeyJ: 'fire',
+  // DEBUG, not a game control — live top-speed tuning for playtesting the
+  // flight feel without a code change and a reload. See speedTune() and
+  // SPEED_TUNE in flight.js. Digits were unbound before this, and they stay
+  // out of the browser's way because the modifier guard in key() hands
+  // Cmd-1 (tab switching) straight back to Chrome untouched.
+  Digit1: 'speedDown',
+  Digit2: 'speedUp',
 };
 
 const keys = Object.create(null);
@@ -101,6 +109,52 @@ function readKeys() {
     fire: pending.fire || !!keys.fire,
     gear,
   };
+}
+
+// ---------------------------------------------------------------------------
+// DEBUG speed tuning readout — keys 1 and 2.
+// ---------------------------------------------------------------------------
+// A DOM badge rather than a box on the canvas HUD: the HUD is the aeroplane's
+// instrument panel and this is not an instrument, it is a developer control,
+// and it should LOOK like one so it cannot quietly be mistaken for a game
+// feature. It does not exist at all until the first press, so a player who
+// never touches the digits never sees it, and it says DEBUG on it in red for
+// the one who does.
+//
+// The readout is essential: MAX SPEED is a number you cannot see in the SPEED
+// box (which reads current airspeed), and a tuning control with no readout is
+// guesswork.
+let speedBadge = null;
+
+function showSpeedBadge(value) {
+  if (typeof document === 'undefined') return;
+  if (!speedBadge) {
+    speedBadge = document.createElement('div');
+    speedBadge.id = 'wings-debug-speed';
+    speedBadge.style.cssText = [
+      'position:fixed', 'left:8px', 'bottom:8px', 'z-index:50',
+      'padding:4px 8px', 'border-radius:4px', 'pointer-events:none',
+      'background:rgba(20,0,0,.82)', 'border:1px solid #d34',
+      'color:#ffb0b8', 'font:11px/1.4 ui-monospace,Menlo,monospace',
+      'letter-spacing:.08em', 'white-space:pre',
+    ].join(';');
+    document.body.appendChild(speedBadge);
+  }
+  const at = value === SPEED_TUNE.DEFAULT ? '  (default)'
+    : value === SPEED_TUNE.MIN ? '  (min)'
+      : value === SPEED_TUNE.MAX ? '  (max)' : '';
+  speedBadge.textContent = `DEBUG  MAX SPEED ${value.toFixed(1)}${at}\n1 slower   2 faster`;
+}
+
+// Moves the setting AND the aeroplane currently in the air. The setting is
+// what a plane built later (respawn, sail) will be born with; p.maxSpeed is
+// what the one you are flying right now uses, and the whole point is to feel
+// the change immediately rather than after a crash.
+function speedTune(sim, delta) {
+  const v = setMaxSpeed(getMaxSpeed() + delta * SPEED_TUNE.STEP);
+  if (sim && sim.plane) sim.plane.maxSpeed = v;
+  showSpeedBadge(v);
+  return v;
 }
 
 class Pilot {
@@ -184,6 +238,8 @@ class Pilot {
       if (name === 'gear') gear = !gear;
       if (name === 'drop') pending.drop = true;
       if (name === 'fire') pending.fire = true;
+      if (name === 'speedDown') speedTune(this.sim, -1);
+      if (name === 'speedUp') speedTune(this.sim, +1);
       if (name === 'respawn' && this.sim.plane.mode === 'down') {
         this.sim.respawn();
       }
@@ -362,6 +418,18 @@ window.__WINGS = {
 
   events() {
     return pilot.sim.events.map((e) => ({ ...e }));
+  },
+
+  // DEBUG speed tuning, the same thing keys 1 and 2 do — exposed so a test can
+  // drive it without synthesising key events. No argument reads the setting.
+  maxSpeed(v) {
+    if (v != null) {
+      const out = setMaxSpeed(v);
+      pilot.sim.plane.maxSpeed = out;
+      showSpeedBadge(out);
+      return out;
+    }
+    return getMaxSpeed();
   },
 
   respawn() {

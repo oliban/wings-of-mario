@@ -102,6 +102,106 @@ export const FLIGHT = {
   STALL_TURN_DRIFT: 0.9,
 };
 
+// ---------------------------------------------------------------------------
+// DEBUG ONLY — live speed tuning, keys 1 and 2 on the pilot page.
+// ---------------------------------------------------------------------------
+// This is a playtesting knob, not a game feature. Nothing in the match, the
+// network or the bot reads it; the default is FLIGHT.MAX_SPEED and at the
+// default this file behaves EXACTLY as it did before it existed (see
+// tunedFlight: at scale 1 it hands back the FLIGHT object itself, not a copy
+// with the same numbers, so not one arithmetic operation changes and the
+// exact-tick-count tests are untouched).
+//
+// WHAT THE KEYS ACTUALLY CHANGE, and why it is not MAX_SPEED alone.
+// MAX_SPEED is a clamp and the aeroplane does not reach it: level cruise is
+// sqrt(THRUST/DRAG) = 5.48 and a vertical dive sqrt((THRUST+GRAVITY)/DRAG) =
+// 8.37, both under the 9.0 clamp. Moving the clamp on its own would do
+// visibly nothing until it dropped below 8.37, and then it would only chop
+// the top off a dive. So the keys move the WHOLE speed scale, exactly the way
+// the aeroplane was doubled: MAX_SPEED is the number the pilot sets and reads,
+// and the accelerations and drag are re-derived from it so that real cruise
+// tracks it.
+//
+// The derivation, with s = maxSpeed / 9.0. Scaling every velocity by s while
+// leaving every DURATION alone means scaling every acceleration by s too, and
+// since drag goes as v-squared, D'(sv)^2 = s*Dv^2 gives D' = D/s. ROLL_DRAG is
+// LINEAR in speed, so it stays put. TAKEOFF_SPEED and STALL_TURN_DRIFT are
+// speeds and scale.
+//
+// What deliberately does NOT scale: STALL_SPEED and TURN_SPEED_REF, for the
+// reasons written against them above — they are anchored to the absolute
+// landing envelope in carrier.js, not to cruise, and scaling TURN_SPEED_REF
+// once already flew the scripted pilot into the carrier. TURN_RATE,
+// STALL_PULL and STALL_TURN_TICKS are rotations and durations, and durations
+// are the thing this scaling exists to preserve. The consequence is real and
+// wanted: a faster aeroplane turns in the same time, so it turns through more
+// sky, and a slower one is nimbler. That IS what changing the speed of an
+// aeroplane feels like.
+export const SPEED_TUNE = {
+  DEFAULT: 9.0,
+  // 4.5 is the aeroplane as it was before it was doubled — a known-good floor
+  // that is still comfortably above the 1.8 px/f top of the landing window and
+  // well clear of STALL_SPEED. 27 is three times the current aeroplane: fast
+  // enough to be silly, not so fast that it crosses a whole island between two
+  // ticks and can no longer be flown at all.
+  MIN: 4.5,
+  MAX: 27.0,
+  // A sixth of the default, so 9.0 sits exactly on the grid and every step is
+  // an exact binary fraction — the tuned value never picks up rounding fuzz.
+  STEP: 1.5,
+};
+
+let debugMaxSpeed = SPEED_TUNE.DEFAULT;
+
+export function getMaxSpeed() {
+  return debugMaxSpeed;
+}
+
+// Snaps to the step grid and clamps to the bounds, so no caller can put the
+// aeroplane outside the flyable range whatever it passes in. Returns the value
+// actually adopted. New planes (respawn, sail, a fresh sim) pick this up in
+// createPlane, which is what makes a tuned setting survive a crash — but it is
+// NOT persisted anywhere, so a reload gives back a standard 9.0 aeroplane.
+export function setMaxSpeed(v) {
+  const stepped = Math.round(v / SPEED_TUNE.STEP) * SPEED_TUNE.STEP;
+  debugMaxSpeed = clamp(stepped, SPEED_TUNE.MIN, SPEED_TUNE.MAX);
+  return debugMaxSpeed;
+}
+
+export function resetMaxSpeed() {
+  debugMaxSpeed = SPEED_TUNE.DEFAULT;
+  return debugMaxSpeed;
+}
+
+// The constants this particular aeroplane flies by. A pure function of the
+// plane's own state — nothing here reads a clock, the DOM or the tuning
+// variable above during a step, only p.maxSpeed, which is part of the plane
+// and therefore part of anything that snapshots or replays it.
+//
+// Memoised on the one value it depends on purely to keep a tuned aeroplane
+// from allocating a fresh table sixty times a second; the result is decided by
+// nothing but the argument.
+let tunedCache = null;
+export function tunedFlight(p) {
+  const target = p && p.maxSpeed != null ? p.maxSpeed : FLIGHT.MAX_SPEED;
+  // The default aeroplane gets the original object, not an equal one.
+  if (target === FLIGHT.MAX_SPEED) return FLIGHT;
+  if (tunedCache && tunedCache.MAX_SPEED === target) return tunedCache;
+  const s = target / FLIGHT.MAX_SPEED;
+  tunedCache = {
+    ...FLIGHT,
+    MAX_SPEED: target,
+    THRUST: FLIGHT.THRUST * s,
+    BRAKE: FLIGHT.BRAKE * s,
+    GRAVITY: FLIGHT.GRAVITY * s,
+    DRAG: FLIGHT.DRAG / s,
+    ROLL_THRUST: FLIGHT.ROLL_THRUST * s,
+    TAKEOFF_SPEED: FLIGHT.TAKEOFF_SPEED * s,
+    STALL_TURN_DRIFT: FLIGHT.STALL_TURN_DRIFT * s,
+  };
+  return tunedCache;
+}
+
 export const MODE = { DECK: 'deck', ROLL: 'roll', AIR: 'air', DOWN: 'down' };
 
 // Angle is measured from +X, clockwise on screen because +Y is down:
@@ -132,6 +232,11 @@ export function createPlane(opts = {}) {
     throttle: 0,
     gear: opts.gear != null ? !!opts.gear : true,
     fuel: opts.fuel != null ? opts.fuel : FLIGHT.FUEL_MAX,
+    // DEBUG tuning, see SPEED_TUNE. Part of the plane's state rather than a
+    // global the step reads, so the model stays a pure function of state and
+    // tick. Defaults to whatever the pilot has dialled in, which is how a
+    // tuned setting survives a respawn or a sail.
+    maxSpeed: opts.maxSpeed != null ? opts.maxSpeed : debugMaxSpeed,
     ticks: 0,
     // The stall turn in progress, or null. See stepTurn. turnTicks counts up
     // from 0; turnStartAngle and turnDelta fix the arc for its whole
@@ -160,9 +265,12 @@ export function stepPlane(p, input = {}) {
   p.throttle = power;
   if (input.gear != null) p.gear = !!input.gear;
 
-  if (p.mode === MODE.DECK || p.mode === MODE.ROLL) stepRoll(p, pitch, power);
-  else if (p.turnTicks != null) stepTurn(p);
-  else stepAir(p, pitch, thrust);
+  // The constants for THIS aeroplane. At the default max speed this is the
+  // FLIGHT object itself.
+  const F = tunedFlight(p);
+  if (p.mode === MODE.DECK || p.mode === MODE.ROLL) stepRoll(p, pitch, power, F);
+  else if (p.turnTicks != null) stepTurn(p, F);
+  else stepAir(p, pitch, thrust, F);
 
   p.fuel = Math.max(0, p.fuel - (FLIGHT.FUEL_IDLE + FLIGHT.FUEL_THROTTLE * power));
   p.ticks++;
@@ -171,7 +279,7 @@ export function stepPlane(p, input = {}) {
 
 // The takeoff roll. The plane is pinned to the deck, gains speed against
 // rolling friction, and only rotates once there is air over the wings.
-function stepRoll(p, pitch, throttle) {
+function stepRoll(p, pitch, throttle, F) {
   p.angle = 0;
   // On the deck the aeroplane is upright, facing right, by definition — no
   // stall turn survives a landing or a respawn either.
@@ -179,14 +287,14 @@ function stepRoll(p, pitch, throttle) {
   p.turnStartAngle = null;
   p.turnDelta = null;
   p.y = DECK_Y - PLANE_H;
-  p.speed += FLIGHT.ROLL_THRUST * throttle - FLIGHT.ROLL_DRAG * p.speed;
+  p.speed += F.ROLL_THRUST * throttle - F.ROLL_DRAG * p.speed;
   if (p.speed < 0) p.speed = 0;
   p.x += p.speed;
   p.vx = p.speed;
   p.vy = 0;
   p.mode = p.speed > 0 ? MODE.ROLL : MODE.DECK;
 
-  if (pitch > 0 && p.speed >= FLIGHT.TAKEOFF_SPEED) {
+  if (pitch > 0 && p.speed >= F.TAKEOFF_SPEED) {
     p.mode = MODE.AIR;
     p.gear = false;
     return;
@@ -220,9 +328,9 @@ function stepCeiling(p) {
 // mechanic: holding the arrow that agrees with your heading builds speed
 // toward MAX_SPEED, holding the one that disagrees bleeds it off, and running
 // it to zero while still disagreeing is what triggers stepTurn.
-function stepAir(p, pitch, thrust) {
-  const authority = Math.min(1, p.speed / FLIGHT.TURN_SPEED_REF);
-  p.angle = normalizeAngle(p.angle - pitch * FLIGHT.TURN_RATE * authority);
+function stepAir(p, pitch, thrust, F) {
+  const authority = Math.min(1, p.speed / F.TURN_SPEED_REF);
+  p.angle = normalizeAngle(p.angle - pitch * F.TURN_RATE * authority);
 
   const facing = Math.cos(p.angle) >= 0 ? 1 : -1;
   const braking = thrust === -facing;
@@ -233,15 +341,15 @@ function stepAir(p, pitch, thrust) {
   // off airspeed nobody meant to lose). A turn already commits its own
   // attitude in stepTurn; this stall-recovery drop would otherwise leave the
   // reversal starting, and so ending, a good 20-30 degrees off level.
-  if (p.speed < FLIGHT.STALL_SPEED && !braking) {
-    p.angle = turnToward(p.angle, Math.PI / 2, FLIGHT.STALL_PULL);
+  if (p.speed < F.STALL_SPEED && !braking) {
+    p.angle = turnToward(p.angle, Math.PI / 2, F.STALL_PULL);
   }
 
-  if (thrust === facing) p.speed += FLIGHT.THRUST;
-  else if (braking) p.speed -= FLIGHT.BRAKE;
-  p.speed += FLIGHT.GRAVITY * Math.sin(p.angle);
-  p.speed -= FLIGHT.DRAG * p.speed * p.speed;
-  p.speed = clamp(p.speed, 0, FLIGHT.MAX_SPEED);
+  if (thrust === facing) p.speed += F.THRUST;
+  else if (braking) p.speed -= F.BRAKE;
+  p.speed += F.GRAVITY * Math.sin(p.angle);
+  p.speed -= F.DRAG * p.speed * p.speed;
+  p.speed = clamp(p.speed, 0, F.MAX_SPEED);
 
   // Ran the airspeed to zero fighting it the whole way: arm the stall turn.
   // Speed is already 0 this tick (nothing left to move it with), so the
@@ -274,22 +382,22 @@ function stepAir(p, pitch, thrust) {
 // The manoeuvre commits once triggered: pitch and thrust input are ignored
 // for its whole duration, exactly like a real stall turn — a player already
 // mid-manoeuvre cannot un-commit from it by letting go.
-function stepTurn(p) {
+function stepTurn(p, F) {
   // Incremented before use, so the LAST tick of the manoeuvre lands at u=1
   // exactly (angle === turnStartAngle + turnDelta, precisely the reversed
   // heading) rather than one tick short of it.
   p.turnTicks++;
-  const u = clamp(p.turnTicks / FLIGHT.STALL_TURN_TICKS, 0, 1);
+  const u = clamp(p.turnTicks / F.STALL_TURN_TICKS, 0, 1);
   const eased = u * u * (3 - 2 * u); // smoothstep: symmetric, so the PI/2 dip still lands at u=0.5
   p.angle = normalizeAngle(p.turnStartAngle + p.turnDelta * eased);
-  p.speed = FLIGHT.STALL_TURN_DRIFT;
+  p.speed = F.STALL_TURN_DRIFT;
   p.vx = Math.cos(p.angle) * p.speed;
   p.vy = Math.sin(p.angle) * p.speed;
   p.x += p.vx;
   p.y += p.vy;
   stepCeiling(p);
 
-  if (p.turnTicks >= FLIGHT.STALL_TURN_TICKS) {
+  if (p.turnTicks >= F.STALL_TURN_TICKS) {
     p.turnTicks = null;
     p.turnStartAngle = null;
     p.turnDelta = null;
