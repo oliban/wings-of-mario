@@ -12,6 +12,18 @@ export const ORDNANCE = {
 
 export const ORDNANCE_KINDS = Object.keys(ORDNANCE);
 
+// The machine gun's cyclic rate, in SIMULATION TICKS between rounds — never
+// milliseconds. The sim runs at 60.0988Hz, so 6 ticks is ten rounds a second,
+// or about 600rpm: a real carrier fighter's browning, and 30 seconds of
+// continuous fire out of the 300-round magazine. Faster than this and the
+// magazine is gone in under twenty seconds and the screen is a wall of tracer;
+// slower and the thing reads as a pea-shooter rather than a machine gun.
+//
+// Ticks, not time, because the whole test strategy is that the same input tape
+// produces the same match: a wall-clock timer here would desync two clients
+// and make every replay a coin toss.
+export const GUN_INTERVAL = 6;
+
 // A fresh ammo rack: one counter per kind, seeded from ORDNANCE[kind].load.
 // Plain data — the caller owns the object and can serialize/replace it freely.
 export function createLoadout() {

@@ -2,7 +2,7 @@ import { TILE } from '../core/constants.js';
 import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import { landingVerdict, hitsHull, arrest, spotOnDeck } from './carrier.js';
-import { createLoadout, release, stepShot, detonate } from './ordnance.js';
+import { createLoadout, release, stepShot, detonate, GUN_INTERVAL } from './ordnance.js';
 import { Archipelago } from './archipelago.js';
 import { Radar } from './radar.js';
 
@@ -47,6 +47,11 @@ export class WingsSim {
     this.shots = [];
     this.dropHeld = false;
     this.fireHeld = false;
+    // Ticks still to wait before the gun will fire again. Zero means ready,
+    // which is why a fresh press always shoots on the very tick it arrives.
+    // `gunDry` is "the click has already sounded for this dry trigger".
+    this.gunCooldown = 0;
+    this.gunDry = false;
     this.cam = cameraFor(this.plane.x, this.plane.y, this.bounds);
     this.rearm();
   }
@@ -54,6 +59,8 @@ export class WingsSim {
   rearm() {
     this.plane.fuel = FLIGHT.FUEL_MAX;
     this.loadout = createLoadout();
+    // A full belt can run dry again, and should click again when it does.
+    this.gunDry = false;
   }
 
   // The HUD's ordnance counters, as views onto the one loadout.
@@ -87,18 +94,66 @@ export class WingsSim {
   // Ordnance
   // -------------------------------------------------------------------------
 
-  // Edge-triggered, on the rising edge of each input flag: holding the key
+  // The BOMB is edge-triggered, on the rising edge of `drop`: holding the key
   // down drops ONE bomb, not one per tick. The keyboard latch in
   // pilot-main.js means a press and release that both land between two ticks
   // still arrives here as one tick of `drop`, so a quick tap is never eaten.
+  //
+  // The GUN repeats — see stepGun. That is the one asymmetry, and it is the
+  // right one: you aim a bomb, you hose with a gun.
   triggers(input) {
     const drop = !!input.drop;
     const fire = !!input.fire;
     const armed = this.plane.mode === MODE.AIR;
     if (armed && drop && !this.dropHeld) this.launch('bomb');
-    if (armed && fire && !this.fireHeld) this.launch('gun');
+    this.stepGun(armed && fire, !this.fireHeld);
     this.dropHeld = drop;
     this.fireHeld = fire;
+  }
+
+  // Hold the trigger and the gun keeps firing: one round, then another every
+  // GUN_INTERVAL ticks until the trigger comes up or the belt runs out.
+  //
+  // The first round is IMMEDIATE rather than one interval late, which is what
+  // makes a snap shot at something crossing the nose feel like a trigger and
+  // not like a request. `pressed` (the rising edge) also zeroes the cooldown,
+  // so tapping deliberately is never slower than holding — a leftover cooldown
+  // from a burst you just released must not eat the next press.
+  //
+  // Counted in TICKS. Nothing here reads a clock, so a replayed input tape
+  // spends the magazine round for round, which is what the netplay desync
+  // checks and the bot primitives rest on.
+  stepGun(firing, pressed) {
+    if (!firing) {
+      this.gunCooldown = 0;
+      this.gunDry = false;
+      return;
+    }
+    if (pressed) {
+      this.gunCooldown = 0;
+      this.gunDry = false;
+    }
+    if (this.gunCooldown > 0) {
+      this.gunCooldown--;
+      return;
+    }
+    if (this.loadout.gun > 0) {
+      this.launch('gun');
+      this.gunCooldown = GUN_INTERVAL - 1;
+      return;
+    }
+    // Empty. ONE click per dry trigger, on the tick the round should have gone
+    // off — which is the tick the belt runs out, not the tick you pressed. The
+    // usual way to run dry is leaning on the trigger, so a click that only
+    // sounded on the rising edge would be silent in exactly the case that
+    // matters and you would never learn why the gun stopped.
+    //
+    // And exactly one: a dead trigger held down must not click ten times a
+    // second or fill the event log at the same rate the gun used to fire. The
+    // cooldown stays at zero, so a landing that rearms the aeroplane has the
+    // held trigger firing again on the very next tick.
+    if (!this.gunDry) this.emit('dryFire', { kind: 'gun' });
+    this.gunDry = true;
   }
 
   // Spend one round and put it in the air. Running dry is normal, not a bug:

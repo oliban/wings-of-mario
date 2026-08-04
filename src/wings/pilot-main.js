@@ -38,12 +38,18 @@ const keys = Object.create(null);
 let scripted = null;
 let gear = true;
 
-// Weapon releases are edge-triggered, and a press-and-release can easily land
-// entirely between two simulation ticks (or several, on a dropped frame).
-// So a keydown LATCHES here and the latch is cleared once the tick that saw
-// it has run: a tap is never eaten, and holding the key still spends exactly
-// one round, because the browser's auto-repeat keydowns are filtered out
-// before they ever reach the latch.
+// A press-and-release can easily land entirely between two simulation ticks
+// (or several, on a dropped frame). So a keydown LATCHES here and the latch is
+// cleared once the tick that saw it has run: a tap is never eaten, however
+// briefly it happened.
+//
+// The latch is only ever a floor. The BOMB is that and nothing else, so
+// holding Space spends exactly one bomb — the browser's auto-repeat keydowns
+// are filtered out before they reach the latch, and after the first tick the
+// flag is false again however long the key stays down. The GUN adds the held
+// state on top (see readKeys), because a machine gun you have to tap is not a
+// machine gun; the repeat RATE is not decided here but in sim.js, in ticks,
+// where the scripted path gets it too.
 const pending = { drop: false, fire: false };
 
 // WHICH WAY THE STICK TURNS THE AIRFRAME.
@@ -89,7 +95,10 @@ function readKeys() {
     // on which way the aeroplane is actually travelling.
     thrust: (keys.right ? 1 : 0) + (keys.left ? -1 : 0),
     drop: pending.drop,
-    fire: pending.fire,
+    // The trigger, not a trigger press: true for every tick X is down, so the
+    // gun keeps firing while held. The latch is OR'd in so a tap shorter than
+    // one tick still gets its round. sim.js meters the rate from this.
+    fire: pending.fire || !!keys.fire,
     gear,
   };
 }
@@ -186,8 +195,9 @@ class Pilot {
     if (this.fatal) return;
     try {
       this.sim.step(readKeys());
-      // The tick has seen the latch; a second tick must not fire the same
-      // press again.
+      // The tick has seen the latch; a second tick must not re-fire the same
+      // press. What keeps the gun going after this is the held key itself,
+      // not the latch.
       pending.drop = false;
       pending.fire = false;
       this.trackAttitude();
