@@ -32,42 +32,63 @@ test('the radar draws terrain, not bars', async (t) => {
     };
   }, [CELLS.radar, HUD_H, VIEW_H]);
 
-  // The height of the ground in every column of the radar window, counted UP
-  // from the horizon. A row of solid bars gives one height per island; terrain
-  // gives many.
+  // What the ISLANDS put on the glass, and nothing else.
   //
-  // Counted from the horizon rather than down from the top on purpose: a
-  // roofed island's topmost mark is its lid, which is flat by construction, so
-  // a top-down scan would report 1-2 and 1-4 as bars when their ground is the
-  // most interesting on the map.
-  const skyline = () =>
+  // The first version of this asked "how far is this pixel from the sky", and
+  // an upstream level regeneration moved the archipelago far enough that a
+  // range-graticule line landed on a hole in 1-3 — where the instrument's own
+  // horizon crest crosses that graticule the blend clears any such threshold,
+  // and the test reported the radar painting a blue it never painted. The
+  // threshold was the bug: the window is full of the instrument's own washes
+  // (crest, graticule, sweep beam) and no distance from the sky separates them
+  // from terrain reliably.
+  //
+  // So take the difference of two frames instead. Render once as normal and
+  // once with sim.islands emptied, at the SAME tick so the sweep beam is
+  // identical, and every pixel that differs is exactly what the islands
+  // painted. No threshold, no guessing, and it gets stronger rather than
+  // weaker: terrain drawn in a colour close to the sky would now be caught too.
+  const paint = () =>
     page.evaluate((r) => {
-      const buf = window.__WINGS.renderer.buffer;
-      const px = buf.getContext('2d').getImageData(r.x, r.y, r.w, r.h).data;
-      const at = (cx, cy) => {
-        const i = (cy * r.w + cx) * 4;
-        return [px[i], px[i + 1], px[i + 2]];
-      };
-      // The radar's sky is one flat colour; sample it past the last island,
-      // above everything, rather than naming it here.
-      const sky = at(r.w - 2, 0);
-      // The sweep beam and the range graticule are washes of a few per cent
-      // over that sky. Terrain is opaque and nothing like it, so a generous
-      // threshold reads the land and ignores the instrument's own furniture.
-      const land = (cx, cy) => {
-        const p = at(cx, cy);
-        return Math.max(...p.map((v, i) => Math.abs(v - sky[i]))) > 60;
-      };
-      // The waterline sits ON the horizon row; the ground stacks above it.
+      const W = window.__WINGS;
+      const g = W.renderer.buffer.getContext('2d');
+      const grab = () => g.getImageData(r.x, r.y, r.w, r.h).data;
+
+      const withIslands = grab();
+      const saved = W.sim.islands;
+      W.sim.islands = [];
+      W.tick(0); // re-render only: tick(0) advances nothing, so the beam holds
+      const bare = grab();
+      W.sim.islands = saved;
+      W.tick(0);
+
       const horizon = Math.round(r.h / 2);
-      const out = [];
+      // colour[cx][cy] for island pixels, null everywhere else.
+      const isIsland = (i) =>
+        withIslands[i] !== bare[i] ||
+        withIslands[i + 1] !== bare[i + 1] ||
+        withIslands[i + 2] !== bare[i + 2];
+
+      // The ground silhouette: contiguous island pixels counted UP from the
+      // horizon. A row of solid bars gives one height per island; terrain gives
+      // many.
+      const heights = [];
+      const colours = [];
       for (let cx = 0; cx < r.w; cx++) {
         let n = 0;
-        while (n < horizon && land(cx, horizon - 1 - n)) n++;
-        out.push(n);
+        while (n < horizon && isIsland(((horizon - 1 - n) * r.w + cx) * 4)) n++;
+        heights.push(n);
+        const seen = new Set();
+        for (let cy = 0; cy < r.h; cy++) {
+          const i = (cy * r.w + cx) * 4;
+          if (isIsland(i)) seen.add(`${withIslands[i]},${withIslands[i + 1]},${withIslands[i + 2]}`);
+        }
+        colours.push([...seen]);
       }
-      return out;
+      return { heights, colours };
     }, rect);
+
+  const skyline = async () => (await paint()).heights;
 
   const countScorch = () =>
     page.evaluate(([r, hex]) => {
@@ -127,52 +148,37 @@ test('the radar draws terrain, not bars', async (t) => {
   });
 
   await t.test('each island is painted in its own theme, off Mario\'s own ramp', async () => {
-    // Every colour the island actually paints, straight off the framebuffer.
-    // If the radar and the island renderer ever disagree about what colour a
-    // level is, the map stops being a map of the thing you are looking at, and
-    // this is where that shows up.
-    //
-    // A set rather than "the commonest colour": 1-3 is mostly void, so the
-    // dominant pixel over its span is sky, and the question being asked is not
-    // how much it paints but whether what it paints came from the right ramp.
-    const painted = await page.evaluate(
-      ([r, spans]) => {
-        const buf = window.__WINGS.renderer.buffer;
-        const px = buf.getContext('2d').getImageData(r.x, r.y, r.w, r.h).data;
-        const at = (cx, cy) => {
-          const i = (cy * r.w + cx) * 4;
-          return [px[i], px[i + 1], px[i + 2]];
-        };
-        const sky = at(r.w - 2, 0);
-        const horizon = Math.round(r.h / 2);
-        return spans.map(([a, b]) => {
-          const seen = new Set();
-          for (let cx = a; cx < b; cx++) {
-            for (let cy = horizon - 12; cy <= horizon; cy++) {
-              const p = at(cx, cy);
-              // Land only: the sea, the sky and the instrument's own washes
-              // over them are not what this is measuring.
-              if (Math.max(...p.map((v, i) => Math.abs(v - sky[i]))) > 60) seen.add(p.join(','));
-            }
-          }
-          return [...seen].sort();
-        });
-      },
-      [rect, islands.list.map(cols)]
-    );
+    // Every colour the island actually adds to the glass. If the radar and the
+    // island renderer ever disagree about what colour a level is, the map stops
+    // being a map of the thing you are looking at, and this is where it shows.
+    const { colours } = await paint();
 
     const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(',');
-    islands.list.forEach((isle, i) => {
+    for (const isle of islands.list) {
+      const [a, b] = cols(isle);
       const ramp = MARIO.EARTH[themeFor(getLevel(isle.id).theme)];
       // shadow (waterline and lid), body (the landmass), bright (crest and
       // walkways) — and nothing else. See the palette note in hud.js.
       const allowed = new Set([ramp[1], ramp[2], ramp[4]].map(rgb));
-      for (const c of painted[i]) {
+      const painted = new Set();
+      // Widened by two columns each side: the island's own rounding of its
+      // left edge and this test's need not agree to the pixel, and the frame
+      // difference is exact, so an extra column of open ocean contributes
+      // nothing.
+      for (let cx = Math.max(0, a - 2); cx < Math.min(colours.length, b + 2); cx++) {
+        for (const c of colours[cx]) painted.add(c);
+      }
+      for (const c of painted) {
         assert.ok(allowed.has(c),
           `${isle.id} paints ${c}, which is not in its ${getLevel(isle.id).theme} EARTH ramp`);
       }
-      assert.ok(painted[i].includes(rgb(ramp[2])), `${isle.id} never paints its own ground tone`);
-    });
+      assert.ok(painted.has(rgb(ramp[2])), `${isle.id} never paints its own ground tone`);
+      // An island nobody can see is the failure this whole instrument exists to
+      // avoid — and an athletic level, which is platforms over open water with
+      // barely any floor, is where that would happen first.
+      assert.ok(painted.size >= 2,
+        `${isle.id} puts almost nothing on the glass — it would read as empty sea`);
+    }
 
     const bodies = islands.list.map((isle) => rgb(MARIO.EARTH[themeFor(getLevel(isle.id).theme)][2]));
     assert.equal(new Set(bodies).size, 4,

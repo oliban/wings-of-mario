@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TILE } from '../../src/core/constants.js';
-import { getLevel } from '../../src/data/levels/index.js';
+import { getLevel, LEVELS } from '../../src/data/levels/index.js';
 import { MARIO, luma } from '../../src/wings/art/palette.js';
 import { themeFor } from '../../src/wings/art/mario-tiles.js';
 import { RADAR_SKY, RADAR_SEA, RADAR_SCORCH } from '../../src/wings/art/hud.js';
@@ -194,6 +194,49 @@ test('damage rebuilt from the wire matches damage done live', () => {
   const rebuilt = isle('1-1', live.keys());
   assert.deepEqual(terrainProfile(rebuilt, COLS), terrainProfile(live, COLS),
     'a bombed island looks different depending on how it got that way');
+});
+
+// ---------------------------------------------------------------------------
+// No island may be invisible
+//
+// The profile leads with the ground silhouette, and an ATHLETIC level — Super
+// Mario Bros.' tree-top stage — is platforms suspended over open water with
+// barely any floor under them. That is exactly the shape that a ground-first
+// derivation could reduce to nothing, and an island the pilot cannot see on his
+// hunting instrument is worse than a bar: he flies to what looks like empty
+// ocean. The suspended-shelf mark exists for this, and this is the test that
+// says so for every level upstream ships rather than for the four in world 1.
+// ---------------------------------------------------------------------------
+
+// What the instrument puts on the glass for a column: ground, or a walkway
+// over a hole, or a lid. Mirrors the three marks in hud.js's radarIsland.
+function marked(c) {
+  return c.ground > 0 || (c.gap >= 0.5 && c.shelf > 0) || c.roof >= 0.5;
+}
+
+test('every level in the registry draws an island, not a stretch of empty sea', () => {
+  const worst = [];
+  for (const id of Object.keys(LEVELS)) {
+    const p = terrainProfile(new Island(LEVELS[id], ORIGIN), COLS);
+    const drawn = p.filter(marked).length / p.length;
+    worst.push([drawn, id, LEVELS[id].theme]);
+    assert.ok(drawn > 0.75,
+      `${id} (${LEVELS[id].theme}) marks only ${(drawn * 100).toFixed(0)}% of its columns — a pilot would fly to open water`);
+  }
+  worst.sort((a, b) => a[0] - b[0]);
+  assert.ok(worst[0][0] > 0.75, `the thinnest island is ${worst[0][1]} at ${(worst[0][0] * 100).toFixed(0)}%`);
+});
+
+test('an athletic level is carried by its walkways, not by its floor', () => {
+  // The mechanism, stated so it cannot be removed by accident: on 1-3 the
+  // ground bar covers a third of the strip and the shelf marks carry the rest.
+  // Delete the shelf and this island loses two thirds of itself.
+  const p = terrainProfile(new Island(LEVELS['1-3'], ORIGIN), COLS);
+  const ground = p.filter((c) => c.ground > 0).length / p.length;
+  const shelf = p.filter((c) => !(c.ground > 0) && c.gap >= 0.5 && c.shelf > 0).length / p.length;
+  assert.ok(ground < 0.5, `1-3 is supposed to be mostly void; ${(ground * 100).toFixed(0)}% has floor`);
+  assert.ok(shelf > 0.4, `only ${(shelf * 100).toFixed(0)}% of 1-3 is carried by walkways`);
+  assert.ok(ground + shelf > 0.85, '1-3 has stretches that draw nothing at all');
 });
 
 // ---------------------------------------------------------------------------
