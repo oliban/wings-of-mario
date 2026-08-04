@@ -187,8 +187,16 @@ test('two browsers in one room', { timeout: 180000 }, async (t) => {
       // once: Mario's 256px overlay, which the aeroplane must be inside when
       // the ink is counted, and the pilot's own 445px viewport, which MARIO
       // must be inside a moment later for the cull test below.
+      // STOPPING EAST OF MARIO, not west. It used to stop 140px short of him,
+      // which worked while his camera was free to scroll: 140px west of Mario
+      // was still inside his 256px window. An upstream regeneration moved
+      // 1-1's spawn to x:1, so he now starts hard against the left edge of his
+      // level, his camera CLAMPS at 0, and everything west of him is off the
+      // screen entirely — the aeroplane sat at screen -148 and the overlay was
+      // blank. Overshooting him slightly is inside his window wherever the
+      // camera happens to be, clamped or not.
       window.__WINGS.flyTo(r.x - 700, r.y - 120, 6000, { speed: 1.2 });
-      const ok = window.__WINGS.flyTo(r.x - 140, r.y - 48, 6000, { speed: 1.2 });
+      const ok = window.__WINGS.flyTo(r.x + 60, r.y - 48, 6000, { speed: 1.2 });
       // The bot primitives drive the sim directly and bypass pilot.update(),
       // so nothing has been transmitted yet; these ticks are what send it.
       //
