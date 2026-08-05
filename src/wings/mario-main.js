@@ -1,6 +1,8 @@
 import { TILE } from '../core/constants.js';
 import { MarioOverlay } from './mario-overlay.js';
 import { FerryRide } from './ferry-ride.js';
+import { Parcel } from './parcel.js';
+import { tileForChar } from '../data/tiles.js';
 // The networked half of Mario's page (window.__NET). Imported here rather than
 // given its own <script> tag because index.html is upstream and this module is
 // already the wings layer's entry point on it: the ENTIRE upstream footprint of
@@ -36,6 +38,24 @@ overlay.hooks.push((world) => ride.update(world));
 // shove him twice on a fast one. The overlay's hook list is the only fixed
 // timestep this page has, which is why the ferry is already on it.
 overlay.hooks.push((world) => net.stepGun(world));
+
+// THE PARCEL. On the same hook list and for the same reason as the ferry and
+// the gun: it is the only fixed 60.0988Hz timestep this page has, and a rule
+// about whether Mario can jump something must be evaluated on the clock his
+// jump is evaluated on. See src/wings/parcel.js for what it decides and
+// src/wings/stranded.js for how — the decision is Mario's client's to make,
+// because only this client has his level, his position and his physics.
+// tileForChar is handed in rather than imported by parcel.js: src/data/tiles.js
+// builds every sprite in the game at module load and needs a canvas, and the
+// parcel's own tests are plain Node. This page has a canvas, so this is where
+// the two meet.
+const parcel = new Parcel({
+  solidChar: (ch) => {
+    const rec = tileForChar(ch);
+    return !!(rec && (rec.solid || rec.platform));
+  },
+});
+overlay.hooks.push((world) => parcel.step(world));
 
 // THE CARRIER GROUP SAILING, on Mario's screen. On the same hook list as the
 // ferry and the gun, and for the same reason: it is the only fixed 60.0988Hz
@@ -182,6 +202,16 @@ window.__TELEGRAPH = {
     overlay.synth.log.length = 0;
     return true;
   },
+};
+
+// The parcel's scripted surface. Read-only on purpose: there is no method here
+// that hands Mario a toolbelt, because a test that could ask for one would
+// never prove that walking up to a cratered chasm gets him one.
+window.__PARCEL = {
+  // How many have been delivered this session, and what the last scan decided —
+  // `{ parcel, gap, reason }`, the shape strandedBy() returns.
+  given: () => parcel.given,
+  last: () => (parcel.last ? { ...parcel.last } : null),
 };
 
 // The sail's scripted surface. `begin()` is what a test calls to put the group
