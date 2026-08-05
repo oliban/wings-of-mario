@@ -3,6 +3,8 @@ import { MarioOverlay } from './mario-overlay.js';
 import { FerryRide } from './ferry-ride.js';
 import { Parcel } from './parcel.js';
 import { ToolbeltSeeder } from './toolbelt-blocks.js';
+import { guardThrow } from './flat-throw.js';
+import { BRICKBOMB_GRAVITY } from '../game/entities/brickbomb.js';
 import { tileForChar } from '../data/tiles.js';
 // The networked half of Mario's page (window.__NET). Imported here rather than
 // given its own <script> tag because index.html is upstream and this module is
@@ -71,6 +73,18 @@ overlay.hooks.push((world) => parcel.step(world));
 // the block system.
 const toolbelts = new ToolbeltSeeder();
 overlay.hooks.push((world) => toolbelts.step(world));
+
+// THE STANDING THROW. Upstream's launch is a pure function of how fast Mario is
+// moving, so at a standstill the bomb goes straight up and the row of bricks
+// forms over his head — useless to the one player who most needs it, the man
+// standing on the lip of a chasm who cannot run at it without running into it.
+// src/wings/flat-throw.js solves a lob that lands three tiles ahead at the
+// level of the ground he is on. A throw with any run behind it is untouched.
+//
+// On the hook list because it wraps the WORLD instance and the world is not
+// there at module time; the wrap is idempotent, so calling it every tick costs
+// one property read.
+overlay.hooks.push((world) => guardThrow(world, { gravity: BRICKBOMB_GRAVITY, tileSize: TILE }));
 
 // THE CARRIER GROUP SAILING, on Mario's screen. On the same hook list as the
 // ferry and the gun, and for the same reason: it is the only fixed 60.0988Hz
