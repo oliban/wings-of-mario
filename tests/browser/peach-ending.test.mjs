@@ -124,6 +124,10 @@ test('the princess ends the game and starts a harder one', { timeout: 180000 }, 
   });
 
   await t.test('a game over ends the quest: the next run from the title is quest 1', async () => {
+    // Let the new run's intro card finish first: onGameOver on top of a live
+    // showIntro would leave that card's promise unresolved and the restart
+    // half-run, which is a fixture problem and not the thing under test.
+    await tick(300);
     await page.evaluate(() => {
       window.__GAME.game.onGameOver();
     });
