@@ -33,7 +33,7 @@ const TILES = [
 export default {
   id: '7-4',
   name: 'WORLD 7-4',
-  time: 300,
+  time: 400,
   theme: 'castle',
   music: 'castle',
   width: 221,
