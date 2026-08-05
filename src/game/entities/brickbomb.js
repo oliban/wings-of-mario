@@ -134,6 +134,11 @@ const THROW_DIR_EPS = 0.12;
 // run. Chosen so t = 1 lands on 25 frames exactly.
 const THROW_DESCENT_SHARE = 1.2;
 
+// However fast Mario is falling, the bomb still leaves his hand going up by at
+// least this much. Below about 3 it no longer clears his own body before the
+// fuse ends.
+const MIN_LAUNCH_RISE = 3.5;
+
 // The longest a fuse can ever be, so callers that want a bound have one.
 export const BRICKBOMB_FUSE = 25;
 
@@ -223,7 +228,19 @@ export function launchState(thrower, dir) {
   const ang = t * (Math.PI / 4); // measured from straight up
   const power = THROW_POWER_MIN + (THROW_POWER_MAX - THROW_POWER_MIN) * t;
   const vx = d * power * Math.sin(ang);
-  const vy = -power * Math.cos(ang);
+
+  // THE HAND IS MOVING TOO. Mario climbs under jump-hold gravity, which is far
+  // gentler than the bomb's 0.42, so a bomb thrown early in a jump was simply
+  // outrun: he sailed up past it and it went off around his knees, two rows
+  // BELOW his own head. Every tile of that row is inside him, so it built
+  // nothing and puffed — "it lands on me and poofs". Inheriting his vertical
+  // speed is both the fix and the honest physics: a grenade let go from a
+  // rising hand rises with it.
+  //
+  // Clamped so it always leaves the hand climbing. Inheriting a fast DESCENT
+  // unaltered would fire it straight into his own legs, which is the same bug
+  // upside down.
+  const vy = Math.min(-power * Math.cos(ang) + num(thrower.vy, 0), -MIN_LAUNCH_RISE);
 
   // Burn to the apex, then a share of the way back down that grows with t. The
   // climb is not rounded before it is scaled — rounding first costs a frame at
