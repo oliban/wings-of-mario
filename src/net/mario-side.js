@@ -231,6 +231,18 @@ export class MarioNet {
 
     const world = this.game && this.game.world;
     if (!world || !m.island || m.island !== this.islandId()) return;
+    // A BOMB CANNOT REACH DOWN A PIPE. The engine keeps `levelId` at '1-1' for
+    // the whole of 1-1 including its sub-areas, so islandId() says '1-1' while
+    // Mario is standing in the underground coin room or a warp zone — and the
+    // key '40,9' means one tile on the surface and an entirely different tile
+    // down there. Applying the surface's craters to a sub-area's tile map ate
+    // blocks nothing was ever dropped on.
+    //
+    // Same test the snapshot uses to decide he has no position the pilot can
+    // draw (src/net/reach.js): if the aeroplane cannot fly to it, its bombs
+    // cannot land in it. The craters are not lost — the server holds them, and
+    // syncLevelDamage puts them back the moment he climbs out.
+    if (!isReachable(world)) return;
     const originX = this.originOf(m.island);
     // `m.replay` marks a crater this client has already applied once, arriving
     // again because the pilot resent the detonate it proposed it with. The
@@ -338,6 +350,12 @@ export class MarioNet {
     const world = this.game && this.game.world;
     const island = this.islandId();
     if (!world || !world.damage || !island) return 0;
+    // Not into a sub-area — see onDamage for why. The guard is BEFORE the
+    // bookkeeping below so that going down a pipe leaves `_syncedLevel` and
+    // `_syncedSize` describing the surface, which is what makes climbing back
+    // out re-apply the whole set: the sub-area's load emptied world.damage, so
+    // the size test fails and every key is missing again.
+    if (!isReachable(world)) return 0;
     const size = world.damage.size;
     if (island === this._syncedLevel && size >= this._syncedSize) {
       // Nothing was rebuilt; a live crater arriving only ever grows the set.
