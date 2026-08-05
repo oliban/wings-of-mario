@@ -885,6 +885,42 @@ export function isInvisible(ch) {
   return INVISIBLE.has(ch);
 }
 
+// ARMOUR: the wash over a tile no bomb will ever take.
+//
+// The pilot has always been able to drop twelve bombs on the spawn floor and
+// watch nothing happen, with no way to tell that ground apart from the ground
+// beside it. The same is now true of a warp pipe. Both are deliberate rules
+// (src/wings/sanctuary.js) and both read as a broken game until they are
+// visible — the honest fix is to say so on the glass rather than to let the
+// player learn it by wasting ordnance.
+//
+// A WASH, NOT A REPLACEMENT. The tile keeps its own material and silhouette —
+// it is still recognisably ground, still recognisably a pipe — and takes a cool
+// steel tint over the top. That is what the user asked for: a different nuance
+// of the same thing, not a second set of art. It also means the treatment is
+// one function for every protected tile there will ever be, so a new rule
+// cannot ship without its colour.
+//
+// The colour is IRON out of the shared palette, which is the pilot's own metal
+// — the carrier, the flak, the aeroplane — and reads as "armoured" against
+// every one of Mario's materials without belonging to any of them.
+const ARMOUR_TINT = 'rgba(120,126,148,0.46)';
+const ARMOUR_EDGE = 'rgba(184,184,192,0.5)';
+
+export function armour(ctx, x, y, lod = LOD.FULL, rows = 1) {
+  const h = TILE * Math.max(1, rows);
+  ctx.fillStyle = ARMOUR_TINT;
+  ctx.fillRect(x, y, TILE, h);
+  // Coarse is the zoomed-out end, where a hatch would alias into noise: the
+  // flat tint is the whole treatment up there and it still reads.
+  if (lod === LOD.COARSE) return;
+  // A rivet line down the left edge and along the top, which is what makes it
+  // read as plating rather than as haze at mid range.
+  ctx.fillStyle = ARMOUR_EDGE;
+  ctx.fillRect(x, y, 1, h);
+  ctx.fillRect(x, y, TILE, 1);
+}
+
 // Draw one tile character at world pixel (x, y).
 export function drawTileChar(ctx, x, y, ch, a) {
   if (INVISIBLE.has(ch)) return;

@@ -21,6 +21,7 @@
 
 import { tileKey, parseTileKey } from './blast.js';
 import { getLevel } from '../data/levels/index.js';
+import { tileForChar } from '../data/tiles.js';
 
 // THE BALANCE NUMBERS. A strip of columns around the spawn column, running
 // from just above Mario's head all the way down to the bottom row of the map.
@@ -92,6 +93,72 @@ export function sanctuaryRects(level) {
   return rects;
 }
 
+// THE PIPES THAT GO SOMEWHERE, which no bomb takes either.
+//
+// A pipe carrying a warp is not scenery, it is a DOOR: the underground coin
+// room of 1-1, the warp zone at the end of 1-2, the route that skips five
+// worlds. Blow its mouth off and the door is gone for the rest of the match,
+// because craters are permanent — and unlike a cratered floor there is no
+// route around it and nothing Mario can do about it. That is not the pilot
+// stranding him, which is a legitimate win with counterplay; it is a piece of
+// the level quietly deleted.
+//
+// It also closed a hole this made worse. Bombs cannot reach into a sub-area
+// (src/net/mario-side.js), so the pilot cannot touch what is DOWN the pipe —
+// leaving the entrance destructible made the mouth the one place a bomb could
+// cut off a whole map.
+//
+// FOUND BY FLOOD FILL from the warp's own `from` tile, not by guessing a
+// rectangle. Every warp names the tile that triggers it and that tile is the
+// pipe's mouth; a pipe is a contiguous run of tiles whose record carries a
+// `pipe` face (data/tiles.js ids 10-16). So the shape comes out of the level
+// data exactly, whichever way the pipe points and however long it is, and a
+// level that gains a warp is covered with no code change. Ordinary decorative
+// pipes — the great majority — are untouched and stay bombable.
+const PIPE_FILL_LIMIT = 256;
+
+const isPipeChar = (ch) => {
+  if (typeof ch !== 'string' || !ch) return false;
+  const t = tileForChar(ch);
+  return !!(t && t.pipe);
+};
+
+export function warpPipeKeys(level) {
+  const out = new Set();
+  if (!level || !Array.isArray(level.tiles) || !Array.isArray(level.warps)) return out;
+  const rows = level.tiles;
+  const h = rows.length;
+  const w = level.width | 0;
+  const at = (tx, ty) => (ty < 0 || ty >= h || tx < 0 || tx >= w ? null : (rows[ty] || '')[tx]);
+
+  for (const warp of level.warps) {
+    const from = warp && warp.from;
+    if (!from) continue;
+    const sx = Math.floor(from.x);
+    const sy = Math.floor(from.y);
+    if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;
+    // A warp whose mouth is not a pipe at all — a door, a vine, a lip Mario
+    // walks into. There is nothing to protect and nothing to guess at.
+    if (!isPipeChar(at(sx, sy))) continue;
+    // Four-connected, and bounded: a malformed level must not spin here.
+    const stack = [[sx, sy]];
+    const seen = new Set([tileKey(sx, sy)]);
+    while (stack.length && seen.size <= PIPE_FILL_LIMIT) {
+      const [tx, ty] = stack.pop();
+      out.add(tileKey(tx, ty));
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = tx + dx;
+        const ny = ty + dy;
+        const k = tileKey(nx, ny);
+        if (seen.has(k) || !isPipeChar(at(nx, ny))) continue;
+        seen.add(k);
+        stack.push([nx, ny]);
+      }
+    }
+  }
+  return out;
+}
+
 // Level objects never mutate at runtime (see src/data/levels/index.js), so the
 // key set is computed once per level and shared by every caller on this side.
 const CACHE = new WeakMap();
@@ -106,6 +173,9 @@ export function protectedKeys(level) {
       for (let tx = r.x0; tx <= r.x1; tx++) keys.add(tileKey(tx, ty));
     }
   }
+  // The same set the server filters with and the same set both clients refuse
+  // to destroy, so a warp pipe cannot come apart between the three of them.
+  for (const k of warpPipeKeys(level)) keys.add(k);
   CACHE.set(level, keys);
   return keys;
 }

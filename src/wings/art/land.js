@@ -2,6 +2,7 @@ import { TILE } from '../../core/constants.js';
 import { LAND } from './palette.js';
 import {
   COMPOSITE, VSTACK, drawTileChar, isInvisible, lodFor, themeFor, castleKeep, flag, LOD,
+  armour,
 } from './mario-tiles.js';
 
 // An island, seen from an aeroplane. It is drawn straight off the level's own
@@ -192,6 +193,18 @@ export function drawLandmass(ctx, isle, cam, vw, vh, tick = 0, seaY = 560, scale
       arg.tx = tx;
       arg.ty = ty;
       drawTileChar(ctx, tx * TILE, ty * TILE, ch, arg);
+      // GROUND NO BOMB WILL TAKE, marked as such. Keyed off the ISLAND'S OWN
+      // predicate — the very function destroyTiles consults — so the wash can
+      // never promise something the ordnance disagrees with. A tile that
+      // becomes bombable stops being painted this way in the same frame.
+      // Asked of the island rather than recomputed, and asked politely: this
+      // file is handed anything island-SHAPED — the tile tests pass a stub with
+      // a charAt and little else — and a renderer must not be the reason a
+      // harness has to grow a method. No predicate means no information, so
+      // draw it plainly.
+      if (typeof isle.destructibleTile === 'function' && !isle.destructibleTile(tx, ty)) {
+        armour(ctx, tx * TILE, ty * TILE, lod, arg.rows);
+      }
     }
   }
 
