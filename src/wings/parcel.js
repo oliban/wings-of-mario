@@ -24,6 +24,12 @@
 // edited, and nothing here is wired into the engine except through the fixed
 // timestep hook src/wings/mario-main.js already owns.
 //
+// NEITHER IS THE FLIGHT. The goods arrive on a CRATE, under a parachute, taking
+// about a second to come down beside him — src/wings/supply-drop.js is where it
+// is, tick by tick, and src/wings/art/parcel.js is what it looks like. That
+// split is the same one: this file is the only one of the three that knows a
+// World exists, and none of them knows about the other two's business.
+//
 // OWNERSHIP (spec 7.3): this runs on MARIO'S client and only there. It is his
 // level, his position and his physics, and no other client could compute it.
 // The pilot needs no wire event to learn about it — the costume Mario is
@@ -33,6 +39,7 @@
 
 import { TILE } from '../core/constants.js';
 import { strandedBy, GapLedger, PARCEL_COINS } from './stranded.js';
+import { SupplyDrop, dropSpot } from './supply-drop.js';
 
 // WHY THE CHAR TABLE IS INJECTED rather than imported. Reading the pristine
 // level means asking whether a legend character is something to stand on, and
@@ -94,6 +101,24 @@ export class Parcel {
     // The last thing decided, for the debug panel and the browser test to read.
     this.last = null;
     this.given = 0;
+    // THE CRATE, and the user's actual complaint: "the parcel drops on the
+    // character so I can't even see it". The goods used to be handed over in
+    // the same frame the chasm was noticed, with no object on screen anywhere.
+    // Now a crate falls out of the sky under a parachute for about a second and
+    // the goods are handed over when it LANDS.
+    //
+    // The decision is still made and the chasm still marked paid at the moment
+    // it is noticed — this is a presentation of a grant already committed, not
+    // a pickup. A crate that had to be walked into could be missed, or bombed
+    // into the very hole it was sent for, and the ledger has already been
+    // written by then. See src/wings/supply-drop.js.
+    this.drop = new SupplyDrop();
+    // What the crate in the air is carrying, so the landing knows which chasm
+    // it answered.
+    this.sending = null;
+    // Fired when a crate is put in the air, as onParcel is fired when it lands.
+    // Presentation only; the mechanic below does not know a screen exists.
+    this.onSend = null;
     // The tick we last saw. World.loadLevel sets world.tick back to 0, so a
     // reading that went BACKWARDS is a level having been rebuilt under us —
     // which is the only reliable in-band signal a hook on the timestep gets,
@@ -112,8 +137,22 @@ export class Parcel {
     // nothing, which is the situation this exists for. Checked before the
     // interval so a load can never fall between two scans.
     const tick = world.tick | 0;
-    if (this._lastTick != null && tick < this._lastTick) this.ledger.clear();
+    if (this._lastTick != null && tick < this._lastTick) {
+      this.ledger.clear();
+      this.abandon();
+    }
     this._lastTick = tick;
+
+    // THE CRATE MOVES EVERY TICK, not every CHECK_INTERVAL_TICKS: the scan
+    // below is a decision that costs a dozen column reads and is worth
+    // throttling, and this is an animation, which is not.
+    //
+    // A place the parcel has no business in — a pipe room, the flagpole, the
+    // game-over screen — abandons the drop rather than letting a crate land
+    // into it. Abandoning also clears the ledger, so the chasm is decided again
+    // from scratch and he is not left owing a parcel that never came.
+    if (world.areaId || world.state !== 'playing') this.abandon();
+    else if (this.drop.step() === 'landed') this.deliver(world, this.sending);
 
     if (tick % CHECK_INTERVAL_TICKS !== 0) return null;
 
@@ -145,19 +184,62 @@ export class Parcel {
     this.last = out;
     if (!out.parcel) return null;
 
+    // One crate IN THE AIR at a time. Two falling at once would be two rescues
+    // and there has only ever been one; the ledger is deliberately NOT written
+    // here, so a second chasm noticed during a flight is decided again a few
+    // ticks later rather than paid for and forgotten.
+    //
+    // A crate that has already landed does not hold anything up. It has handed
+    // over what it carried and is only sitting there being looked at, so a
+    // second chasm replaces it rather than waiting for it to fade.
+    if (this.drop.active && !this.drop.landed) return null;
+
     // One parcel per chasm. A later bomb that widens the same hole is the same
     // hole; see GapLedger.
     const place = `${(world.level && world.level.id) || '?'}`;
     if (this.ledger.paid(place, out.gap.start, out.gap.land)) return null;
     this.ledger.record(place, out.gap.start, out.gap.land);
 
-    this.deliver(world, out.gap);
+    this.send(current, out.gap, tx, ty);
     return out;
   }
 
-  // The drop itself. Deliberately not an item entity lying on the ground: the
-  // parcel is a rescue, and a rescue he can walk past, or that a second bomb
-  // can drop into the very hole it was sent for, is not one. It arrives.
+  // Put a crate in the air. It comes down BESIDE him — never on his head, which
+  // is the bug being fixed, and never on the chasm side, so the one thing it
+  // cannot do is fall into the hole it was sent to answer. The chasm is always
+  // ahead of him (the scan only looks the way the level runs), so "away" is
+  // always to the left.
+  send(grid, gap, tx, ty) {
+    const spot = dropSpot(grid, { tx, ty, dir: -1 });
+    this.sending = gap;
+    this.drop.beginAtTile(spot.tx, spot.ty);
+    if (this.onSend) this.onSend({ gap, spot });
+    return spot;
+  }
+
+  // Take a crate out of the air without delivering it — and if there really was
+  // one in the air, forget every debt with it. The two go together: a chasm
+  // marked paid by a parcel that never arrived is a man owed a rescue he can
+  // never be given, so the chasm is decided again from scratch.
+  //
+  // ONLY when something was actually flying. This runs on every tick Mario
+  // spends down a pipe or on the flagpole, and clearing the ledger on all of
+  // them would mean a trip into a coin room bought him a second parcel for a
+  // chasm he had already been paid for.
+  abandon() {
+    this.sending = null;
+    const wasFlying = this.drop.cancel();
+    if (wasFlying) this.ledger.clear();
+    return wasFlying;
+  }
+
+  // THE LANDING: the crate is down, and this is what was in it.
+  //
+  // Deliberately not an item entity lying on the ground waiting to be walked
+  // into. The parcel is a rescue, and a rescue he can walk past — or that a
+  // second bomb can drop into the very hole it was sent for — is not one. The
+  // crate is what he SEES; this is what he is given, and he is given it whether
+  // or not he is looking.
   deliver(world, gap) {
     const p = world.player;
 
@@ -173,14 +255,22 @@ export class Parcel {
     else world.coins = (world.coins | 0) + this.coins;
 
     if (p && typeof p.powerUp === 'function') p.powerUp('toolbelt');
-    if (typeof world.sfx === 'function') world.sfx('coin');
-
-    // A word over his head, through the engine's own score popup so it lands in
-    // the game's typeface and disappears on the game's clock.
-    if (typeof world.spawn === 'function' && p) {
-      world.spawn('scorepop', p.x, p.y - TILE, { text: 'PARCEL' });
+    // The box hitting the ground, then the money in it. Both are the engine's
+    // own sounds: a crate landing is a thump and 'bump' is the game's thump.
+    if (typeof world.sfx === 'function') {
+      world.sfx('bump');
+      world.sfx('coin');
     }
 
+    // A word over the CRATE, not over Mario — it is the crate the player has
+    // just been asked to look at. Through the engine's own score popup so it
+    // lands in the game's typeface and disappears on the game's clock.
+    const at = this.drop.landed ? { x: this.drop.landX, y: this.drop.landY } : p;
+    if (typeof world.spawn === 'function' && at) {
+      world.spawn('scorepop', at.x, at.y - TILE * 2, { text: 'PARCEL' });
+    }
+
+    this.sending = null;
     this.given++;
     if (this.onParcel) this.onParcel({ gap, coins: this.coins });
   }

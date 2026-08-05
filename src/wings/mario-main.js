@@ -2,6 +2,7 @@ import { TILE } from '../core/constants.js';
 import { MarioOverlay } from './mario-overlay.js';
 import { FerryRide } from './ferry-ride.js';
 import { Parcel } from './parcel.js';
+import { drawSupplyDrop } from './art/parcel.js';
 import { ToolbeltSeeder } from './toolbelt-blocks.js';
 import { guardThrow } from './flat-throw.js';
 import { BRICKBOMB_GRAVITY } from '../game/entities/brickbomb.js';
@@ -59,6 +60,20 @@ const parcel = new Parcel({
   },
 });
 overlay.hooks.push((world) => parcel.step(world));
+
+// AND THE CRATE ITSELF, on the overlay's own canvas. This is the one module
+// with both a drawing context and the flight state, which is exactly why the
+// two halves meet here and nowhere else: src/wings/supply-drop.js is pure so
+// the whole flight can be tested in plain Node, and src/wings/art/parcel.js is
+// pixels on the engine's gfx.js so it can be looked at with tools/sheet.mjs.
+// Neither knows the other exists.
+//
+// The state is in ISLAND-LOCAL pixels — the frame Mario's camera works in — so
+// the camera offset is the whole of the conversion.
+overlay.painters.push((ctx, cam) => {
+  const s = parcel.drop.state();
+  if (s) drawSupplyDrop(ctx, s.x - cam.x, s.y - cam.y, s);
+});
 
 // THE TOOLBELT IN THE QUESTION BLOCKS. The parcel above is the emergency — a
 // belt handed over once the bombs have already cut him off. This is the other
@@ -241,6 +256,11 @@ window.__PARCEL = {
   // `{ parcel, gap, reason }`, the shape strandedBy() returns.
   given: () => parcel.given,
   last: () => (parcel.last ? { ...parcel.last } : null),
+  // The crate in the air right now, in island-local pixels, or null. A browser
+  // test asserts on this to prove the drop is a DROP — that it starts above the
+  // top of the screen, comes down beside Mario rather than on him, and takes
+  // about a second doing it.
+  drop: () => parcel.drop.state(),
   // The other way to a toolbelt: which '?' blocks are holding one. Returned as
   // {tx, ty}, because the block system's own keys are PACKED NUMBERS
   // ((ty << 12) | tx, src/game/blocks.js) and not the "tx,ty" strings the

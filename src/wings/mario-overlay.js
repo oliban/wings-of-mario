@@ -37,6 +37,14 @@ export class MarioOverlay {
     // Extra per-step consumers. The ferry (Task 5) and the match (Task 7) push
     // themselves in here rather than each growing their own rAF loop.
     this.hooks = [];
+    // Extra per-FRAME painters, called with (ctx, cam, frame) in GAME pixels
+    // with the camera already available to subtract — the same contract the
+    // reticle drawing below works to. The supply drop uses this
+    // (src/wings/mario-main.js), and it exists for the same reason `hooks`
+    // does: this canvas is the wings layer's only seam onto Mario's screen, and
+    // anything that needs to draw over the game should share it rather than
+    // grow a second stacked canvas of its own.
+    this.painters = [];
     this.telegraph = new Telegraph({ surfaceAt: (px) => this.surfaceAt(px) });
     this.sight = new BombSight(); // the falling bomb itself; owns no physics
     this.synth = opts.synth || new WhistleSynth();
@@ -199,6 +207,11 @@ export class MarioOverlay {
     // From here on the context is in GAME pixels: the art module draws whole
     // 256x240 pixels and the transform scales them to the display.
     ctx.setTransform(k, 0, 0, k, 0, 0);
+    // FIRST, under the telegraph: a supply crate is an object in the world and
+    // the reticle is an instrument reading. An instrument that a falling crate
+    // could hide would be a worse trade than a crate with a reticle drawn over
+    // it, and the two are hardly ever on screen together anyway.
+    for (const paint of this.painters) paint(ctx, cam, this.frame);
     for (const m of this.marks) {
       if (m.impact) {
         const sx = m.impact.tx * TILE + TILE / 2 - cam.x;

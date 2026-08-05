@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Parcel, currentGrid, originalGrid, CHECK_INTERVAL_TICKS } from '../../src/wings/parcel.js';
 import { PARCEL_COINS } from '../../src/wings/stranded.js';
+import { FALL_TICKS, FALL_HEIGHT_PX, SIDE_TILES, PHASE } from '../../src/wings/supply-drop.js';
 import { TILE } from '../../src/core/constants.js';
 
 // The half of the parcel that knows what a World is. The rule it applies is
@@ -73,8 +74,11 @@ const SOLID_CHAR = (ch) => ch === '#';
 const parcelFor = (world) => new Parcel({ solidChar: SOLID_CHAR });
 
 // Run n engine ticks past it. The step only scans on the interval, so anything
-// shorter than one interval proves nothing.
-function run(p, world, n = CHECK_INTERVAL_TICKS * 3) {
+// shorter than one interval proves nothing — and since the goods now arrive on
+// a CRATE that takes FALL_TICKS to come down, the default has to outlast the
+// fall as well or every delivery assertion below would be reading the state
+// half a second before it happens.
+function run(p, world, n = CHECK_INTERVAL_TICKS * 3 + FALL_TICKS) {
   let last = null;
   for (let i = 0; i < n; i++) {
     const out = p.step(world);
@@ -176,6 +180,121 @@ test('nothing is decided about a man who is not standing on the level', () => {
     run(p, world);
     assert.equal(p.given, 0, `a parcel went out to a man ${what}`);
   }
+});
+
+// ---------------------------------------------------------------------------
+// the crate
+// ---------------------------------------------------------------------------
+
+test('the goods arrive when the CRATE does, not when the chasm is noticed', () => {
+  // The user's complaint was that the parcel was invisible: it was handed over
+  // in the same frame it was decided, with nothing on screen at all. Now there
+  // is a crate in the air for about a second first, and the wallet is untouched
+  // until it is down.
+  const world = fakeWorld(FLAT, { gone: cratered(20, 12), tx: 14 });
+  const p = parcelFor(world);
+
+  run(p, world, CHECK_INTERVAL_TICKS + 1);
+  const flying = p.drop.state();
+  assert.ok(flying, 'nothing was sent');
+  assert.equal(flying.phase, PHASE.FALL);
+  assert.equal(p.given, 0, 'the goods were handed over before the crate landed');
+  assert.equal(world.coins, 0);
+  assert.equal(world.player.power, 'small');
+
+  // Mid-flight it is somewhere between the sky and the ground.
+  run(p, world, FALL_TICKS / 2);
+  const half = p.drop.state();
+  assert.ok(half.y > flying.y, 'the crate is not coming down');
+  assert.ok(half.y < world.player.y, 'it is already at ground level half way through');
+  assert.equal(p.given, 0);
+
+  run(p, world, FALL_TICKS);
+  assert.equal(p.given, 1, 'the crate landed and nothing was handed over');
+  assert.equal(world.coins, PARCEL_COINS);
+  assert.equal(world.player.power, 'toolbelt');
+});
+
+test('it comes down BESIDE him, which is the whole of the bug', () => {
+  const world = fakeWorld(FLAT, { gone: cratered(20, 12), tx: 14 });
+  const p = parcelFor(world);
+  run(p, world, CHECK_INTERVAL_TICKS + 1);
+
+  const s = p.drop.state();
+  const marioX = world.player.x + world.player.w / 2;
+  assert.ok(s.x < marioX, 'the crate is on the chasm side of him');
+  assert.equal(p.drop.landX, (14 - SIDE_TILES) * TILE + TILE / 2);
+  // It began a full screen above where it will land — off the top of the view,
+  // rather than appearing in mid-air beside him.
+  assert.equal(p.drop.landY - FALL_HEIGHT_PX, -FALL_HEIGHT_PX);
+  assert.ok(s.y < p.drop.landY - 150, `only ${p.drop.landY - s.y}px up after 11 ticks`);
+  // Never over the chasm, which starts at column 20.
+  assert.ok(p.drop.landX < 20 * TILE, 'the crate was dropped towards the hole');
+});
+
+test('the crate is drawn for a while after it lands, then it is gone', () => {
+  const world = fakeWorld(FLAT, { gone: cratered(20, 12), tx: 14 });
+  const p = parcelFor(world);
+  run(p, world);
+  assert.equal(p.given, 1);
+  assert.ok(p.drop.state(), 'the crate vanished the instant it delivered');
+  run(p, world, 200);
+  assert.equal(p.drop.state(), null, 'the crate is still lying there');
+});
+
+test('a crate in the air when the level is rebuilt is abandoned, and owed again', () => {
+  const world = fakeWorld(FLAT, { gone: cratered(20, 12), tx: 14 });
+  const p = parcelFor(world);
+  run(p, world, CHECK_INTERVAL_TICKS * 2);
+  const inFlight = p.drop.state();
+  assert.ok(inFlight && inFlight.t > 5, 'nothing was well into a fall to abandon');
+
+  // What World.loadLevel does — he died, and the crate was still falling. The
+  // level under it is not the level it was sent to, so it is thrown away; what
+  // is in the air a tick later can only be a fresh one, because he is standing
+  // at the same chasm and it has just been decided again.
+  world.tick = 0;
+  run(p, world, 1);
+  const after = p.drop.state();
+  assert.ok(!after || after.t <= 1, 'a crate went on falling into a level that was rebuilt');
+  assert.equal(p.given, 0, 'the abandoned crate delivered anyway');
+
+  // And he is owed it: the chasm is decided again from scratch rather than
+  // staying marked paid for a parcel that never came.
+  run(p, world);
+  assert.equal(p.given, 1, 'the parcel was marked paid and never delivered');
+});
+
+test('a man who goes down a pipe mid-flight loses the crate but not the parcel', () => {
+  const world = fakeWorld(FLAT, { gone: cratered(20, 12), tx: 14 });
+  const p = parcelFor(world);
+  run(p, world, CHECK_INTERVAL_TICKS + 1);
+  assert.ok(p.drop.state());
+
+  world.areaId = '1-1b';
+  run(p, world, 4);
+  assert.equal(p.drop.state(), null, 'the crate landed in a coin room');
+  assert.equal(p.given, 0);
+
+  world.areaId = null;
+  run(p, world);
+  assert.equal(p.given, 1, 'he came back up owed a parcel that never came');
+});
+
+test('a trip down a pipe with nothing in the air does not buy a second parcel', () => {
+  // Abandoning clears the ledger, so it must only happen when there really was
+  // a crate to lose — otherwise every visit to a coin room pays out again for a
+  // chasm already answered.
+  const world = fakeWorld(FLAT, { gone: cratered(20, 12), tx: 14 });
+  const p = parcelFor(world);
+  run(p, world, 300);
+  assert.equal(p.given, 1);
+
+  world.areaId = '1-1b';
+  run(p, world, 30);
+  world.areaId = null;
+  run(p, world, 300);
+  assert.equal(p.given, 1, 'a trip down a pipe bought him a second parcel');
 });
 
 test('the scan runs on the engine\'s tick and not on every call', () => {
