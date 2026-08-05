@@ -2,6 +2,7 @@ import { TILE } from '../core/constants.js';
 import { MarioOverlay } from './mario-overlay.js';
 import { FerryRide } from './ferry-ride.js';
 import { Parcel } from './parcel.js';
+import { ToolbeltSeeder } from './toolbelt-blocks.js';
 import { tileForChar } from '../data/tiles.js';
 // The networked half of Mario's page (window.__NET). Imported here rather than
 // given its own <script> tag because index.html is upstream and this module is
@@ -56,6 +57,20 @@ const parcel = new Parcel({
   },
 });
 overlay.hooks.push((world) => parcel.step(world));
+
+// THE TOOLBELT IN THE QUESTION BLOCKS. The parcel above is the emergency — a
+// belt handed over once the bombs have already cut him off. This is the other
+// half the user asked for: one he can go and FIND, so bridging is something to
+// plan a route around rather than only a consolation for being trapped.
+//
+// Upstream seeds two '?' blocks with it on every level load and gates that on
+// Harry mode; src/wings/toolbelt-blocks.js re-runs the engine's own seeding
+// with the flag held true across the call, so no engine file is edited and
+// nothing else that reads harryMode changes. On the hook list because a level
+// is rebuilt by a death and a pipe as well as by a load, and each one clears
+// the block system.
+const toolbelts = new ToolbeltSeeder();
+overlay.hooks.push((world) => toolbelts.step(world));
 
 // THE CARRIER GROUP SAILING, on Mario's screen. On the same hook list as the
 // ferry and the gun, and for the same reason: it is the only fixed 60.0988Hz
@@ -212,6 +227,18 @@ window.__PARCEL = {
   // `{ parcel, gap, reason }`, the shape strandedBy() returns.
   given: () => parcel.given,
   last: () => (parcel.last ? { ...parcel.last } : null),
+  // The other way to a toolbelt: which '?' blocks are holding one. Returned as
+  // {tx, ty}, because the block system's own keys are PACKED NUMBERS
+  // ((ty << 12) | tx, src/game/blocks.js) and not the "tx,ty" strings the
+  // damage map uses — a difference that has already cost this project one bug
+  // (see MODS.md on world.contents).
+  blocks: () => {
+    const w = window.__GAME && window.__GAME.world;
+    const set = w && w.blocks && w.blocks.toolTiles;
+    if (!set) return [];
+    return [...set].map((k) => ({ tx: k & 0xfff, ty: k >> 12 }));
+  },
+  seeded: () => toolbelts.seeded,
 };
 
 // The sail's scripted surface. `begin()` is what a test calls to put the group
