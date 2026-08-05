@@ -1,7 +1,7 @@
 import { TILE } from '../core/constants.js';
 import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
-import { landingVerdict, hitsHull, arrest, spotOnDeck } from './carrier.js';
+import { landingVerdict, hitsHull, arrest, bolt, spotOnDeck, OUTCOME } from './carrier.js';
 import {
   createLoadout, release, stepShot, detonate, canDamage, GUN_INTERVAL, GUN_TRACE_TICKS,
 } from './ordnance.js';
@@ -54,6 +54,15 @@ export class WingsSim {
     this.status = 'ready';
     this.lastVerdict = null;
     this.hookArmed = false;
+    // A bolter is not a loss and is not a landing, so it gets its own counter
+    // and its own last-reason for the HUD to read.
+    this.bolters = 0;
+    this.lastBolter = null;
+    // A bolter still rolling. The deck check only runs on an aeroplane in the
+    // AIR, so a roll has to be followed from here: it ends either stopped on
+    // the deck — which is a landing, ugly but down — or off the bow and back
+    // in the air, where it is an ordinary aeroplane again.
+    this.rolling = false;
     // Ordnance in the air. The AMMUNITION is `loadout` and lives in
     // ordnance.js's own object — there is deliberately no second counter here
     // for the HUD to read, only the getters below onto that one object.
@@ -100,6 +109,7 @@ export class WingsSim {
     if (this.status === 'over') return this;
     const p = this.plane;
     if (p.mode !== MODE.DOWN) stepPlane(p, input);
+    this.settleBolter();
     this.triggers(input);
     this.stepShots();
     if (p.mode !== MODE.DOWN) this.checkPlane();
@@ -352,11 +362,48 @@ export class WingsSim {
       return;
     }
     if (!this.hookArmed) return;
-    if (verdict.ok) return this.land();
+    if (verdict.outcome === OUTCOME.TRAP) return this.land();
+    // MISSED THE WIRE, and that is all it is. The aeroplane is on the deck
+    // rolling; flight.js runs it off the bow if the deck runs out, and from
+    // there it is an ordinary aircraft low and slow over the sea. See
+    // src/wings/carrier.js for why this stopped being a fireball.
+    if (verdict.outcome === OUTCOME.BOLTER) return this.bolter(verdict.reason);
     return this.lose(verdict.reason);
   }
 
+  // A bolter, and the tick it becomes one. Announced so the HUD can say why
+  // nothing caught — "TOO FAST" and "HOOK UP" are the two, and a player who is
+  // told which one will fix it next circuit.
+  bolter(reason) {
+    bolt(this.plane);
+    this.hookArmed = false;
+    this.rolling = true;
+    this.lastBolter = reason;
+    this.bolters++;
+    this.emit('bolter', { reason });
+    return this;
+  }
+
+  // Where a bolter's roll ends. Stopping on the deck is a landing — he is down,
+  // aboard and stationary, and refusing to rearm him for having done it without
+  // the wire would be a rule with nothing behind it. Running off the bow is not
+  // a landing and not a loss: he is flying again, low and slow, and what
+  // happens next is up to him.
+  settleBolter() {
+    if (!this.rolling) return;
+    const p = this.plane;
+    if (p.mode === MODE.DECK) {
+      this.rolling = false;
+      return this.land();
+    }
+    if (p.mode === MODE.AIR) this.rolling = false;
+    return undefined;
+  }
+
   land() {
+    // The bolter that ended in a landing is over; the panel should stop saying
+    // why it happened.
+    this.lastBolter = null;
     arrest(this.plane);
     this.hookArmed = false;
     this.rearm();
@@ -455,6 +502,8 @@ export class WingsSim {
       fuel: p.fuel,
       squadron: this.squadron,
       status: this.status,
+      bolters: this.bolters,
+      lastBolter: this.lastBolter,
       cam: { ...this.cam },
       // Stores and what is in the air. `loadout` is a copy of the one counter
       // in ordnance.js, never a second one.

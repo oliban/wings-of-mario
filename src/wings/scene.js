@@ -573,7 +573,14 @@ export class Scene {
       // how to draw uncertainty; the sim only supplies it.
       contact: sim.radarContact(),
       fuel: clamp(p.fuel / FLIGHT.FUEL_MAX, 0, 1),
-      verdict: v && v.inBox ? String(v.reason).toUpperCase() : '',
+      // WHY NOTHING CAUGHT. While he is rolling up the deck the approach
+      // verdict is already stale — he is not in the air any more — so the
+      // bolter's own reason is what the panel says, and it stays up for the
+      // whole roll. A pilot told "TOO FAST" fixes it next circuit; one told
+      // nothing just knows the deck did not want him.
+      verdict: sim.plane.mode === MODE.ROLL && sim.lastBolter
+        ? `BOLTER ${String(sim.lastBolter).replace('-', ' ').toUpperCase()}`
+        : (v && v.inBox ? String(v.reason).toUpperCase() : ''),
     }, this.tick);
   }
 }

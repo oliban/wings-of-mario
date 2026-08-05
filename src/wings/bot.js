@@ -154,7 +154,9 @@ export function autoLand(sim, budget = 8000) {
   // 2. Settle onto the glideslope. Chasing a carrot 120px directly ahead at
   //    deck height turns the aeroplane east, levels it and converges on the
   //    deck altitude, holding speed near the middle of the legal band.
-  const band = (LANDING.MAX_SPEED + LANDING.MIN_SPEED) / 2;
+  // Aim at the approach speed rather than the middle of a band: there is no
+  // lower bound any more — arriving gently is fine and a wire likes it.
+  const band = LANDING.APPROACH_SPEED;
   for (let i = 0; i < budget; i++) {
     if (p.mode === MODE.DECK) return true;
     if (p.mode === MODE.DOWN) return false;

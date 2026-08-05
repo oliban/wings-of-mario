@@ -277,6 +277,11 @@ export function stepPlane(p, input = {}) {
   return p;
 }
 
+// Below this the aeroplane is stationary. Proportional drag never reaches zero
+// on its own; see the note in stepRoll. A twentieth of a pixel a tick is three
+// pixels a minute — stopped, by any honest reading.
+const ROLL_STOP = 0.05;
+
 // The takeoff roll. The plane is pinned to the deck, gains speed against
 // rolling friction, and only rotates once there is air over the wings.
 function stepRoll(p, pitch, throttle, F) {
@@ -288,7 +293,17 @@ function stepRoll(p, pitch, throttle, F) {
   p.turnDelta = null;
   p.y = DECK_Y - PLANE_H;
   p.speed += F.ROLL_THRUST * throttle - F.ROLL_DRAG * p.speed;
-  if (p.speed < 0) p.speed = 0;
+  // ROLLING DRAG IS PROPORTIONAL, so speed decays towards zero and never
+  // reaches it: 0.99 of something is never nothing. That was invisible while
+  // the only roll was a takeoff, where the throttle is open and the aeroplane
+  // leaves the deck long before it matters. A bolter has no throttle and has to
+  // actually STOP — without this floor it creeps up the deck for ever at a
+  // hundredth of a pixel a tick and never comes to rest.
+  // COASTING ONLY. Applied unconditionally it snapped the first 0.03 of a
+  // takeoff roll straight back to zero and the aeroplane never left the deck:
+  // with the throttle open, every speed below the floor is on its way UP
+  // through it.
+  if (throttle <= 0 && p.speed < ROLL_STOP) p.speed = 0;
   p.x += p.speed;
   p.vx = p.speed;
   p.vy = 0;

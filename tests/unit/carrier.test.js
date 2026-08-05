@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DECK_X0, DECK_X1, DECK_Y, HULL_BOTTOM, PLANE_H } from '../../src/wings/geo.js';
 import { MODE, createPlane } from '../../src/wings/flight.js';
 import {
-  LANDING, inLandingBox, landingVerdict, hitsHull, arrest, spotOnDeck,
+  LANDING, OUTCOME, inLandingBox, landingVerdict, hitsHull, arrest, bolt, spotOnDeck,
 } from '../../src/wings/carrier.js';
 
 // A textbook approach: over the middle of the deck, wheels on the planking,
@@ -41,11 +41,51 @@ test('the attitude has to be near level', () => {
   assert.equal(landingVerdict(onTheWire({ angle: LANDING.MAX_ANGLE - 0.01 })).ok, true);
 });
 
-test('too fast and too slow are both crashes, and the bounds are inclusive', () => {
-  assert.equal(landingVerdict(onTheWire({ speed: LANDING.MAX_SPEED + 0.1 })).reason, 'too-fast');
-  assert.equal(landingVerdict(onTheWire({ speed: LANDING.MIN_SPEED - 0.1 })).reason, 'too-slow');
-  assert.equal(landingVerdict(onTheWire({ speed: LANDING.MAX_SPEED })).ok, true);
-  assert.equal(landingVerdict(onTheWire({ speed: LANDING.MIN_SPEED })).ok, true);
+test('coming in too fast is a bolter, not a fireball', () => {
+  // THIS ASSERTED A CRASH, and that was the bug. In the original you can come
+  // over the round-down far too fast and nothing explodes: you do not catch a
+  // wire, you float up the deck, and you go off the bow to try again or into
+  // the sea. Missing the wire costs the approach, not the aeroplane.
+  const fast = landingVerdict(onTheWire({ speed: LANDING.MAX_SPEED + 0.1 }));
+  assert.equal(fast.reason, 'too-fast');
+  assert.equal(fast.outcome, OUTCOME.BOLTER);
+  assert.equal(fast.ok, false, 'a bolter is not a trap');
+  // However fast. There is no speed at which the deck becomes fatal — only the
+  // ship's hull and the sea are, and they are tested elsewhere.
+  assert.equal(landingVerdict(onTheWire({ speed: 40 })).outcome, OUTCOME.BOLTER);
+  // The window is inclusive at the top: exactly MAX_SPEED still takes a wire.
+  assert.equal(landingVerdict(onTheWire({ speed: LANDING.MAX_SPEED })).outcome, OUTCOME.TRAP);
+});
+
+test('nothing is too slow any more', () => {
+  // A minimum speed was enforced and destroyed the aeroplane for arriving
+  // gently, which is backwards: slow is what a wire wants. Arriving below
+  // flying speed is already punished by the stall that puts you in the sea
+  // before you ever reach the deck — the physics does it without a rule.
+  for (const speed of [0.5, 0.1, 0]) {
+    const v = landingVerdict(onTheWire({ speed }));
+    assert.equal(v.outcome, OUTCOME.TRAP, `speed ${speed} was refused`);
+    assert.equal(v.ok, true);
+  }
+});
+
+test('a forgotten hook is a bolter too, not a write-off', () => {
+  const v = landingVerdict(onTheWire({ gear: false }));
+  assert.equal(v.reason, 'hook-up');
+  assert.equal(v.outcome, OUTCOME.BOLTER);
+});
+
+test('flying INTO the ship is still fatal, and should be', () => {
+  // The two ways to arrive that no wire could help. Tested after the bolters
+  // above so the order of the rules is pinned: these decide first, however
+  // fast you are doing them.
+  assert.equal(landingVerdict(onTheWire({ angle: Math.PI })).outcome, OUTCOME.CRASH);
+  assert.equal(
+    landingVerdict(onTheWire({ angle: LANDING.MAX_ANGLE + 0.1 })).outcome, OUTCOME.CRASH
+  );
+  // And a steep arrival is a crash even at a perfect trap speed.
+  const steep = onTheWire({ angle: LANDING.MAX_ANGLE + 0.1, speed: LANDING.MAX_SPEED });
+  assert.equal(landingVerdict(steep).outcome, OUTCOME.CRASH);
 });
 
 test('altitude and position put you out of the box entirely', () => {

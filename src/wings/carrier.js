@@ -1,14 +1,44 @@
 import { DECK_X0, DECK_X1, DECK_Y, HULL_BOTTOM, PLANE_W, PLANE_H } from './geo.js';
 import { MODE, normalizeAngle } from './flight.js';
 
-// The envelope. Outside any one of these the hook does not catch and the
-// aircraft is written off.
+// LANDING, and what happens when you get it wrong.
+//
+// This used to be one envelope with one failure: break any rule — a knot too
+// fast, a knot too slow, the hook still up — and the aeroplane was written off
+// on the spot. That is not how the original plays and it is why landing here
+// was miserable. In Wings of Fury you can come over the round-down far too fast
+// and nothing explodes: you simply do not catch a wire, you float up the deck,
+// and you go off the bow to try again or into the sea. The wire is what stops
+// you, and missing it costs you the approach, not the aircraft.
+//
+// So there are three outcomes now, not two:
+//
+//   TRAP    the hook takes a wire. Stopped dead, rearmed, refuelled.
+//   BOLTER  wheels on the deck, no wire. You roll — see stepRoll in flight.js,
+//           which already runs out of deck and puts you back in the air with
+//           the gear up, because that is the same thing a takeoff does. Get
+//           flying speed and go round again; do not, and it is the sea.
+//   CRASH   you flew into the ship. Still fatal, and it should be.
+//
+// The speed window is the WIRE's, not survival's. Inside it the hook catches;
+// above it you are going too fast for the arrestor and you bolt.
 export const LANDING = {
   MAX_SPEED: 1.8,
-  MIN_SPEED: 0.6,
+  // What to AIM for on the approach: comfortably inside the wire's window with
+  // room either side for a gust of stick. Not a rule — nothing is checked
+  // against it — but the bots fly it and it is the number to quote a player.
+  // It replaces a MIN_SPEED that used to be enforced, and killed you.
+  APPROACH_SPEED: 1.2,
   MAX_ANGLE: 0.22,
   Y_TOLERANCE: 10,
   X_MARGIN: 8,
+};
+
+export const OUTCOME = {
+  NONE: 'none',
+  TRAP: 'trap',
+  BOLTER: 'bolter',
+  CRASH: 'crash',
 };
 
 // The box in which the tailhook can reach a wire at all.
@@ -22,18 +52,40 @@ export function inLandingBox(p) {
   );
 }
 
-// One verdict for one tick. `reason` names the first rule broken, so a crash
-// can be explained rather than just announced.
+// One verdict for one tick. `reason` names the rule that decided it, so a
+// bolter can be explained rather than just announced.
+//
+// ORDER MATTERS: the two ways to fly into the ship are tested first, because
+// they are fatal however fast you are doing it. Everything after them is a
+// landing — good or bad — and the worst it costs is the approach.
 export function landingVerdict(p) {
-  if (!inLandingBox(p)) return { inBox: false, ok: false, reason: 'off-deck' };
-  if (!p.gear) return { inBox: true, ok: false, reason: 'hook-up' };
-  if (Math.cos(p.angle) <= 0) return { inBox: true, ok: false, reason: 'wrong-way' };
-  if (Math.abs(normalizeAngle(p.angle)) > LANDING.MAX_ANGLE) {
-    return { inBox: true, ok: false, reason: 'attitude' };
+  if (!inLandingBox(p)) {
+    return { inBox: false, ok: false, outcome: OUTCOME.NONE, reason: 'off-deck' };
   }
-  if (p.speed > LANDING.MAX_SPEED) return { inBox: true, ok: false, reason: 'too-fast' };
-  if (p.speed < LANDING.MIN_SPEED) return { inBox: true, ok: false, reason: 'too-slow' };
-  return { inBox: true, ok: true, reason: 'trap' };
+  // Backwards over the deck, or nose-down into it. Not a landing attempt at
+  // all: a wire cannot help either of these and the deck is what you hit.
+  if (Math.cos(p.angle) <= 0) {
+    return { inBox: true, ok: false, outcome: OUTCOME.CRASH, reason: 'wrong-way' };
+  }
+  if (Math.abs(normalizeAngle(p.angle)) > LANDING.MAX_ANGLE) {
+    return { inBox: true, ok: false, outcome: OUTCOME.CRASH, reason: 'attitude' };
+  }
+  // THE HOOK IS UP. Wheels touch, nothing catches — the definition of a
+  // bolter, and in the original exactly what a forgotten hook gives you.
+  if (!p.gear) {
+    return { inBox: true, ok: false, outcome: OUTCOME.BOLTER, reason: 'hook-up' };
+  }
+  // TOO FAST FOR THE ARRESTOR. You are down, and rolling, and the deck is
+  // going to run out. This was a fireball and it is the whole complaint.
+  if (p.speed > LANDING.MAX_SPEED) {
+    return { inBox: true, ok: false, outcome: OUTCOME.BOLTER, reason: 'too-fast' };
+  }
+  // NOTHING IS TOO SLOW ANY MORE. A minimum was enforced and destroyed the
+  // aeroplane for arriving gently, which is backwards — slow is what a wire
+  // wants. Coming in below flying speed is already punished, by the stall that
+  // puts you in the sea before you ever reach the deck; the physics does that
+  // on its own and does not need a rule.
+  return { inBox: true, ok: true, outcome: OUTCOME.TRAP, reason: 'trap' };
 }
 
 // Everything solid about the ship. Hitting it anywhere but the deck is a crash.
@@ -45,6 +97,28 @@ export function hitsHull(p) {
     wheels > DECK_Y + LANDING.Y_TOLERANCE &&
     p.y < HULL_BOTTOM
   );
+}
+
+// A BOLTER: wheels down, no wire. The aeroplane is put on the deck at the
+// speed it arrived with and left to roll — stepRoll in flight.js takes it from
+// here, and it already knows what to do when the deck runs out, because that is
+// the same thing it does on a takeoff that never rotates: back into the air
+// with the gear up. Fly away and go round again, or stall into the sea.
+//
+// The speed is KEPT, deliberately. Bleeding it off here would be the wire by
+// another name, and the wire is the thing you missed.
+export function bolt(p) {
+  p.mode = MODE.ROLL;
+  p.angle = 0;
+  p.turnTicks = null;
+  p.turnStartAngle = null;
+  p.turnDelta = null;
+  p.y = DECK_Y - PLANE_H;
+  p.vx = p.speed;
+  p.vy = 0;
+  // Wheels are down whether or not the hook was: you are rolling on them.
+  p.gear = true;
+  return p;
 }
 
 // Caught a wire: stopped dead on the deck, ready to be rearmed.
