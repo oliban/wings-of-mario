@@ -71,9 +71,15 @@ test('the pilot can see which ground his bombs will not take', async (t) => {
     assert.ok(pipes.plain.length > 0, 'every pipe was protected; nothing to compare against');
   });
 
-  await t.test('a warp pipe does not look like an ordinary one', async () => {
-    // Fly between the two so both are on screen at the same zoom, in the same
-    // light, in one frame — otherwise this compares altitudes, not tiles.
+  await t.test('a warp pipe looks exactly like an ordinary one', async () => {
+    // THE USER'S CALL, and a reversal of what this first asserted: pipes stay
+    // the green they always were and are indestructible anyway. The wash is
+    // therefore not a complete account of what a bomb will not take — the
+    // ground says so, the pipes do not — and that is a deliberate trade to keep
+    // Mario's most recognisable object looking like itself.
+    //
+    // Pinned rather than left alone, because a wash applied to every protected
+    // tile is the obvious implementation and this is the one exception to it.
     const warp = pipes.warp[0];
     const plain = pipes.plain[0];
     await page.evaluate(([a, b]) => {
@@ -88,10 +94,24 @@ test('the pilot can see which ground his bombs will not take', async (t) => {
     const dist = Math.abs(armoured.r - bare.r)
       + Math.abs(armoured.g - bare.g) + Math.abs(armoured.b - bare.b);
     assert.ok(
-      dist > 24,
-      `a warp pipe and a plain pipe are the same colour (distance ${dist.toFixed(1)}): `
+      dist < 12,
+      `a warp pipe is tinted differently from a plain one (distance ${dist.toFixed(1)}): `
       + `${JSON.stringify(armoured)} vs ${JSON.stringify(bare)}`
     );
+  });
+
+  await t.test('and it is indestructible regardless of how it looks', async () => {
+    // The half that survives the colour being dropped: the protection is real
+    // and is the island's own predicate, not a property of the paint.
+    const verdicts = await page.evaluate(([warp, plain]) => {
+      const isle = window.__WINGS.sim.islands[0];
+      return {
+        warp: isle.destructibleTile(warp.tx, warp.ty),
+        plain: isle.destructibleTile(plain.tx, plain.ty),
+      };
+    }, [pipes.warp[0], pipes.plain[0]]);
+    assert.equal(verdicts.warp, false, 'the warp pipe is bombable');
+    assert.equal(verdicts.plain, true, 'a scenery pipe was made indestructible');
   });
 
   await t.test('the spawn floor is marked too, not just the pipes', async () => {

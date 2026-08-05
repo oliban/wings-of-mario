@@ -93,29 +93,55 @@ export function sanctuaryRects(level) {
   return rects;
 }
 
-// THE PIPES THAT GO SOMEWHERE, which no bomb takes either.
+// THE WARP-ZONE PIPES, which no bomb takes either.
 //
-// A pipe carrying a warp is not scenery, it is a DOOR: the underground coin
-// room of 1-1, the warp zone at the end of 1-2, the route that skips five
-// worlds. Blow its mouth off and the door is gone for the rest of the match,
-// because craters are permanent — and unlike a cratered floor there is no
-// route around it and nothing Mario can do about it. That is not the pilot
-// stranding him, which is a legitimate win with counterplay; it is a piece of
-// the level quietly deleted.
+// A pipe into a warp zone is not scenery and it is not a bonus: it is the one
+// route in the game that skips whole worlds. Blow its mouth off and that route
+// is gone for the rest of the match, because craters are permanent — and unlike
+// a cratered floor there is nothing Mario can do about it. That is a piece of
+// the game quietly deleted rather than the pilot stranding him, which is a
+// legitimate win with counterplay and is untouched.
 //
-// It also closed a hole this made worse. Bombs cannot reach into a sub-area
-// (src/net/mario-side.js), so the pilot cannot touch what is DOWN the pipe —
-// leaving the entrance destructible made the mouth the one place a bomb could
-// cut off a whole map.
+// ONLY THE WARP ZONE, by the user's call: "only the pipe on 1-1 to warp zone
+// indestructible, not other pipes". 1-1 has three pipes that go somewhere and
+// they are not equal — 1-1b is a coin room, 1-1h is Harry's painted level, and
+// 1-1w is the warp zone with a warp to all thirty-two levels. The first two are
+// fair game; bombing them costs Mario some coins and a detour. So the test is
+// not "does this pipe warp" but "does it lead somewhere that skips levels":
+//
+//   * a warp straight to another level — 1-2's three pipes to 2-1, 3-1 and 4-1,
+//     which ARE the warp zone at the end of that level;
+//   * a warp into an area that itself holds two or more level warps — 1-1w,
+//     reached from the pipe at tile 28.
+//
+// Two or more, not one: 1-1h warps to h-1 and is a single painted level, not a
+// choice of destinations. That threshold is what separates a warp zone from a
+// door.
 //
 // FOUND BY FLOOD FILL from the warp's own `from` tile, not by guessing a
 // rectangle. Every warp names the tile that triggers it and that tile is the
 // pipe's mouth; a pipe is a contiguous run of tiles whose record carries a
 // `pipe` face (data/tiles.js ids 10-16). So the shape comes out of the level
 // data exactly, whichever way the pipe points and however long it is, and a
-// level that gains a warp is covered with no code change. Ordinary decorative
-// pipes — the great majority — are untouched and stay bombable.
+// level that gains a warp zone is covered with no code change.
 const PIPE_FILL_LIMIT = 256;
+
+// How many level destinations an area needs before it counts as a warp zone
+// rather than a door to one particular place.
+const WARP_ZONE_EXITS = 2;
+
+// Does this warp lead somewhere that skips levels? `level` is the whole level
+// object, because an area destination has to be looked up in it.
+function leadsToWarpZone(level, warp) {
+  const to = warp && warp.to;
+  if (!to) return false;
+  // Straight to another level: this pipe IS a warp zone exit.
+  if (to.level) return true;
+  if (!to.area || !level.areas) return false;
+  const area = level.areas[to.area];
+  if (!area || !Array.isArray(area.warps)) return false;
+  return area.warps.filter((w) => w && w.to && w.to.level).length >= WARP_ZONE_EXITS;
+}
 
 const isPipeChar = (ch) => {
   if (typeof ch !== 'string' || !ch) return false;
@@ -134,6 +160,10 @@ export function warpPipeKeys(level) {
   for (const warp of level.warps) {
     const from = warp && warp.from;
     if (!from) continue;
+    // A coin room, a bonus, one of Harry's levels: bombing the way in costs
+    // Mario a detour and some coins, which is exactly the sort of damage the
+    // pilot is supposed to be able to do.
+    if (!leadsToWarpZone(level, warp)) continue;
     const sx = Math.floor(from.x);
     const sy = Math.floor(from.y);
     if (!Number.isFinite(sx) || !Number.isFinite(sy)) continue;

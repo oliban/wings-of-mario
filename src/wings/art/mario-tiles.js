@@ -904,22 +904,26 @@ export function isInvisible(ch) {
 // The colour is IRON out of the shared palette, which is the pilot's own metal
 // — the carrier, the flak, the aeroplane — and reads as "armoured" against
 // every one of Mario's materials without belonging to any of them.
+//
+// A FLAT WASH AND NOTHING ELSE. The first version drew a bright rivet line down
+// the left edge and along the top of each tile to make it read as plating. Per
+// TILE is the problem: a pipe is two columns wide, so the two edge lines met in
+// the middle of it and drew a white seam straight down the pipe, and a stretch
+// of armoured floor came out gridded. There is no per-tile ornament that
+// survives being tiled — the wash has to be the whole treatment.
 const ARMOUR_TINT = 'rgba(120,126,148,0.46)';
-const ARMOUR_EDGE = 'rgba(184,184,192,0.5)';
 
 export function armour(ctx, x, y, lod = LOD.FULL, rows = 1) {
-  const h = TILE * Math.max(1, rows);
   ctx.fillStyle = ARMOUR_TINT;
-  ctx.fillRect(x, y, TILE, h);
-  // Coarse is the zoomed-out end, where a hatch would alias into noise: the
-  // flat tint is the whole treatment up there and it still reads.
-  if (lod === LOD.COARSE) return;
-  // A rivet line down the left edge and along the top, which is what makes it
-  // read as plating rather than as haze at mid range.
-  ctx.fillStyle = ARMOUR_EDGE;
-  ctx.fillRect(x, y, 1, h);
-  ctx.fillRect(x, y, TILE, 1);
+  ctx.fillRect(x, y, TILE, TILE * Math.max(1, rows));
 }
+
+// PIPES ARE EXEMPT, by the user's call: they stay exactly the green they always
+// were and are indestructible anyway. So the wash is not a complete account of
+// what a bomb will not take — the ground tells you, the pipes do not — and that
+// is a deliberate trade of information for keeping Mario's most recognisable
+// object looking like itself.
+export const ARMOUR_EXEMPT = new Set(['[', ']', '{', '}', '<', '>', '-']);
 
 // Draw one tile character at world pixel (x, y).
 export function drawTileChar(ctx, x, y, ch, a) {
