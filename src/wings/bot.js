@@ -2,6 +2,7 @@ import { TILE } from '../core/constants.js';
 import { DECK_X0, DECK_Y, SEA_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H, localTileToWorld } from './geo.js';
 import { MODE, FLIGHT, normalizeAngle } from './flight.js';
 import { LANDING } from './carrier.js';
+import { runways } from './runway.js';
 import { release } from './ordnance.js';
 import { refineImpact } from './telegraph.js';
 import { distanceTo } from './sim.js';
@@ -163,4 +164,54 @@ export function autoLand(sim, budget = 8000) {
     sim.step(seek(p, p.x + 120, glideY, { speed: band, gear: true, floor: SEA_Y, dead: 0.02 }));
   }
   return p.mode === MODE.DECK;
+}
+
+// The same circuit, flown onto an island's longest strip. Returns true once the
+// aeroplane has stopped on it — down and safe, and NOT rearmed; see
+// sim.groundLanding. False when the island has no strip at all, which is the
+// usual answer and the whole point of the feature.
+//
+// `opts.strip` picks one of runways() by index for a test that wants a
+// particular piece of ground; the default is the longest, which is what a pilot
+// with a choice would use.
+export function autoLandIsland(sim, islandId, budget = 12000, opts = {}) {
+  const island = sim.islandById(islandId);
+  if (!island) return false;
+  const strips = runways(island);
+  if (!strips.length) return false;
+  const r = opts.strip != null
+    ? strips[opts.strip]
+    : strips.reduce((a, b) => (b.tiles > a.tiles ? b : a));
+  if (!r) return false;
+
+  const p = sim.plane;
+  // seek aims the aeroplane's CENTRE, so the carrot sits half a fuselage above
+  // the strip: wheels one pixel clear of the surface, which is inside
+  // LANDING.Y_TOLERANCE and therefore already a touchdown.
+  const glideY = r.y - PLANE_H / 2 - 1;
+
+  // 1. Get well west of the strip and above it, which is what forces the
+  //    reversal — a strip, like the deck, only accepts an eastbound arrival.
+  if (!flyTo(sim, r.x0 - 700, r.y - 200, budget, { near: 56, floor: SEA_Y })) return false;
+
+  // 2. Run in level. NO `floor` on this leg, unlike the carrier's: seek's floor
+  //    override starts climbing 48px above the number it is given, and a strip
+  //    on an overworld level's ground row sits 32px above the sea — passing
+  //    SEA_Y here would have the aeroplane pull straight up off every approach
+  //    it was in the middle of flying.
+  const band = LANDING.APPROACH_SPEED;
+  for (let i = 0; i < budget; i++) {
+    if (sim.grounded) return true;
+    if (p.mode === MODE.DOWN) return false;
+    // DOWN AND ROLLING: throttle shut, stick neutral, let the friction do the
+    // work. seek would keep opening the throttle whenever the aeroplane fell
+    // below the approach speed, which on the ground is a takeoff roll — it
+    // settles at 3 px/f and runs off the end of the strip for ever.
+    if (sim.groundRoll) {
+      sim.step({ thrust: 0, pitch: 0, gear: true });
+      continue;
+    }
+    sim.step(seek(p, p.x + 120, glideY, { speed: band, gear: true, dead: 0.02 }));
+  }
+  return !!sim.grounded;
 }

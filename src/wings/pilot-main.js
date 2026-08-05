@@ -376,7 +376,13 @@ class Pilot {
       if (name === 'speedReset') speedReset(this.sim);
       if (name === 'worldPrev') this.jumpTo(this.sim.archipelago.world - 1);
       if (name === 'worldNext') this.jumpTo(this.sim.archipelago.world + 1);
-      if (name === 'respawn' && this.sim.plane.mode === 'down') {
+      // Parked on an island: R abandons the airframe and puts a fresh one on
+      // the deck. Without it a pilot who lands on a strip with a dry tank is
+      // stuck there for the rest of the match — an island landing does not
+      // refuel, by design, and no fuel means no power.
+      if (name === 'respawn' && this.sim.canScuttle && this.sim.canScuttle()) {
+        this.sim.scuttle();
+      } else if (name === 'respawn' && this.sim.plane.mode === 'down') {
         this.sim.respawn();
       }
     }

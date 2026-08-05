@@ -12,7 +12,12 @@ import { bootRoom, shutdownRoom } from './helpers.mjs';
 // user typed. Nothing below reaches into the network layer to make a crater
 // happen by hand.
 test('the pilot\'s bombs reach Mario', { timeout: 180000 }, async (t) => {
-  const ctx = await bootRoom({ room: 'ACDE' });
+  // SEEDED, and it has to be. The archipelago seed decides where the islands
+  // sit, so it decides how far a sortie to 1-2 is and whether the bot can fly
+  // it inside its tick budget. Left random, this file passed most of the time
+  // and failed whenever the ocean came out long — which is exactly the kind of
+  // flake that teaches people to re-run the suite instead of reading it.
+  const ctx = await bootRoom({ room: 'ACDE', seed: 0x51ced0de });
   t.after(() => shutdownRoom(ctx));
   const { mario, pilot } = ctx;
 

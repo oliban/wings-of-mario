@@ -7,6 +7,9 @@ import {
 import {
   createLoadout, release, stepShot, detonate, canDamage, GUN_INTERVAL, GUN_TRACE_TICKS,
 } from './ordnance.js';
+import {
+  runwayUnder, islandVerdict, touchdown, stepGroundRoll, ISLAND_OUTCOME,
+} from './runway.js';
 import { Archipelago } from './archipelago.js';
 import { Radar } from './radar.js';
 
@@ -55,6 +58,7 @@ export class WingsSim {
     this.events = [];
     this.status = 'ready';
     this.lastVerdict = null;
+    this.lastIslandVerdict = null;
     this.hookArmed = false;
     // A bolter is not a loss and is not a landing, so it gets its own counter
     // and its own last-reason for the HUD to read.
@@ -65,6 +69,22 @@ export class WingsSim {
     // the deck — which is a landing, ugly but down — or off the bow and back
     // in the air, where it is an ordinary aeroplane again.
     this.rolling = false;
+    // DOWN ON AN ISLAND: the strip the aeroplane is rolling or parked on, or
+    // null when it is anywhere else. It is what routes the step through
+    // stepGroundRoll instead of stepPlane, and it is deliberately NOT the same
+    // flag as `rolling` above: a bolter's roll ends in `land()` — aboard,
+    // rearmed, refuelled — and an island's must not. See groundLanding.
+    this.groundRoll = null;
+    // Stopped and parked on a strip, as opposed to still rolling along it. Only
+    // exists so the "he is down" event fires once rather than every tick.
+    this.grounded = false;
+    // `hookArmed`'s twin for islands, and it exists for the identical reason:
+    // the tick an aeroplane rotates off a strip it is still inside that strip's
+    // landing box with the undercarriage just retracted, which reads as an
+    // arrival with the gear up — a crash — on the way OUT. So a strip cannot
+    // accept an aeroplane until it has been clear of every strip box once since
+    // it last left the ground.
+    this.groundArmed = true;
     // Ordnance in the air. The AMMUNITION is `loadout` and lives in
     // ordnance.js's own object — there is deliberately no second counter here
     // for the HUD to read, only the getters below onto that one object.
@@ -110,7 +130,14 @@ export class WingsSim {
   step(input = {}) {
     if (this.status === 'over') return this;
     const p = this.plane;
-    if (p.mode !== MODE.DOWN) stepPlane(p, input);
+    // On a strip the roll is stepped in the strip's frame; everywhere else the
+    // aeroplane is an ordinary aeroplane. See runway.js#stepGroundRoll for why
+    // that is a translation and not a second roll model.
+    if (p.mode !== MODE.DOWN) {
+      if (this.groundRoll) stepGroundRoll(p, input, this.groundRoll);
+      else stepPlane(p, input);
+    }
+    this.settleGround();
     this.settleBolter();
     this.triggers(input);
     this.stepShots();
@@ -345,6 +372,26 @@ export class WingsSim {
     if (p.mode !== MODE.AIR) return;
     if (p.y + PLANE_H >= SEA_Y) return this.lose('sea');
 
+    // WHEELS ON AN ISLAND, and this is asked BEFORE the hillside check below
+    // rather than after it. A legal touchdown is allowed to be up to
+    // LANDING.Y_TOLERANCE below the surface, and at the bottom of that band the
+    // nose is already inside the tile the wheels are resting on — so a
+    // hillside test that ran first would kill a landing that the landing rules
+    // were about to accept, exactly as hitsHull is asked only once the deck box
+    // has said no.
+    const arrival = this.islandArrival();
+    if (!arrival) this.groundArmed = true;
+    else if (this.groundArmed) {
+      // Its own field rather than `lastVerdict`: that one is the deck's, the
+      // HUD reads it against carrier.js's OUTCOME names, and an island verdict
+      // parked in it would be a set of strings it has never heard of.
+      this.lastIslandVerdict = arrival.verdict;
+      if (arrival.verdict.outcome === ISLAND_OUTCOME.ROLLOUT) return this.groundLanding(arrival);
+      // Prefixed so a crash on a strip is distinguishable from the same mistake
+      // made over the deck — the two share reason names and nothing else.
+      return this.lose(`island-${arrival.verdict.reason}`);
+    }
+
     // Flown into a hillside. The nose is the point that decides it, and
     // blocksTile — solid or platform — is the predicate: a coin, a bush or a
     // cloud is scenery an aeroplane passes straight through.
@@ -371,6 +418,74 @@ export class WingsSim {
     // src/wings/carrier.js for why this stopped being a fireball.
     if (verdict.outcome === OUTCOME.BOLTER) return this.bolter(verdict.reason);
     return this.lose(verdict.reason);
+  }
+
+  // IS THERE A STRIP UNDER THE WHEELS, and is this arrival a landing or a
+  // crash? Returns null — meaning "this is not an island arrival at all, carry
+  // on" — for the overwhelming majority of ticks: no island, no strip in this
+  // column, or the wheels nowhere near its surface.
+  //
+  // The point tested is the middle of the undercarriage, not the nose: the nose
+  // is what flies into a hillside and the wheels are what land on one.
+  islandArrival() {
+    const p = this.plane;
+    const wx = p.x + PLANE_W / 2;
+    const wy = p.y + PLANE_H;
+    const isle = this.islandAt(wx, wy);
+    if (!isle) return null;
+    const runway = runwayUnder(isle, wx, wy);
+    if (!runway) return null;
+    const verdict = islandVerdict(p, runway);
+    if (!verdict.inBox) return null;
+    return { isle, runway, verdict };
+  }
+
+  // DOWN ON THE ISLAND. He keeps the airframe and NOTHING ELSE — no rearm, no
+  // refuel, deliberately: the bombs and the fuel are on the ship, and an island
+  // that resupplied him would delete the return leg and with it the reason the
+  // carrier is in the ocean at all.
+  //
+  // Announced on the tick the wheels touch, the way a trap is, because that is
+  // the moment the player wants told. `islandLanded` follows when it stops.
+  groundLanding({ isle, runway }) {
+    touchdown(this.plane, runway);
+    this.groundRoll = { ...runway, island: isle.id };
+    this.grounded = false;
+    this.groundArmed = false;
+    // He is not over the ship and the hook cannot be holding anything.
+    this.hookArmed = false;
+    this.rolling = false;
+    this.lastBolter = null;
+    this.emit('islandLanding', {
+      island: isle.id,
+      x: this.plane.x + PLANE_W / 2,
+      y: runway.y,
+      speed: this.plane.speed,
+    });
+    return this;
+  }
+
+  // Where a ground roll ends, and it ends in one of the two ways the deck's
+  // does. Stopped on the strip is a landing — he is down and safe, and that is
+  // all it is worth. Running off the end is neither a landing nor a loss: the
+  // aeroplane is flying again, low and slow, exactly as it is off the bow.
+  settleGround() {
+    if (!this.groundRoll) return;
+    const p = this.plane;
+    if (p.mode === MODE.DECK) {
+      if (!this.grounded) {
+        this.grounded = true;
+        this.emit('islandLanded', { island: this.groundRoll.island, x: p.x + PLANE_W / 2 });
+      }
+      return;
+    }
+    // Rolling still, or back in the air under its own power — either the pilot
+    // has taken off again or the strip ran out. Both put the strip behind him.
+    this.grounded = false;
+    if (p.mode === MODE.AIR) {
+      this.groundRoll = null;
+      this.groundArmed = false;
+    }
   }
 
   // A bolter, and the tick it becomes one. Announced so the HUD can say why
@@ -438,6 +553,9 @@ export class WingsSim {
     const p = this.plane;
     p.mode = MODE.DOWN;
     p.speed = 0;
+    this.groundRoll = null;
+    this.grounded = false;
+    this.groundArmed = true;
     this.squadron--;
     this.emit('planeLost', { reason, x: p.x, y: p.y });
     this.status = this.squadron > 0 ? 'lost' : 'over';
@@ -445,10 +563,42 @@ export class WingsSim {
   }
 
   // Put the next aircraft on the deck. Returns false when the squadron is gone.
+  // ABANDON THE AIRFRAME. `respawn` is what R does after a crash, and it is
+  // also the way out of the one dead end an island landing creates: put down on
+  // a strip with a dry tank and there is no way off it, because landing on an
+  // island deliberately does not refuel and an aeroplane with no fuel makes no
+  // power. Nothing was writing him off, so he sat there for the rest of the
+  // match.
+  //
+  // Scuttling COSTS an aircraft, exactly as ditching does. It has to: otherwise
+  // it is a free teleport home from anywhere you can find flat ground, which
+  // would make the return leg optional and the carrier pointless.
+  canScuttle() {
+    const p = this.plane;
+    return this.squadron > 0 && !!this.grounded && p.mode === MODE.DECK && p.speed === 0;
+  }
+
+  scuttle() {
+    if (!this.canScuttle()) return false;
+    this.squadron--;
+    if (this.squadron <= 0) {
+      this.status = 'over';
+      this.emit('planeLost', { squadron: this.squadron, reason: 'scuttled',
+        x: this.plane.x, y: this.plane.y });
+      return true;
+    }
+    this.emit('planeLost', { squadron: this.squadron, reason: 'scuttled',
+      x: this.plane.x, y: this.plane.y });
+    return this.respawn();
+  }
+
   respawn() {
     if (this.squadron <= 0) return false;
     this.plane = spotOnDeck(createPlane());
     this.hookArmed = false;
+    this.groundRoll = null;
+    this.grounded = false;
+    this.groundArmed = true;
     this.rearm();
     this.status = 'ready';
     this.emit('sortieStart', { squadron: this.squadron });
@@ -474,7 +624,12 @@ export class WingsSim {
     this.squadron = SQUADRON;
     this.plane = spotOnDeck(createPlane());
     this.hookArmed = false;
+    // The strip he was parked on belongs to the old ocean.
+    this.groundRoll = null;
+    this.grounded = false;
+    this.groundArmed = true;
     this.lastVerdict = null;
+    this.lastIslandVerdict = null;
     // A dead pilot is not dead in the new world: `over` would refuse to step
     // and 'lost' would leave the HUD reading a loss he no longer has.
     this.rearm();
@@ -526,6 +681,19 @@ export class WingsSim {
       status: this.status,
       bolters: this.bolters,
       lastBolter: this.lastBolter,
+      // The strip under the wheels, or null. MODE.DECK means "stopped" and says
+      // nothing about WHAT it is stopped on, so this is the only thing that
+      // separates parked on an island from parked on the ship — which matters
+      // to anything drawing the aeroplane or telling the pilot he cannot rearm.
+      ground: this.groundRoll
+        ? {
+          island: this.groundRoll.island,
+          y: this.groundRoll.y,
+          x0: this.groundRoll.x0,
+          x1: this.groundRoll.x1,
+          parked: this.grounded,
+        }
+        : null,
       cam: { ...this.cam },
       // Stores and what is in the air. `loadout` is a copy of the one counter
       // in ordnance.js, never a second one.
