@@ -37,8 +37,15 @@ export const ENEMY_NAMES = {
   0x0e: 'greenparatroopa-jump', 0x0f: 'redparatroopa', 0x10: 'greenparatroopa-fly',
   0x11: 'lakitu', 0x12: 'spiny', 0x14: 'flyingcheep', 0x15: 'bowserflame',
   0x16: 'fireworks', 0x17: 'bbill-ccheep-frenzy', 0x18: 'stop-frenzy',
-  0x1b: 'goomba-group-3-row10', 0x1c: 'goomba-group-3-row6',
-  0x1d: 'koopa-group-3-row10', 0x1e: 'koopa-group-3-row6',
+  // $1b-$1f are FIREBARS, not enemy groups: the enemy init table puts
+  // InitShortFirebar at $1b-$1e and InitLongFirebar at $1f (smbdis.asm:8100-8104),
+  // and FirebarSpinSpdData/FirebarSpinDirData index off id - $1b. These carried
+  // "goomba-group-3-row10"-style labels for a long time, which is a lie this
+  // decode tells to anything that reads it — an inventory of the enemy stream
+  // came back claiming trios of goombas in castles that have none. The real
+  // groups are $37-$3e and are handled by groupOf() in smb-build.mjs.
+  0x1b: 'firebar-6-cw', 0x1c: 'firebar-6-cw-fast',
+  0x1d: 'firebar-6-ccw', 0x1e: 'firebar-6-ccw-fast', 0x1f: 'firebar-12-cw',
   0x2d: 'bowser', 0x2e: 'powerup', 0x2f: 'vine', 0x30: 'flagpole',
   0x31: 'starflag', 0x32: 'jumpspring', 0x33: 'bulletbill-cannon', 0x35: 'toad',
 };

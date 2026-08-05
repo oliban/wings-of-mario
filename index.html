@@ -23,7 +23,13 @@
     --bezel: #0a0c12;
     --glow: #4d7dff;
   }
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* The callout is set on EVERY element, not left to inherit from body. iOS
+     treats a long press on a <canvas> like a long press on an image and offers
+     Copy / Share / Search with Google, and it has never inherited this property
+     dependably — the television kept summoning the menu with `html, body`
+     alone. user-select below does inherit correctly (verified), so it stays
+     where it is. */
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; }
   html, body {
     height: 100%;
     /* iOS Safari has ignored user-scalable=no and maximum-scale since iOS 10,
@@ -32,6 +38,16 @@
        we are not entitled to take away. #screen and #joypad stay at `none`
        because they must swallow drags as well. */
     touch-action: manipulation;
+    /* Selection was suppressed on #joypad alone, so a long press anywhere else
+       — the television, the bezel, the margins — still raised the callout in
+       the middle of a game. Page-wide is the right scope: nothing here is text
+       anyone selects. The callout itself lives on the `*` rule above, for the
+       reason given there. Pinch-to-zoom is deliberately left alone, the same
+       way `touch-action` above stops at `manipulation`. */
+    -webkit-user-select: none;
+    user-select: none;
+    /* and the grey flash iOS paints over a tapped element */
+    -webkit-tap-highlight-color: transparent;
     background: #05060a;
     color: #cdd6f4;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

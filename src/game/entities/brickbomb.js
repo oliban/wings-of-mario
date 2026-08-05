@@ -38,13 +38,7 @@ import { tileKey } from '../blocks.js';
 // `cost`, debit at throw time, and a bomb that lays nothing refunds itself.
 
 // Coins per throw. The wiring imports this rather than keeping a second copy.
-//
-// TESTING VALUE — this is 5, not the design number. The economy was specced at
-// 50 a throw and 50 is what it should ship at; it is down to 5 only so the tool
-// can be thrown constantly while it is being played with. NOT a balance
-// decision, and not evidence that 50 was wrong. Put it back to 50 before this
-// goes anywhere near a real playthrough.
-export const BRICKBOMB_COST = 5;
+export const BRICKBOMB_COST = 1;
 
 // Bricks in a row. There is no longer a "gap" constant: the gap between Mario
 // and the row is whatever distance the bomb covered before it went off.
@@ -64,32 +58,77 @@ export const BRICKBOMB_MAX = 2;
 //                                     so the mid-air row still lands on the
 //                                     thrower's own foot row
 //
-// A long throw, by request ("8-10 marios away"), then taken to 75% of that on a
-// second pass. Launched at 45 degrees — `SPEED` and `-LAUNCH_VY` are
-// deliberately the same number — which is what makes it read as lobbed rather
-// than fired, and gives an apex a quarter of the range, the shape a thrown
-// object actually has.
+// THE THROW IS A ROTATION, NOT A FIXED ARC. How hard and which way Mario is
+// moving when he presses is the whole input:
 //
-// THE 75% WAS APPLIED TO THE VELOCITY, NOT THE FUSE. At a fixed launch angle
-// range goes as v-squared, so the speed is the old 5.5 x sqrt(0.75) = 4.76 and
-// BOTH range and apex come out at exactly three quarters of what they were, on
-// any terrain. Cutting the fuse instead would have left the old flat, fast
-// trajectory chopped off part-way, which is a different shape, not a shorter
-// throw of the same shape.
+//   standing or rising straight up  ->  straight up, and the row forms over his
+//                                       head, because the fuse ends at the apex
+//   walking                         ->  a shallow lob, part of the way over
+//   flat out                        ->  the old 45-degree throw, unchanged
 //
-// The fuse and the speed are one setting, not two. The bomb has to still be
-// FALLING PAST the feet line when the fuse blows, or the row forms a tile high
-// and you have to jump to your own bridge. Under this gravity the centre
-// crosses that line at frame 24 and is a row lower by frame 27, so the fuse has
-// a three-frame window and 25 sits in the middle of it.
+// One number drives it: t, Mario's horizontal speed as a fraction of a full run
+// (physics.js maxRunSpeed, 2.5625). t swings the launch angle from vertical to
+// 45 degrees and scales the launch power, so range grows with speed twice over
+// — a faster throw is both flatter and harder. Direction comes from which way
+// he is MOVING, not which way he is facing, so a bomb thrown mid-skid goes the
+// way he is actually travelling; facing only decides it when he is still.
+//
+// At t = 1 this reproduces the old throw exactly — vx 4.76, vy -4.76, fuse 25 —
+// so everything measured below still holds at a full run:
+//
+//   flat ground                   ->  lands frame 23, 110 px = 6.9 tiles
+//   fuse 25 frames, unobstructed  ->  119 px = 7.4 tiles
+//   apex                          ->  27 px = 1.69 tiles above the launch point
+//   at the bang                   ->  centre 7 px below the launch feet line,
+//                                     so the mid-air row still lands on the
+//                                     thrower's own foot row
+//
+// That 45-degree throw was a long one by request ("8-10 marios away"), taken to
+// 75% on a second pass. The 75% was applied to the VELOCITY, not the fuse: at a
+// fixed angle range goes as v-squared, so the speed is the old 5.5 x sqrt(0.75)
+// = 4.76 and both range and apex came out at three quarters on any terrain.
+// Cutting the fuse would have left the old flat trajectory chopped off part-way
+// — a different shape, not a shorter throw of the same shape.
+//
+// THE FUSE IS DERIVED, NOT A CONSTANT, because the two ends want opposite
+// things. A flat throw has to still be FALLING PAST the feet line when it goes
+// off or the row forms a tile high and you have to jump to your own bridge; a
+// vertical throw has to go off at the TOP or it falls back to the height it was
+// thrown from and builds at Mario's feet instead of over his head. Both come
+// out of one expression: burn to the apex, then a share of the way down that
+// grows with t. At t = 0 that is the apex exactly, at t = 1 it is 25 frames,
+// the middle of the old three-frame window (the centre crossed the feet line at
+// 24 and was a row lower by 27).
 //
 // Nothing here may exceed TILE (16) per step or the bomb would tunnel through
-// thin walls: peak vy is 5.74 at the fuse, under both TILE and MAX_FALL.
-export const BRICKBOMB_SPEED = 4.76;
-export const BRICKBOMB_LAUNCH_VY = -4.76;
+// thin walls: peak vy is 5.74 at the longest fuse, under both TILE and MAX_FALL.
 export const BRICKBOMB_GRAVITY = 0.42;
 export const BRICKBOMB_MAX_FALL = 8;
+
+// Launch power at a standstill and at a full run. The upper number is the old
+// 45-degree throw's speed as a vector: sqrt(4.76^2 + 4.76^2).
+const THROW_POWER_MIN = 5.2;
+const THROW_POWER_MAX = 6.732;
+
+// The speed that counts as "flat out" — physics.js maxRunSpeed. Local rather
+// than imported so the ballistics stay one self-contained block, but it must
+// track that value: if it drifts low, every run throw pins at 45 degrees.
+const THROW_FULL_SPEED = 2.5625;
+
+// Below this Mario counts as not moving horizontally, and facing decides the
+// direction instead. Loose enough to swallow the drift left by a skid.
+const THROW_DIR_EPS = 0.12;
+
+// How far past the apex the fuse burns, as a multiple of the climb, at a full
+// run. Chosen so t = 1 lands on 25 frames exactly.
+const THROW_DESCENT_SHARE = 1.2;
+
+// The longest a fuse can ever be, so callers that want a bound have one.
 export const BRICKBOMB_FUSE = 25;
+
+// Kept for anything that still imports them: the flat-out throw's components.
+export const BRICKBOMB_SPEED = 4.76;
+export const BRICKBOMB_LAUNCH_VY = -4.76;
 
 // The bomb leaves the hand at a fixed height above the FEET, not at a fraction
 // of the body. Big and small Mario are a whole tile apart in height, so a
@@ -162,15 +201,37 @@ function num(v, d) {
 // ---------------------------------------------------------------------------
 
 export function launchState(thrower, dir) {
-  const d = dir === -1 ? -1 : 1;
+  const pvx = num(thrower.vx, 0);
+  const speed = Math.abs(pvx);
+
+  // Which way he is TRAVELLING, falling back to facing when he is not.
+  const d = speed >= THROW_DIR_EPS ? (pvx < 0 ? -1 : 1) : dir === -1 ? -1 : 1;
+
+  // t: nothing at a standstill, 1 flat out. Everything else follows from it.
+  const t = Math.min(1, speed / THROW_FULL_SPEED);
+  const ang = t * (Math.PI / 4); // measured from straight up
+  const power = THROW_POWER_MIN + (THROW_POWER_MAX - THROW_POWER_MIN) * t;
+  const vx = d * power * Math.sin(ang);
+  const vy = -power * Math.cos(ang);
+
+  // Burn to the apex, then a share of the way back down that grows with t. The
+  // climb is not rounded before it is scaled — rounding first costs a frame at
+  // full run and drops the fuse out of its window.
+  const climb = -vy / BRICKBOMB_GRAVITY;
+  const fuse = Math.max(1, Math.round(climb * (1 + t * THROW_DESCENT_SHARE)));
+
   const feet = thrower.y + thrower.h;
   return {
     w: BOMB_W,
     h: BOMB_H,
-    x: thrower.x + thrower.w * 0.5 + d * 6 - BOMB_W * 0.5,
+    // A vertical throw leaves the hand over his head, not out to one side, or
+    // the row it builds sits a tile off from the column he is standing in.
+    x: thrower.x + thrower.w * 0.5 + d * 6 * Math.sin(ang) - BOMB_W * 0.5,
     y: feet - LAUNCH_ABOVE_FEET - BOMB_H * 0.5,
-    vx: BRICKBOMB_SPEED * d,
-    vy: BRICKBOMB_LAUNCH_VY,
+    vx,
+    vy,
+    dir: d,
+    fuse,
   };
 }
 
@@ -214,7 +275,7 @@ export function stepBomb(world, s) {
 // Returns the resolved end state.
 export function simulateThrow(world, thrower, dir) {
   const s = launchState(thrower, dir);
-  for (let i = 0; i < BRICKBOMB_FUSE; i++) {
+  for (let i = 0; i < s.fuse; i++) {
     if (stepBomb(world, s)) break;
   }
   return s;
@@ -293,11 +354,13 @@ export function canPlaceBrickAt(world, tx, ty, ignore) {
 // The five tile POSITIONS a row would occupy, obstructions ignored. Geometry
 // only — most callers want brickRowTiles() below.
 export function rowCandidates(world, thrower, dir) {
-  const d = dir === -1 ? -1 : 1;
   const out = [];
   if (!world || !thrower) return out;
-  const { tx, ty } = rowOriginOf(simulateThrow(world, thrower, d));
-  for (let i = 0; i < BRICK_ROW_LENGTH; i++) out.push({ tx: tx + d * i, ty });
+  // The row runs the way the bomb was THROWN, which is not always the way the
+  // caller asked for: launchState prefers Mario's travel to his facing.
+  const s = simulateThrow(world, thrower, dir);
+  const { tx, ty } = rowOriginOf(s);
+  for (let i = 0; i < BRICK_ROW_LENGTH; i++) out.push({ tx: tx + s.dir * i, ty });
   return out;
 }
 
@@ -424,8 +487,12 @@ export default class BrickBomb extends Entity {
     this.y = s.y;
     this.vx = s.vx;
     this.vy = s.vy;
+    // The row sweeps the way the bomb went, which launchState may have taken
+    // from Mario's travel rather than his facing. Without this a bomb thrown
+    // mid-skid flies one way and builds the other.
+    this.facing = s.dir;
 
-    this.fuse = num(opts.fuse, BRICKBOMB_FUSE);
+    this.fuse = num(opts.fuse, s.fuse);
     this.landed = false;
     this.rowY = 0;
     this.firstTx = 0;

@@ -64,6 +64,52 @@ if (root) {
   window.addEventListener('resize', fit);
   if (stage && window.ResizeObserver) new ResizeObserver(fit).observe(stage);
 
+  // --- input diary (?inputlog) --------------------------------------------
+  // A button that dies mid-game on a phone cannot be caught from a desktop
+  // harness: WebKit's touch stack is not Chromium's, and every layer we CAN
+  // drive measures clean. So let the phone keep the record instead. Off unless
+  // asked for by hand, and it never touches the input path — it only watches.
+  const DIARY = /[?&]inputlog\b/.test(location.search);
+  let diary = null;
+  if (DIARY) {
+    diary = document.createElement('div');
+    diary.style.cssText =
+      'position:fixed;left:0;right:0;top:0;z-index:99;max-height:38vh;overflow:hidden;' +
+      'font:10px/1.35 ui-monospace,Menlo,monospace;color:#9fe;background:rgba(0,0,0,.82);' +
+      'padding:4px 6px;white-space:pre;pointer-events:none';
+    document.body.appendChild(diary);
+    const lines = [];
+    let n = 0;
+    diary.note = (s) => {
+      n++;
+      lines.push(`${String(n).padStart(3)} ${s}`);
+      if (lines.length > 26) lines.shift();
+      diary.textContent = lines.join('\n');
+    };
+    // The events themselves, in the capture phase so the log is what ARRIVED,
+    // not what survived our own handlers.
+    for (const t of ['pointerdown', 'pointerup', 'pointercancel', 'lostpointercapture']) {
+      root.addEventListener(
+        t,
+        (e) => {
+          const at = buttonsAt(e.clientX, e.clientY).join('+') || '-';
+          diary.note(`${t.replace('pointer', 'p.').padEnd(10)} id=${e.pointerId} at=${at} held=${held.size}`);
+        },
+        true
+      );
+    }
+    // and every jump/run edge the game actually acted on, so a press that
+    // arrived but was never consumed is visible as an event with no edge.
+    const orig = input.update.bind(input);
+    input.update = () => {
+      orig();
+      if (input.pressed(BTN.JUMP)) diary.note('  >> JUMP edge consumed');
+      if (input.pressed(BTN.RUN)) diary.note('  >> RUN  edge consumed');
+    };
+    window.addEventListener('blur', () => diary.note('window blur -> all released'));
+    document.addEventListener('visibilitychange', () => diary.note(`visibility: ${document.visibilityState}`));
+  }
+
   // --- pointer -> input ---------------------------------------------------
   const held = new Map(); // pointerId -> string[] of BTN names
 

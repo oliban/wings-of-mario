@@ -1334,7 +1334,7 @@ export default class Player extends EntityBase {
     sfx(this.world, 'fireball', 'fire', 'throw');
   }
 
-  // The toolbelt's RUN. Unlike a fireball this one costs money: 50 coins a
+  // The toolbelt's SELECT. Unlike a fireball this one costs money: a coin a
   // throw, out of the same counter the HUD shows. Too poor and nothing leaves
   // his hand — the coins are only spent once the bomb actually exists, so a
   // throw refused for any other reason (two already in flight) is free.
