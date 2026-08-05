@@ -235,20 +235,31 @@ export class MarioEvents {
 // it is one testable thing rather than three lines inside a class that cannot
 // be constructed without a browser.
 //
-// `d` is the worldReset payload; `over` is whether the match already has a
-// winner. Returns the world number the carrier group must move to, or null for
-// "do not move".
+// `d` is the worldReset payload. Returns the world number the carrier group
+// must move to, or null for "do not move".
 //
 // TAKEN FROM THE EVENT, never counted. `d.next` is the island Mario's engine
 // actually loaded, so however he got there — a game over, a turn passing, a
 // warp — both clients name the same world and lay out the same ocean. Counting
 // would be a second authority for the one fact the whole match hangs off.
 //
-// A DECIDED MATCH DOES NOT MOVE. The match ending is the ending; the group has
-// nothing left to reposition for, and sailing then would replenish a squadron
-// for a match nobody is playing.
-export function repositionWorld(d = {}, opts = {}) {
-  if (opts.over) return null;
+// IT MOVES EVEN WHEN THE MATCH IS DECIDED, and that is a reversal worth
+// recording. This first refused to move once the match had a winner: the
+// ending is the ending, and sailing afterwards replenishes a squadron for a
+// match nobody is playing.
+//
+// That was wrong about how the game is actually played. Spending the last life
+// is BOTH the pilot winning AND the engine putting Mario back on 1-1 — it is
+// the ordinary way a run ends and the commonest way he ever changes world
+// backwards. Refusing there meant the carrier followed him almost never, and
+// the pilot was left over an archipelago Mario was nowhere near, which is the
+// exact failure the whole mechanism exists to prevent. A stale verdict is a
+// banner; two clients in different oceans is a broken game.
+//
+// `opts` is still accepted and still ignored, so the callers that pass a
+// verdict do not have to care. Whether a finished match should roll into a new
+// one is a separate question, and not this function's to answer.
+export function repositionWorld(d = {}) {
   const to = worldOf(d && d.next);
   return to == null || !isIslandId(d && d.next) ? null : to;
 }

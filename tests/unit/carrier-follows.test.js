@@ -160,8 +160,16 @@ test('the destination is taken from the event, never counted', () => {
   assert.equal(repositionWorld({ island: '2-1', next: '7-4' }, { over: false }), 7);
 });
 
-test('a decided match does not put to sea', () => {
-  assert.equal(repositionWorld({ island: '5-2', next: '1-1' }, { over: true }), null);
+test('a decided match puts to sea all the same', () => {
+  // THIS ASSERTED THE OPPOSITE and the opposite was wrong. Spending the last
+  // life is both the pilot winning and the engine putting Mario back on 1-1 —
+  // it is the ordinary end of a run and the commonest way he ever moves world
+  // backwards. Refusing to follow a decided match therefore meant the group
+  // followed him almost never, which is the failure the whole mechanism exists
+  // to prevent. A stale verdict is a banner; two clients in different oceans is
+  // a broken game.
+  assert.equal(repositionWorld({ island: '5-2', next: '1-1' }, { over: true }), 1);
+  assert.equal(repositionWorld({ island: '5-2', next: '1-1' }), 1);
 });
 
 test('an unreadable island moves nothing', () => {
@@ -289,14 +297,15 @@ test('running out of lives is the pilot winning, and that is a match ENDING', ()
   m.outOfLives();
   assert.equal(m.winner, WINNER.PILOT);
   assert.equal(m.phase, 'over');
-  // And the restart that follows it moves nothing.
-  assert.equal(repositionWorld({ island: '5-2', next: '1-1' }, { over: true }), null);
+  // And the group STILL follows the restart that comes after it: the verdict
+  // decides who won, not where the ocean is. See repositionWorld.
+  assert.equal(repositionWorld({ island: '5-2', next: '1-1' }, { over: true }), 1);
 });
 
 test('the death that ends the match is announced BEFORE the restart it causes', () => {
-  // This is what lets both clients gate on the same latched verdict: the wire
-  // is ordered, and the death leaves at the start of the animation while the
-  // level change cannot happen until the end of it.
+  // The wire is ordered: the death leaves at the start of the animation and the
+  // level change cannot happen until the end of it, so both clients see the
+  // same two events in the same order.
   const ev = new MarioEvents();
   ev.step(read('5-2', 1));
   const dying = die(ev, '5-2', 1);
@@ -307,7 +316,10 @@ test('the death that ends the match is announced BEFORE the restart it causes', 
   const v = new MatchVerdict();
   applyWire(v, stream[0].type, stream[0].d);
   assert.equal(v.over, true, 'the match was not decided before the restart arrived');
-  assert.equal(repositionWorld(stream[1].d, { over: v.over }), null);
+  // THE WHOLE POINT OF THE PAIR: the pilot learns he won AND follows Mario to
+  // world 1. This is the exact sequence a real game over produces, and it is
+  // the one that used to leave the group stranded.
+  assert.equal(repositionWorld(stream[1].d, { over: v.over }), 1);
 });
 
 test('a forward sail is untouched by any of this', () => {

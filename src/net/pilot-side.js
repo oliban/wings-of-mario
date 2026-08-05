@@ -13,6 +13,7 @@ import {
 } from './match-events.js';
 import { contactFrom, REACH_SNAP } from './reach.js';
 import { worldOfIsland } from '../wings/sail.js';
+import { peerLive } from './presence.js';
 
 // The pilot's half of the match. It reaches into the game only through the
 // `pilot` instance that pilot-main.js already exports, exactly as
@@ -54,6 +55,8 @@ export class PilotNet {
     this.lastEvent = null;
     this.desyncs = [];
     this.tick = 0;
+    // The tick a snapshot of Mario's last arrived on. Null means never.
+    this.lastHeard = null;
 
     // Mario's numbers, mirrored from the client that owns them. The pilot's
     // client never decides that Mario died and never counts his lives.
@@ -82,6 +85,17 @@ export class PilotNet {
 
   get matchStatus() {
     return this.verdict.status;
+  }
+
+  // Is there really a Mario on the other end, or only a socket the server has
+  // not yet noticed is dead? The rule and the reasoning are in
+  // src/net/presence.js, which is pure so that it can be tested as one.
+  peerLive() {
+    return peerLive({
+      peerPresent: !!(this.session && this.session.peerPresent),
+      tick: this.tick,
+      lastHeard: this.lastHeard,
+    });
   }
 
   winner() {
@@ -128,6 +142,8 @@ export class PilotNet {
     this.session.on('snapshot', (m) => {
       if (m.side === 'pilot') return; // our own, echoed back: ignore
       this.marioInterp.push(m.tick, m.s);
+      // When we last actually HEARD from him — see peerLive() below.
+      this.lastHeard = this.tick;
     });
     this.session.on('peer', (m) => {
       // A peer that left has no position. Holding his last one would leave
@@ -242,13 +258,14 @@ export class PilotNet {
   // THE DESTINATION IS TAKEN FROM THE EVENT, exactly as the sail takes it, so
   // the two clients lay out the same ocean whatever route he took to it.
   //
-  // A DECIDED MATCH DOES NOT MOVE. `verdict.over` latches, and the restart that
-  // follows a game over arrives strictly after the marioDeath that ended the
-  // match on this same ordered channel. Sailing then would be the carrier group
-  // putting to sea for a match nobody is playing.
+  // IT MOVES EVEN WHEN THE MATCH IS DECIDED. This once refused to, on the
+  // grounds that a finished match has nothing to reposition for — but spending
+  // the last life is both the pilot winning AND the engine putting Mario back
+  // on 1-1, so refusing there meant the group followed him almost never. See
+  // repositionWorld, which holds the reasoning.
   onWorldReset(d) {
     this.marioIsland = d.next || null;
-    const to = repositionWorld(d, { over: this.verdict.over });
+    const to = repositionWorld(d);
     if (to == null) return false;
     return this.host.repositionTo(to);
   }
@@ -433,7 +450,7 @@ async function boot() {
   // One pump per simulation tick, driven by the game loop rather than a timer.
   pilot.onTick = () => net.pump();
   // So the debug world jump can tell 'in a room alone' from 'Mario is here'.
-  pilot.peerThere = () => !!(net.session && net.session.peerPresent);
+  pilot.peerThere = () => net.peerLive();
   // The moment the archipelago is replaced, half way through the sail.
   pilot.onSailSwap = () => net.onSailSwap();
   return welcome;

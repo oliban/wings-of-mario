@@ -29,6 +29,30 @@ const DEFAULT_STATE_PATH = process.env.WOM_STATE || resolve(HERE, 'rooms.json');
 // tick and there is deliberately no such thing on this server (spec 7.1).
 const REAP_INTERVAL_MS = 60 * 1000;
 
+// THE HEARTBEAT, and why a server that relays nothing still needs one.
+//
+// Presence was learned from the socket's `close` event alone, which only fires
+// on an ORDERLY shutdown: the tab closed, the page navigated away. A laptop
+// that sleeps, a phone that backgrounds Safari and a wifi drop all send no FIN
+// at all, so the socket sat there open and the seat stayed occupied by nobody.
+// TCP's own keepalive would have noticed eventually — the default on macOS is
+// two hours.
+//
+// What that cost was not theoretical. The other player's client goes on
+// believing a peer is there, which suppresses nothing it should and refuses
+// things it should not: the pilot's debug world jump refuses to move while a
+// Mario is in the room, so a Mario who had silently vanished locked the pilot
+// into one archipelago for the rest of the session. The lobby also showed the
+// seat as `here` when it should read `away`.
+//
+// A ping every 10 seconds, and a socket that has not ponged since the last one
+// is terminated — which raises `close`, which relays PEER present:false down
+// the one path that already exists. Detection therefore takes between 10 and 20
+// seconds. Browsers answer a protocol-level ping from inside the WebSocket
+// stack without waking the page's JavaScript, so this measures the CONNECTION
+// and not whether a tab is busy.
+const HEARTBEAT_MS = 10 * 1000;
+
 function send(ws, msg) {
   if (ws.readyState === ws.OPEN) ws.send(encode(msg));
 }
@@ -130,6 +154,12 @@ export async function startServer(opts = {}) {
   const holders = new Map();
 
   wss.on('connection', (ws) => {
+    // Answered a ping since the last sweep. Set true here rather than on the
+    // first pong, or a socket that connects between two sweeps is terminated
+    // before it has ever been asked.
+    ws.__alive = true;
+    ws.on('pong', () => { ws.__alive = true; });
+
     // Per-socket state. `seat` is null until a valid hello arrives; nothing
     // else is accepted before then.
     let room = null;
@@ -339,6 +369,32 @@ export async function startServer(opts = {}) {
   // Do not hold the process open for housekeeping.
   if (reaper.unref) reaper.unref();
 
+  // The heartbeat. terminate() rather than close(): a socket whose far end is
+  // a sleeping laptop will never complete a closing handshake, and close()
+  // would wait for one that is not coming. terminate() raises `close`
+  // immediately, which is the path that already vacates the seat and tells the
+  // peer — so nothing below this line knows the difference between a player who
+  // shut the tab and one whose wifi died.
+  // Overridable so a test can run the sweep in milliseconds instead of waiting
+  // out two ten-second windows. Nothing else has any business changing it.
+  const heartbeatMs = opts.heartbeatMs || HEARTBEAT_MS;
+  const heart = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (!ws.__alive) {
+        if (ws.__side) log.info(`[room ${ws.__room ? ws.__room.code : '????'}] ${ws.__side} stopped answering`);
+        ws.terminate();
+        continue;
+      }
+      ws.__alive = false;
+      try {
+        ws.ping();
+      } catch (e) {
+        ws.terminate();
+      }
+    }
+  }, heartbeatMs);
+  if (heart.unref) heart.unref();
+
   const port = opts.port != null ? opts.port : Number(process.env.PORT) || 8090;
   await new Promise((done) => http.listen(port, done));
 
@@ -355,6 +411,7 @@ export async function startServer(opts = {}) {
       // nothing at all.
       saver.stop();
       clearInterval(reaper);
+      clearInterval(heart);
       for (const c of wss.clients) c.terminate();
       wss.close();
       await new Promise((done) => http.close(done));

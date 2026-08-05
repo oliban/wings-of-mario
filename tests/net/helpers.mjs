@@ -26,6 +26,7 @@ export async function startTestServer(opts = {}) {
     // Only passed when a test says so, so every other test exercises the
     // default the real server runs with.
     ...(opts.lobby === undefined ? {} : { lobby: opts.lobby }),
+    ...(opts.heartbeatMs === undefined ? {} : { heartbeatMs: opts.heartbeatMs }),
   });
   server.logs = logs;
   return server;
