@@ -83,6 +83,24 @@ test('every surface we own turns the iOS callout off', () => {
   }
 });
 
+// WHERE the declaration sits, not just that it exists. iOS treats a long press
+// on a <canvas> the way it treats one on an image and offers Copy / Share /
+// Search with Google, and it has never inherited -webkit-touch-callout
+// dependably: upstream shipped it on `html, body` and the television — two
+// canvases — went on raising the menu mid-game until it moved to a rule that
+// matches every element. pilot.html is a canvas page too and had the same bug,
+// so this pins the fix rather than the symptom. The test above cannot see the
+// difference; that is why this one exists.
+test('the callout is set on every element, not left to inherit onto a canvas', () => {
+  const src = readFileSync(root('pilot.html'), 'utf8');
+  // The universal rule, and the callout inside it. Written as one match so a
+  // callout that drifts back out of the `*` rule fails here.
+  assert.match(
+    src, /\*\s*\{[^}]*-webkit-touch-callout\s*:\s*none/,
+    'pilot.html must set the callout on `*`: a <canvas> does not inherit it'
+  );
+});
+
 test('the front door survives a finger', { timeout: 180000 }, async (t) => {
   await __lockForTests.acquire();
   const server = await startServer({ port: 0, rooms: new Rooms(), log: quiet });

@@ -5,7 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>WINGS OF MARIO — PILOT</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  /* The callout is set on EVERY element, not left to inherit from body. iOS
+     treats a long press on a <canvas> like a long press on an image and offers
+     Copy / Share / Search with Google, and it has never inherited this property
+     dependably — #screen is a canvas and kept summoning the menu with
+     `html, body` alone. Upstream found this on the television and the same
+     applies here; user-select below does inherit correctly, so it stays put. */
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-touch-callout: none; }
   html, body {
     height: 100%;
     /* Mirrors index.html. iOS Safari has ignored user-scalable=no and
@@ -14,16 +20,15 @@
        pinch-to-zoom, which is an accessibility affordance we are not entitled
        to take away. #screen stays at `none` because it must swallow drags too.
 
-       The other three are the callout treatment: without them a press held a
-       fraction too long raises iOS's copy / paste / Look Up / SEARCH GOOGLE
-       menu over the game, and a grey tap-highlight flashes over anything
-       touched. Nothing on this page is text a player would ever want to
-       select — it is a canvas and a key legend — so the whole page takes it,
-       where index.html scopes it to the pad. */
+       The rest is the callout treatment: without it a press held a fraction
+       too long raises iOS's copy / paste / Look Up / SEARCH GOOGLE menu over
+       the game, and a grey tap-highlight flashes over anything touched.
+       Nothing on this page is text a player would ever want to select — it is
+       a canvas and a key legend — so the whole page takes it. The callout
+       itself lives on the `*` rule above, for the reason given there. */
     touch-action: manipulation;
     user-select: none;
     -webkit-user-select: none;
-    -webkit-touch-callout: none;
     -webkit-tap-highlight-color: transparent;
     background: #04050a;
     color: #cdd6f4;
