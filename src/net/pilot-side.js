@@ -45,7 +45,10 @@ export class PilotNet {
     this.transport = null;
     // Mario's discrete fields must never be interpolated into a blend.
     this.marioInterp = new Interp({
-      snap: ['island', 'anim', 'facing', 'power', 'lives', 'state', ...REACH_SNAP],
+      // `grounded` is a 0/1 flag, not a quantity: blended across a jump it
+      // would spend the whole arc at 0.5 and the contact would never leave the
+      // walk cycle.
+      snap: ['island', 'anim', 'facing', 'power', 'lives', 'state', 'grounded', ...REACH_SNAP],
     });
     this.remote = null;
     this.lastEvent = null;

@@ -86,5 +86,15 @@ export function contactFrom(s, originX) {
     y: ISLAND_TOP_Y + s.y,
     facing: s.facing,
     island: s.island,
+    // Carried through so the contact can be ANIMATED rather than slid across
+    // the island as a decal. These are Mario's client's numbers, read and never
+    // recomputed: the pilot has no collision map for Mario's level and could
+    // not work out `grounded` for himself if he wanted to.
+    //
+    // Velocity survives the coordinate change untouched — the conversion above
+    // is a translation, and a translation does not alter a difference.
+    vx: s.vx,
+    vy: s.vy,
+    grounded: s.grounded,
   };
 }

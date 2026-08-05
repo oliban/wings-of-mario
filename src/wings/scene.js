@@ -11,7 +11,10 @@ import {
 import { drawPlane } from './art/plane.js';
 import { drawLandmass } from './art/land.js';
 import { drawBomb, drawTracer, drawRocket, drawFireball } from './art/ordnance.js';
-import { MARIO_CONTACT } from './art/contact.js';
+import {
+  MARIO_CONTACT, CONTACT_WALK, CONTACT_JUMP, CONTACT_SKID, CONTACT_BOB,
+} from './art/contact.js';
+import { contactDrawing, POSE } from './contact-anim.js';
 import { drawPanel, HUD_H } from './art/hud.js';
 import { drawSailCard } from './art/sail-card.js';
 
@@ -496,7 +499,17 @@ export class Scene {
     const sy = Math.floor(m.y - cam.y);
     if (sx < -MARIO_CONTACT.w || sy < -MARIO_CONTACT.h) return;
     if (sx > f.vw || sy > f.vh) return;
-    MARIO_CONTACT.draw(ctx, sx, sy, m.facing < 0, false);
+    // WHICH drawing is contact-anim.js's decision, off the velocity Mario's
+    // client sent; this only paints it. The tick is the SIMULATION's, so the
+    // stride runs at the same rate whatever the renderer manages to draw.
+    const a = contactDrawing(m, this.tick, CONTACT_BOB);
+    const art = a.pose === POSE.JUMP ? CONTACT_JUMP
+      : a.pose === POSE.SKID ? CONTACT_SKID
+        : a.pose === POSE.WALK ? CONTACT_WALK[a.frame]
+          : MARIO_CONTACT;
+    // The bob lifts the DRAWING and not the contact: the position on the wire
+    // is still where he is, which is what keeps the bomb sight honest.
+    art.draw(ctx, sx, sy - a.bob, m.facing < 0, false);
   }
 
   drawShots(ctx, sim, cam, f) {

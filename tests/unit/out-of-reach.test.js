@@ -56,8 +56,29 @@ test('no player, no snapshot', () => {
 });
 
 test('a reachable snapshot becomes a world-space contact', () => {
-  const c = contactFrom({ reach: 1, x: 100, y: 176, facing: -1, island: '1-1' }, 3000);
-  assert.deepEqual(c, { x: 3100, y: ISLAND_TOP_Y + 176, facing: -1, island: '1-1' });
+  // The whole of what marioSnapshot sends when he is in reach — the velocity
+  // and the grounded flag ride along so the pilot can ANIMATE the contact
+  // (src/wings/contact-anim.js) instead of sliding a decal across the island.
+  const c = contactFrom(
+    { reach: 1, x: 100, y: 176, vx: -1.5, vy: 0, grounded: 1, facing: -1, island: '1-1' },
+    3000,
+  );
+  assert.deepEqual(c, {
+    x: 3100, y: ISLAND_TOP_Y + 176, facing: -1, island: '1-1', vx: -1.5, vy: 0, grounded: 1,
+  });
+});
+
+test('velocity survives the move into world space untouched', () => {
+  // The conversion is a translation, and a translation does not alter a
+  // difference. If this ever starts scaling, the gait goes wrong at exactly the
+  // moment the island origin changes — which is every sail.
+  const s = { reach: 1, x: 100, y: 176, vx: 2.25, vy: -4, grounded: 0, facing: 1, island: '1-1' };
+  for (const origin of [0, 3000, 11763]) {
+    const c = contactFrom(s, origin);
+    assert.equal(c.vx, 2.25);
+    assert.equal(c.vy, -4);
+    assert.equal(c.grounded, 0);
+  }
 });
 
 test('an out-of-reach snapshot becomes no contact', () => {
