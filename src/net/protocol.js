@@ -15,6 +15,7 @@ export const MSG = {
   EV: 'ev',           // either way, reliable, acked, resent until acked
   ACK: 'ack',         // acknowledgement of one EV seq
   DAMAGE: 'damage',   // server -> both: these keys are now destroyed. Authoritative.
+  BUILT: 'built',     // server -> both: these keys are now brick. Authoritative.
   HASH: 'hash',       // client -> server: my destroyed-set hashes
   DESYNC: 'desync',   // server -> client: yours and mine disagree
   ERROR: 'error',     // server -> client: refused, with a reason
@@ -32,6 +33,13 @@ export const MSG = {
 // destroyed, answered by an authoritative DAMAGE broadcast. It is not the
 // local simulation's 'detonation' event, and the two names must not drift
 // together.
+//
+// `build` is that same shape the other way round, and deliberately so: a
+// *proposal* from Mario's side that these tile keys are now brick, answered by
+// an authoritative BUILT broadcast. It is mario-owned for the reason
+// worldCleared and worldReset are — only his client runs the toolbelt's brick
+// bomb, and only his client can see where the row actually landed. The pilot
+// obeys and never infers a brick from anything he can see.
 export const EVENT_OWNER = {
   bombRelease: 'pilot',
   detonate: 'pilot',
@@ -39,6 +47,7 @@ export const EVENT_OWNER = {
   landed: 'pilot',
   planeLost: 'pilot',
   ferrySunk: 'pilot',
+  build: 'mario',
   marioDeath: 'mario',
   islandCleared: 'mario',
   ferryBoard: 'mario',
@@ -116,6 +125,12 @@ export function validate(msg) {
       if (typeof msg.token !== 'string') return 'bad token';
       if (!isInt(msg.seed)) return 'bad seed';
       if (!isPlainObject(msg.damage)) return 'bad damage map';
+      // OPTIONAL, unlike `damage`, and that is not an oversight: a welcome with
+      // no `built` at all is a match in which nobody has laid a brick, which is
+      // every match until Mario is handed a toolbelt. Requiring it would make
+      // this validator the reason an older server's welcome is rejected
+      // outright, and "absent means none" costs nothing to read.
+      if (msg.built != null && !isPlainObject(msg.built)) return 'bad built map';
       return null;
     case MSG.PEER:
       if (!SIDES.includes(msg.side)) return 'bad side';
@@ -153,6 +168,16 @@ export function validate(msg) {
       if (msg.cx != null || msg.cy != null || msg.r != null) {
         if (!isNum(msg.cx) || !isNum(msg.cy) || !isNum(msg.r)) return 'bad blast centre';
       }
+      return null;
+    case MSG.BUILT:
+      // The mirror of DAMAGE and checked exactly as loosely: `keys` is an array
+      // here and every consumer runs each key through parseTileKey and skips
+      // the nulls, for the same reason spelled out above — this file may not
+      // import blast.js without losing the no-imports property the server
+      // depends on. There is no geometry: a brick row is not an explosion,
+      // nothing is resolved against it, and the keys are the whole of it.
+      if (typeof msg.island !== 'string' || !msg.island) return 'bad island';
+      if (!Array.isArray(msg.keys)) return 'bad keys';
       return null;
     case MSG.HASH:
       if (!isInt(msg.tick)) return 'bad tick';

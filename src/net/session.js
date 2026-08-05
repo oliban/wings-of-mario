@@ -278,6 +278,20 @@ export class Session {
         this._emit('damage', msg);
         return;
 
+      case MSG.BUILT:
+        // Authoritative, exactly like DAMAGE, and settling our own `build`
+        // proposal the same way: the server consumes a build rather than
+        // relaying it, so this broadcast carrying our seq is the ONLY thing
+        // that can take it out of the outbox.
+        //
+        // No `replay` marking here, unlike DAMAGE. That flag exists so a
+        // resent crater is not a second chance to kill whatever is standing in
+        // it; a brick row kills nothing and applying it twice writes the same
+        // character over the same tile.
+        if (typeof msg.seq === 'number') this._outbox.delete(msg.seq);
+        this._emit('built', msg);
+        return;
+
       case MSG.DESYNC:
         this._emit('desync', msg);
         return;

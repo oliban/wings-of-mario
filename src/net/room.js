@@ -8,7 +8,7 @@
 import {
   SIDES, EVENT_OWNER, ROOM_CODE_ALPHABET, ROOM_CODE_LEN, normalizeRoomCode,
 } from './protocol.js';
-import { DamageMap, hashKeys } from '../wings/damage.js';
+import { DamageMap, hashKeys, destroyKeys, buildKeys } from '../wings/damage.js';
 import { parseTileKey } from '../wings/blast.js';
 import { filterProtectedForIsland } from '../wings/sanctuary.js';
 
@@ -55,6 +55,13 @@ export class Room {
     // The entire authoritative shared state of the match (spec 4.3). Nothing
     // else on this server is authoritative about anything.
     this.damage = new DamageMap();
+    // The other half of that state: tiles Mario's brick bombs have ADDED to a
+    // level that never had them. Held here for the same reason the destroyed
+    // set is (D2) — a pilot who reconnects, or who joins an hour into the
+    // match, has to be given the bridge as well as the crater, and neither
+    // client can be asked to remember what the other one built. The two sets
+    // are kept disjoint by destroyKeys/buildKeys; see src/wings/damage.js.
+    this.built = new DamageMap();
     // islandId -> [{ hash, until }]: the states this island's set has been in
     // and the moment it stopped being in each of them. Only the desync
     // detector reads it; see compareHashes.
@@ -171,7 +178,9 @@ export class Room {
     // when there is a change, so a client still holding it is recognised as
     // one broadcast behind rather than accused of a desync.
     const before = this.damage.hash(islandId);
-    const added = this.damage.add(islandId, clean);
+    // A bomb into a brick row takes the bricks back out of the built set in the
+    // same breath. Last action wins, and the two sets never overlap.
+    const { destroyed: added } = destroyKeys(this.damage, this.built, islandId, clean);
     if (added.length) this._rememberState(islandId, before, now);
     // What this detonate is authoritatively responsible for: every key it
     // proposed that is in fact destroyed. On first delivery that is exactly
@@ -186,6 +195,38 @@ export class Room {
     // safe because every client's set is append-only.
     const authoritative = clean.filter((k) => this.damage.has(islandId, k));
     return { ok: true, added, keys: authoritative };
+  }
+
+  // The mirror of recordDetonate, for the tiles the toolbelt's brick bomb ADDS.
+  // Same shape, same ownership check, same parse filter — and the same D2 rule:
+  // what comes back from here is the fact, and what Mario's engine thought it
+  // laid is not.
+  //
+  // NO SANCTUARY FILTER, deliberately. The sanctuary exists so the ground under
+  // a spawning Mario cannot be taken away from him; putting a brick down near
+  // his spawn takes nothing from anybody, and refusing it here would silently
+  // eat part of a row he paid a coin for. Note the consequence, which is
+  // correct rather than merely tolerable: a brick laid inside the strip is
+  // protected exactly like the ground it stands on, because isProtected is a
+  // question about the RECTANGLE and not about what is in it.
+  recordBuild(side, islandId, keys, now) {
+    if (!this.mayEmit(side, 'build')) return { ok: false, reason: 'not the owner of build' };
+    if (typeof islandId !== 'string' || !islandId) return { ok: false, reason: 'bad island' };
+    if (!Array.isArray(keys)) return { ok: false, reason: 'bad keys' };
+    this.touch(now);
+    const clean = keys.filter((k) => parseTileKey(k) !== null);
+    const before = this.damage.hash(islandId);
+    const { built: added, repaired } = buildKeys(this.damage, this.built, islandId, clean);
+    // A brick laid in a crater CHANGES THE DESTROYED SET, which is the set the
+    // desync detector compares — so the state we just left has to be remembered
+    // here too, or a client still holding it for one trip down the wire is
+    // accused of a desync it does not have.
+    if (repaired.length) this._rememberState(islandId, before, now);
+    // Every key this build is responsible for, not merely the new ones: a
+    // RESEND adds nothing and must still deliver the whole row, exactly as
+    // recordDetonate re-delivers the whole crater and for the same reason.
+    const authoritative = clean.filter((k) => this.built.has(islandId, k));
+    return { ok: true, added, repaired, keys: authoritative };
   }
 
   _rememberState(islandId, hash, until) {
@@ -256,6 +297,9 @@ export class Room {
     return {
       seed: this.seed,
       damage: { ...this.damage.toJSON() },
+      // The bridges as well as the holes. A pilot who joins an hour in has to
+      // be given both or he flies over an island whose shape only Mario knows.
+      built: { ...this.built.toJSON() },
       sides: SIDES.filter((s) => this.sides.has(s)),
     };
   }

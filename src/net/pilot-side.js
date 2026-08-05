@@ -6,7 +6,7 @@ import {
   rememberSeat, recallSeat, forgetSeat,
 } from './lobby.js';
 import pilot from '../wings/pilot-main.js';
-import { DamageSync, applyToIsland } from './damage-sync.js';
+import { DamageSync, applyToIsland, applyBuiltToIsland } from './damage-sync.js';
 import { noteDesync } from './desync.js';
 import {
   MatchVerdict, pilotWireEvent, applyWire, mayEmitFrom, repositionWorld,
@@ -156,12 +156,20 @@ export class PilotNet {
     });
     this.session.on('event', (m) => this.onPeerEvent(m));
     this.session.on('damage', (m) => this.onDamage(m));
+    this.session.on('built', (m) => this.onBuilt(m));
     this.session.on('desync', (m) => this.onDesync(m));
 
     const welcome = await this.session.connect();
     this.seed = welcome.seed;
     for (const [island, keys] of Object.entries(welcome.damage || {})) {
       this.damage.record(island, keys);
+    }
+    // The bricks Mario has laid, in the same welcome and applied in the same
+    // breath: a pilot joining an hour in has to be given the bridges as well as
+    // the holes, or he flies over an island whose shape only Mario knows.
+    // Recorded after the damage, matching Room#recordBuild's own order.
+    for (const [island, keys] of Object.entries(welcome.built || {})) {
+      this.damage.recordBuilt(island, keys);
     }
     // Rebuild the ocean on the match seed. Until this line the pilot is flying
     // over the default archipelago, which is a different one.
@@ -185,6 +193,17 @@ export class PilotNet {
       const isle = sim.islandById(island);
       if (!isle) continue;
       applyToIsland(isle, this.damage.keys(island));
+      n++;
+    }
+    // The brick rows, over the top of the craters — the same order the server
+    // resolves the two sets in, so an island rebuilt from the match state ends
+    // up in the state the match is actually in. The two sets are disjoint, so
+    // the order cannot matter; doing it in the same order in all three places
+    // is what makes that easy to keep true.
+    for (const island of this.damage.builtIslands()) {
+      const isle = sim.islandById(island);
+      if (!isle) continue;
+      applyBuiltToIsland(isle, this.damage.builtKeys(island));
       n++;
     }
     return n;
@@ -296,6 +315,18 @@ export class PilotNet {
     const sim = this.host.sim;
     if (!sim || !m.island) return;
     applyToIsland(sim.islandById(m.island), m.keys);
+  }
+
+  // THE BRIDGE. Mario's client laid it and announced it; this side obeys and
+  // never infers — it has no Mario level, no toolbelt and no idea a brick bomb
+  // exists (spec 7.3). Everything visible follows from Island#charAt reporting
+  // the brick character for these keys: land.js paints it, the aeroplane
+  // collides with it, and the ordnance takes it like any other brick.
+  onBuilt(m) {
+    this.damage.recordBuilt(m.island, m.keys);
+    const sim = this.host.sim;
+    if (!sim || !m.island) return;
+    applyBuiltToIsland(sim.islandById(m.island), m.keys);
   }
 
   // ---- the alarm -----------------------------------------------------------
@@ -482,6 +513,9 @@ window.__WINGS.net = {
   pump: () => net.pump(),
   winner: () => net.winner(),
   damage: (island) => net.damage.keys(island),
+  // The bricks Mario has laid, as this client has them. Mario's client answers
+  // this question with the same list for the same island.
+  built: (island) => net.damage.builtKeys(island),
   latency: (ms) => (net.transport ? net.transport.latency(ms) : 0),
   drop: (pct) => (net.transport ? net.transport.drop(pct) : 0),
   disconnect: () => (net.transport ? net.transport.disconnect() : false),

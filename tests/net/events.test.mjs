@@ -22,7 +22,7 @@ test('match events over a real socket', { timeout: 60000 }, async (t) => {
     for (const type of [
       'marioDeath', 'islandCleared', 'ferryBoard', 'ferrySunk',
       'sortieStart', 'landed', 'planeLost', 'worldCleared', 'worldReset',
-      'detonate', 'bombRelease',
+      'detonate', 'bombRelease', 'build',
     ]) {
       assert.ok(EVENT_OWNER[type], `${type} has no owner`);
     }
@@ -61,9 +61,16 @@ test('match events over a real socket', { timeout: 60000 }, async (t) => {
     const { mario, pilot } = await pair(port, 'FGHJ');
     let seq = 0;
     for (const type of OWNED_BY_MARIO) {
-      mario.send({ t: MSG.EV, seq: ++seq, type, d: { probe: type } });
-      const got = await pilot.next((m) => m.t === MSG.EV && m.type === type);
-      assert.equal(got.d.probe, type);
+      // `build` is the mirror of `detonate` and travels the same way: the
+      // server CONSUMES the proposal and answers both clients with an
+      // authoritative BUILT, so the pilot never sees a relayed EV for it.
+      const d = type === 'build' ? { island: '1-1', keys: ['3,4'] } : { probe: type };
+      mario.send({ t: MSG.EV, seq: ++seq, type, d });
+      const got = type === 'build'
+        ? await pilot.next((m) => m.t === MSG.BUILT)
+        : await pilot.next((m) => m.t === MSG.EV && m.type === type);
+      assert.ok(got, `${type} never reached the pilot`);
+      if (type !== 'build') assert.equal(got.d.probe, type);
     }
 
     let since = pilot.inbox.length;

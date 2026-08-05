@@ -225,6 +225,7 @@ export async function startServer(opts = {}) {
           reconnected: !!res.reconnected,
           seed: state.seed,
           damage: state.damage,
+          built: state.built,
           peer: room.present(OTHER_SIDE[res.side]),
         });
         relay({ t: MSG.PEER, side: res.side, present: true });
@@ -275,6 +276,17 @@ export async function startServer(opts = {}) {
             }
             send(ws, dmg);
             relay(dmg);
+          } else if (msg.type === 'build') {
+            // Mario's brick row, consumed rather than relayed — the same shape
+            // as detonate above and for the same reasons. `rec.keys`, not
+            // `rec.added`, so a resend still delivers the whole row; back to
+            // BOTH clients, so every client's built set is written by exactly
+            // one code path, the proposer's included.
+            const rec = room.recordBuild(seat.side, msg.d.island, msg.d.keys, Date.now());
+            if (!rec.ok) return fail(ws, rec.reason);
+            const built = { t: MSG.BUILT, island: msg.d.island, keys: rec.keys, seq: msg.seq };
+            send(ws, built);
+            relay(built);
           } else {
             relay(msg);
           }

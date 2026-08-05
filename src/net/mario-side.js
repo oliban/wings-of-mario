@@ -11,7 +11,8 @@ import { TILE } from '../core/constants.js';
 import { ISLAND_TOP_Y } from '../wings/geo.js';
 import { layoutArchipelago } from '../wings/archipelago.js';
 import { GunRounds } from '../wings/gun-rounds.js';
-import { DamageSync, applyToWorld } from './damage-sync.js';
+import { DamageSync, applyToWorld, applyBuiltToWorld } from './damage-sync.js';
+import { keepWatchingBuilds } from '../wings/bricks.js';
 import { noteDesync } from './desync.js';
 import { MatchVerdict, MarioEvents, applyWire, mayEmitFrom } from './match-events.js';
 import { marioSnapshot, isReachable } from './reach.js';
@@ -87,6 +88,17 @@ export class MarioNet {
     this._syncedLevel = null;
     this._syncedSize = 0;
     this._prevLoadLevel = null;
+    // THE BRICK ROWS the toolbelt has laid, on their way to the server. The
+    // watcher (src/wings/bricks.js) fills this from inside world.setTile, which
+    // is mid-frame and mid-engine; the wire send happens on the next pump, so
+    // one row of five is one event rather than five.
+    this._pendingBuilds = [];
+    // Which island's tile map we last pushed the built set back into, and the
+    // tick we did it on. world.loadLevel rebuilds the map from the level data
+    // and sets world.tick back to 0, so a reading that went BACKWARDS is a
+    // rebuild and the bridge has to be laid again. See syncLevelBuilds.
+    this._builtLevel = null;
+    this._builtTick = null;
   }
 
   get matchStatus() {
@@ -174,6 +186,7 @@ export class MarioNet {
     this.session.on('desync', (m) => this.onDesync(m));
     this.session.on('event', (m) => this.onPeerEvent(m));
     this.session.on('damage', (m) => this.onDamage(m));
+    this.session.on('built', (m) => this.onBuilt(m));
 
     const welcome = await this.session.connect();
     this.seed = welcome.seed;
@@ -184,10 +197,18 @@ export class MarioNet {
     for (const [island, keys] of Object.entries(welcome.damage || {})) {
       this.damage.record(island, keys);
     }
+    // And every brick already laid in this match. AFTER the damage, so that a
+    // key the server holds in both — which it never should, but a welcome is
+    // two independent maps on the wire — ends up built, matching the server's
+    // own resolution order in Room#recordBuild.
+    for (const [island, keys] of Object.entries(welcome.built || {})) {
+      this.damage.recordBuilt(island, keys);
+    }
     // Installed on connect rather than at module load: __GAME is assigned by a
     // module with a top-level await and is not reliably there before this.
     this.installLevelHook();
     this.installSanctuaryGuard();
+    this.installBrickWatch();
     // Whatever level is already loaded gets its share at once, rather than
     // waiting for Mario to leave and come back.
     this._syncedLevel = null;
@@ -339,6 +360,98 @@ export class MarioNet {
   // path the engine has to remove a tile. See src/wings/sanctuary.js.
   installSanctuaryGuard() {
     return guardWorld(this.game && this.game.world);
+  }
+
+  // THE BRICK ROWS, on this side. Mario's toolbelt lays five bricks by writing
+  // to world.setTile, and the pilot's island — static level data plus two key
+  // sets — cannot possibly know that happened. So this client watches its own
+  // tile map and announces what it built, exactly as the pilot's client
+  // proposes his craters and never Mario's.
+  //
+  // Wrapped on the world INSTANCE (src/wings/bricks.js), like the sanctuary
+  // guard above and for the same reason: no file under src/game/ is edited.
+  // Idempotent, and called from the pump as well as from connect(), because
+  // __GAME's world is not guaranteed to exist at connect time.
+  installBrickWatch() {
+    return keepWatchingBuilds(this.game && this.game.world, (key) => this.onLocalBuild(key));
+  }
+
+  // A tile just turned solid on this client. Called from inside setTile, so it
+  // does the least possible: decide whether it is news, and queue it.
+  onLocalBuild(key) {
+    const world = this.game && this.game.world;
+    const island = this.islandId();
+    if (!world || !island) return;
+    // A BRICK CANNOT BE LAID DOWN A PIPE, in the sense that matters here: the
+    // key '40,9' names one tile on 1-1's surface and an entirely different one
+    // in its coin room, so announcing a sub-area's tile would put a brick in
+    // the wrong wall on the pilot's island. Same signal, same reason as
+    // onDamage and syncLevelDamage (src/net/reach.js).
+    if (!isReachable(world)) return;
+    // Already ours: either the server has confirmed this brick, or this is
+    // syncLevelBuilds laying it back down after a level reload. Announcing it
+    // again would be a second event for one brick.
+    if (this.damage.hasBuilt(island, key)) return;
+    if (this._pendingBuilds.includes(key)) return;
+    this._pendingBuilds.push(key);
+  }
+
+  // One event per pump rather than one per brick: a row is five setTile calls
+  // inside a handful of frames, and the server answers each event with a
+  // broadcast to both clients.
+  flushBuilds() {
+    if (!this._pendingBuilds.length) return 0;
+    const island = this.islandId();
+    if (!island || !this.session || !this.session.connected) {
+      // Not connected, or nowhere to put them. Dropped rather than held: the
+      // server is the authority on what is built (D2), and a queue that
+      // survived a disconnect would announce a level's worth of bricks as
+      // brand new after a reconnect that already carried them in the welcome.
+      this._pendingBuilds.length = 0;
+      return 0;
+    }
+    const keys = this._pendingBuilds.slice();
+    this._pendingBuilds.length = 0;
+    return this.emit('build', { island, keys }) ? keys.length : 0;
+  }
+
+  // The authoritative brick row coming back — ours included, so every client's
+  // built set is written by exactly one code path (D2). Applied to the tile map
+  // as well as recorded: on THIS client the tiles are usually already there
+  // (we laid them), and re-writing the same character over the same tile is a
+  // no-op, but a brick the server holds and this map lost to a reload is not.
+  onBuilt(m) {
+    this.damage.recordBuilt(m.island, m.keys);
+    const world = this.game && this.game.world;
+    if (!world || !m.island || m.island !== this.islandId()) return;
+    if (!isReachable(world)) return;
+    applyBuiltToWorld(world, m.keys);
+  }
+
+  // The bridge, put back after the tile map was rebuilt under it. The mirror of
+  // syncLevelDamage, and it has to exist for the same reason: every
+  // world.loadLevel rebuilds the map from the level data, so a Mario who died
+  // and respawned would walk up to a chasm his bridge had vanished from while
+  // the pilot could still see it.
+  //
+  // ONLY ON A REBUILD, never every frame. Mario can bump a brick out of his own
+  // bridge from below — it is a real brick — and a per-frame restore would put
+  // it straight back, which is a worse bug than the one this fixes. The
+  // rebuild is detected by world.tick going backwards (world.loadLevel sets it
+  // to 0) or by the island changing under us.
+  syncLevelBuilds() {
+    const world = this.game && this.game.world;
+    const island = this.islandId();
+    if (!world || !island) return 0;
+    if (!isReachable(world)) return 0;
+    const tick = world.tick | 0;
+    const rebuilt = island !== this._builtLevel
+      || this._builtTick == null || tick < this._builtTick;
+    this._builtTick = tick;
+    if (!rebuilt) return 0;
+    this._builtLevel = island;
+    const keys = this.damage.builtKeys(island);
+    return keys.length ? applyBuiltToWorld(world, keys) : 0;
   }
 
   // The safety net, run once a frame. The hook above covers every load that
@@ -502,6 +615,14 @@ export class MarioNet {
     if (snap) this.session.sendSnapshot(this.tick, snap);
     this.emitOwnEvents();
     this.syncLevelDamage();
+    // The watch has to be re-pointed at a world this class may only now have
+    // got hold of, and the bridge has to go back into a map a reload rebuilt —
+    // both before anything this frame laid is flushed, so a brick restored by
+    // syncLevelBuilds is recognised as one we already own rather than
+    // announced a second time.
+    this.installBrickWatch();
+    this.syncLevelBuilds();
+    this.flushBuilds();
     this.session.pump(this.tick);
 
     // Spec 8.4: the detector runs in real play, not only under test. What is
@@ -687,6 +808,10 @@ window.__NET = {
   }),
   stepGun: () => net.stepGun().length,
   damage: (island) => net.damage.keys(island),
+  // The other half of this client's terrain delta: the bricks the toolbelt has
+  // laid. The pilot's client answers the same question about the same island
+  // with the same list, which is the whole invariant of the feature.
+  built: (island) => net.damage.builtKeys(island),
   latency: (ms) => (net.transport ? net.transport.latency(ms) : 0),
   drop: (pct) => (net.transport ? net.transport.drop(pct) : 0),
   disconnect: () => (net.transport ? net.transport.disconnect() : false),

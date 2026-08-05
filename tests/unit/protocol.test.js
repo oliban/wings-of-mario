@@ -17,6 +17,7 @@ test('every reliable event has exactly one owner', () => {
   const expected = [
     'bombRelease', 'detonate', 'marioDeath', 'islandCleared', 'ferryBoard',
     'ferrySunk', 'sortieStart', 'landed', 'planeLost', 'worldCleared', 'worldReset',
+    'build',
   ];
   assert.deepEqual(Object.keys(EVENT_OWNER).sort(), [...expected].sort());
   for (const type of expected) {
@@ -27,6 +28,10 @@ test('every reliable event has exactly one owner', () => {
   assert.equal(EVENT_OWNER.detonate, 'pilot');
   assert.equal(EVENT_OWNER.marioDeath, 'mario');
   assert.equal(EVENT_OWNER.planeLost, 'pilot');
+  // The two terrain proposals are one each, and that is the whole ownership
+  // rule in miniature: the pilot says what his bombs took out, Mario says what
+  // his toolbelt put in, and neither may say the other's.
+  assert.equal(EVENT_OWNER.build, 'mario');
 });
 
 test('room codes are four characters from an unambiguous alphabet', () => {

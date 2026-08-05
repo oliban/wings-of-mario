@@ -4,6 +4,12 @@ import { blastTiles, tileKey, parseTileKey } from './blast.js';
 import { ISLAND_TOP_Y, worldToLocalTile } from './geo.js';
 import { isProtected } from './sanctuary.js';
 
+// What the toolbelt's brick bomb lays. The engine writes this exact character
+// (`w.setTile(tx, ty, '=')`, src/game/entities/brickbomb.js) and the pilot's
+// island has to report the same one, or the two clients draw different terrain
+// from the same key set.
+export const BUILT_CHAR = '=';
+
 // An unmodified upstream level placed in the ocean as a 15-row band whose
 // bottom row sits at sea level. The pilot never loads a Mario World: an
 // island is the level definition plus its destroyed-set and nothing else,
@@ -17,6 +23,15 @@ export class Island {
     this.w = level.width;
     this.h = level.tiles.length;
     this.destroyed = new Set();
+    // Tiles Mario's toolbelt put here that the level never had — the brick
+    // bomb's row of five (src/game/entities/brickbomb.js). The static level
+    // data is never touched: an island is its level plus these two sets, which
+    // is what keeps rebuilding the archipelago free.
+    //
+    // Disjoint from `destroyed` by construction, so charAt need not care which
+    // it consults first. applyDamage and applyBuild are the only two writers
+    // and each takes a key out of the other set.
+    this.built = new Set();
     if (damage.length) this.applyDamage(damage);
   }
 
@@ -42,7 +57,14 @@ export class Island {
 
   charAt(tx, ty) {
     if (!this.inRange(tx, ty)) return '.';
-    if (this.destroyed.has(tileKey(tx, ty))) return '.';
+    const key = tileKey(tx, ty);
+    // A built brick reports as a brick, and everything downstream follows from
+    // that one line: src/wings/art/land.js paints whatever charAt says, so it
+    // is drawn; blocksTile reads it, so the aeroplane hits it; and
+    // destructibleTile reads it, so a bomb takes it. Nothing else in the pilot's
+    // client needed to learn what a brick bomb is.
+    if (this.built.has(key)) return BUILT_CHAR;
+    if (this.destroyed.has(key)) return '.';
     return this.rows[ty][tx];
   }
 
@@ -98,7 +120,26 @@ export class Island {
       const parsed = parseTileKey(key);
       if (!parsed) continue;
       const { tx, ty } = parsed;
-      if (this.inRange(tx, ty)) this.destroyed.add(key);
+      if (!this.inRange(tx, ty)) continue;
+      // A bomb into a brick row takes the bricks out. The two sets are kept
+      // disjoint HERE as well as on the wire, so an island rebuilt from two
+      // key lists in either order ends up in the same state as one that
+      // watched them arrive live.
+      this.built.delete(key);
+      this.destroyed.add(key);
+    }
+  }
+
+  // The other direction: the row a brick bomb laid. Same silence and the same
+  // disjointness — a brick fills the crater it was laid in.
+  applyBuild(keys) {
+    for (const key of keys) {
+      const parsed = parseTileKey(key);
+      if (!parsed) continue;
+      const { tx, ty } = parsed;
+      if (!this.inRange(tx, ty)) continue;
+      this.destroyed.delete(key);
+      this.built.add(key);
     }
   }
 
@@ -117,7 +158,11 @@ export class Island {
       const { tx, ty } = parsed;
       if (!this.inRange(tx, ty)) continue;
       if (this.destroyed.has(key)) continue;
+      // destructibleTile reads charAt, so a built brick answers as a brick and
+      // is taken like any other. It leaves the built set as it joins the
+      // destroyed one.
       if (!this.destructibleTile(tx, ty)) continue;
+      this.built.delete(key);
       this.destroyed.add(key);
       changed.push(key);
     }
@@ -126,6 +171,10 @@ export class Island {
 
   keys() {
     return [...this.destroyed].sort();
+  }
+
+  builtKeys() {
+    return [...this.built].sort();
   }
 }
 
