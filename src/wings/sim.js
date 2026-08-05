@@ -1,7 +1,9 @@
 import { TILE } from '../core/constants.js';
 import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
-import { landingVerdict, hitsHull, arrest, bolt, spotOnDeck, OUTCOME } from './carrier.js';
+import {
+  landingVerdict, hitsHull, arrest, bolt, trapOn, spotOnDeck, OUTCOME,
+} from './carrier.js';
 import {
   createLoadout, release, stepShot, detonate, canDamage, GUN_INTERVAL, GUN_TRACE_TICKS,
 } from './ordnance.js';
@@ -362,7 +364,7 @@ export class WingsSim {
       return;
     }
     if (!this.hookArmed) return;
-    if (verdict.outcome === OUTCOME.TRAP) return this.land();
+    if (verdict.outcome === OUTCOME.TRAP) return this.trap();
     // MISSED THE WIRE, and that is all it is. The aeroplane is on the deck
     // rolling; flight.js runs it off the bow if the deck runs out, and from
     // there it is an ordinary aircraft low and slow over the sea. See
@@ -400,6 +402,22 @@ export class WingsSim {
     return undefined;
   }
 
+  // THE HOOK HAS A WIRE. The aeroplane is caught but still moving: it is hauled
+  // down over the next twenty-odd ticks, which is the distance the arrestor
+  // wire is drawn stretching over (src/wings/art/carrier.js). The landing
+  // COMPLETES when it stops — see settleBolter, which now settles both.
+  //
+  // The catch is announced here, on the tick it happens, because that is when
+  // the wire takes the load.
+  trap() {
+    trapOn(this.plane);
+    this.hookArmed = false;
+    this.rolling = true;
+    this.lastBolter = null;
+    this.emit('trapped', { x: this.plane.x + PLANE_W / 2 });
+    return this;
+  }
+
   land() {
     // The bolter that ended in a landing is over; the panel should stop saying
     // why it happened.
@@ -408,6 +426,10 @@ export class WingsSim {
     this.hookArmed = false;
     this.rearm();
     this.status = 'ready';
+    // WHERE the hook took it, so the wire can be drawn reacting to this
+    // landing rather than sitting there as painted decor. Presentation only —
+    // the sim does not know a wire is drawn — but the position is the sim's to
+    // report, because only it knows where the aeroplane stopped.
     this.emit('landed', {});
     return this;
   }

@@ -36,16 +36,32 @@ const overTheDeck = (sim, speed, over = {}) => {
   return p;
 };
 
-test('a good approach still traps, and rearms', () => {
+test('a good approach traps, runs on in the wire, and rearms', () => {
   const sim = new WingsSim({ islands: ['1-1'] });
   sim.loadout.bomb = 0;
   overTheDeck(sim, LANDING.APPROACH_SPEED);
+  const from = sim.plane.x;
   sim.step({});
-  assert.equal(sim.plane.mode, MODE.DECK);
-  assert.equal(sim.plane.speed, 0, 'the wire did not stop him');
+
+  // CAUGHT, AND STILL MOVING. It used to stop dead on the tick of the catch,
+  // which left the arrestor wire nothing to be drawn stretching over and the
+  // aeroplane sitting on top of the one cable it had taken.
+  assert.equal(sim.plane.mode, MODE.ROLL, 'the wire stopped him dead again');
+  assert.equal(sim.plane.arrested, true);
+  assert.ok(sim.events.some((e) => e.type === 'trapped'), 'the catch was never announced');
+
+  // Hauled down over the next few ticks — and the throttle does not save him,
+  // because you do not fly out of a wire.
+  for (let i = 0; i < 200 && sim.plane.mode === MODE.ROLL; i++) sim.step({ thrust: 1, pitch: 1 });
+  assert.equal(sim.plane.mode, MODE.DECK, 'he never came to rest');
+  assert.equal(sim.plane.speed, 0);
+  assert.ok(sim.plane.x > from, 'the arrested run covered no ground at all');
+  assert.ok(sim.plane.x - from < 60, `he was dragged ${(sim.plane.x - from).toFixed(0)}px: too far`);
+
   assert.equal(sim.squadron, 5, 'a good landing cost an aircraft');
   assert.ok(sim.bombs > 0, 'a landing must rearm');
   assert.equal(sim.bolters, 0);
+  assert.ok(sim.events.some((e) => e.type === 'landed'));
 });
 
 test('too fast does not destroy the aeroplane: it rolls', () => {
@@ -93,6 +109,7 @@ test('and he can come back and trap on the next circuit', () => {
 
   overTheDeck(sim, LANDING.APPROACH_SPEED);
   sim.step({});
+  for (let i = 0; i < 200 && sim.plane.mode === MODE.ROLL; i++) sim.step({});
   assert.equal(sim.plane.mode, MODE.DECK, 'the second approach did not trap');
   assert.equal(sim.squadron, 5);
 });

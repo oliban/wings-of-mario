@@ -66,7 +66,10 @@ test('a full sortie flies through __WINGS in a real browser', { timeout: 60000 }
     assert.equal(r.state.squadron, 5, 'lost an aircraft on a clean sortie');
     assert.equal(r.state.fuel, 100, 'landing did not refuel');
     assert.equal(r.state.loadout.bomb, 12, 'landing did not rearm');
-    assert.deepEqual(r.events, ['released', 'detonation', 'landed']);
+    // 'trapped' is the hook taking a wire; 'landed' is the arrested run coming
+    // to rest a few ticks later. Two moments, two events — the arrestor wire is
+    // drawn stretching between them.
+    assert.deepEqual(r.events, ['released', 'detonation', 'trapped', 'landed']);
   });
 
   await t.test('no uncaught page errors across the whole sortie', async () => {

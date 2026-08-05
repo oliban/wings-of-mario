@@ -58,7 +58,10 @@ test('a whole sortie: deck, island, crater, deck', () => {
   assert.ok(!sim.islandById('1-1').blocksTile(20, 13), 'the crater must survive the trip home');
   assert.deepEqual(
     sim.events.map((e) => e.type),
-    ['released', 'detonation', 'landed']
+    // 'trapped' is the hook taking a wire; 'landed' is the arrested run coming
+    // to rest a few ticks later. Two events because it is two moments, and the
+    // wire is drawn stretching between them.
+    ['released', 'detonation', 'trapped', 'landed']
   );
 });
 

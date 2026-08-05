@@ -6,7 +6,8 @@ import { MODE, FLIGHT, normalizeAngle } from './flight.js';
 import { drawSky, drawClouds } from './art/sky.js';
 import { drawSea, drawWake, drawBowWave, drawSplash, surfaceAt } from './art/sea.js';
 import {
-  drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark, ISLAND_W, ISLAND_H, DECK_THICK,
+  drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark, WIRE,
+  ISLAND_W, ISLAND_H, DECK_THICK,
 } from './art/carrier.js';
 import { drawPlane } from './art/plane.js';
 import { drawLandmass } from './art/land.js';
@@ -207,6 +208,9 @@ export class Scene {
     this.fx = [];
     this.consumed = 0;
     this.tick = 0;
+    // The arrestor wire still ringing from the last trap, or null. Counted in
+    // simulation ticks, like everything else here that moves.
+    this.wire = null;
     // Bank angle about the fuselage axis, its rate, and the attitude it is
     // heading for. `rollTarget` accumulates a half turn per crossing of the
     // vertical, in the direction the nose is already sweeping, so a full loop
@@ -241,6 +245,7 @@ export class Scene {
     // rewinding would replay every explosion of the match at once.
     if (sim) this.consumed = sim.events.length;
     this.remoteMario = null;
+    this.wire = null;
     return this;
   }
 
@@ -344,6 +349,14 @@ export class Scene {
           : { kind: 'fire', x, y, t: 0, life: 46 });
         continue;
       }
+      // THE WIRE CATCHING. The cables were painted flat and never moved,
+      // whatever happened on them; a trap looked exactly like a plane deciding
+      // to stop. This hangs a deflection on the wire nearest the hook and lets
+      // it ring out — see wireCatch() in art/carrier.js for the shape of it.
+      if (e.type === 'trapped' && typeof e.x === 'number') {
+        this.wire = { x: e.x, t: 0 };
+        continue;
+      }
       if (e.type === 'detonation') this.fx.push(detonationFx(e));
     }
     this.consumed = sim.events.length;
@@ -360,6 +373,18 @@ export class Scene {
     this.tick = sim.tick;
     for (const f of this.fx) f.t++;
     this.fx = this.fx.filter((f) => f.t < f.life);
+    // The wire rings out on the SIMULATION's clock, advanced by however many
+    // ticks actually passed — a dropped frame costs the intermediate swings,
+    // not the ring-down. Same argument as the roll above.
+    if (this.wire) {
+      this.wire.t += steps;
+      // WHERE THE HOOK HAS DRAGGED IT TO, refreshed every frame while the
+      // aeroplane is still running in the wire and then left where it stopped.
+      // Read here rather than at draw time because drawShip is handed a camera
+      // and a frame, not the simulation.
+      this.wire.hook = sim.plane.x + 2;
+      if (this.wire.t >= WIRE.TICKS) this.wire = null;
+    }
     return this;
   }
 
@@ -458,7 +483,7 @@ export class Scene {
     ctx.save();
     ctx.translate(-cam.x, -cam.y);
     drawHull(ctx, DECK_X0, DECK_X1, DECK_Y, SEA_Y);
-    drawDeck(ctx, DECK_X0, DECK_X1, DECK_Y, this.tick);
+    drawDeck(ctx, DECK_X0, DECK_X1, DECK_Y, this.tick, this.wire);
     drawIsland(ctx, ISLAND_X, DECK_Y, this.tick);
     drawDeckPark(ctx, PARK_X, DECK_Y);
     drawCrew(ctx, CREW_X, DECK_Y, this.tick);

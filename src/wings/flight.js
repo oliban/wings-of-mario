@@ -65,6 +65,11 @@ export const FLIGHT = {
   STALL_SPEED: 0.8,
   STALL_PULL: 0.02,
   ROLL_THRUST: 0.03,
+  // How hard the arrestor wire pulls you up, in speed lost per tick. A trap at
+  // the top of the window (1.8) is stopped in about 24 ticks and 20-odd pixels
+  // of deck: long enough to SEE the wire take the load, short enough that it
+  // still reads as being caught rather than as braking.
+  ARREST_DECEL: 0.075,
   ROLL_DRAG: 0.01,
   TAKEOFF_SPEED: 2.2,
   FUEL_MAX: 100,
@@ -292,7 +297,15 @@ function stepRoll(p, pitch, throttle, F) {
   p.turnStartAngle = null;
   p.turnDelta = null;
   p.y = DECK_Y - PLANE_H;
-  p.speed += F.ROLL_THRUST * throttle - F.ROLL_DRAG * p.speed;
+  // IN THE WIRE. The throttle is ignored and the arrestor does the work: a
+  // constant, hard pull-up rather than proportional drag, because a wire takes
+  // the same load whatever speed you hit it at — and because proportional drag
+  // never actually reaches zero (see the floor below).
+  if (p.arrested) {
+    p.speed = Math.max(0, p.speed - F.ARREST_DECEL);
+  } else {
+    p.speed += F.ROLL_THRUST * throttle - F.ROLL_DRAG * p.speed;
+  }
   // ROLLING DRAG IS PROPORTIONAL, so speed decays towards zero and never
   // reaches it: 0.99 of something is never nothing. That was invisible while
   // the only roll was a takeoff, where the throttle is open and the aeroplane
@@ -303,20 +316,29 @@ function stepRoll(p, pitch, throttle, F) {
   // takeoff roll straight back to zero and the aeroplane never left the deck:
   // with the throttle open, every speed below the floor is on its way UP
   // through it.
-  if (throttle <= 0 && p.speed < ROLL_STOP) p.speed = 0;
+  if (!p.arrested && throttle <= 0 && p.speed < ROLL_STOP) p.speed = 0;
   p.x += p.speed;
   p.vx = p.speed;
   p.vy = 0;
   p.mode = p.speed > 0 ? MODE.ROLL : MODE.DECK;
 
-  if (pitch > 0 && p.speed >= F.TAKEOFF_SPEED) {
+  if (!p.arrested && pitch > 0 && p.speed >= F.TAKEOFF_SPEED) {
     p.mode = MODE.AIR;
     p.gear = false;
     return;
   }
   // Ran out of deck. Airborne below flying speed is a stall, and a stall this
   // low is the sea. Nothing special-cases it; the physics does it.
+  // A wire holds you on the ship. An arrested run that reaches the bow is still
+  // caught — the cable does not let go because the deck ran out — so it stops
+  // there rather than tipping a landing that WORKED into a ditching the player
+  // could not have seen coming.
   if (p.x >= DECK_X1) {
+    if (p.arrested) {
+      p.x = DECK_X1;
+      p.speed = 0;
+      return;
+    }
     p.mode = MODE.AIR;
     p.gear = false;
   }

@@ -128,7 +128,86 @@ export function drawHull(ctx, x0, x1, deckY, seaY) {
 // Flight deck
 // ---------------------------------------------------------------------------
 
-export function drawDeck(ctx, x0, x1, deckY, tick) {
+// THE WIRE TAKING THE LOAD.
+//
+// The three cables were painted flat and never moved, whatever happened on
+// them: a trap looked exactly like an aeroplane deciding to stop. This is the
+// one that caught, drawn as the hook drags it into a V and it rings out.
+//
+// A DAMPED SPRING, in simulation ticks. The deflection is a decaying cosine —
+// hard down on the catch, springing back through the flat and overshooting a
+// little the other way, each swing smaller than the last. That is what a steel
+// cable under a sudden load does, and it is why this reads as elastic rather
+// than as a line being dragged: the recoil is the part the eye believes.
+export const WIRE = {
+  // Three cables, 26px apart, the first 62px up the deck from the stern.
+  COUNT: 3,
+  FIRST: 62,
+  SPACING: 26,
+  HALF: 11,
+  // How far the hook pulls the wire down at the moment of the catch.
+  DEPTH: 7,
+  // How long the whole thing rings for, and how fast it swings. Two and a bit
+  // swings inside three quarters of a second: long enough to see, short enough
+  // that the deck is at rest before the player has finished exhaling.
+  TICKS: 46,
+  SWINGS: 2.4,
+};
+
+// How deep the caught wire is pulled at `t` ticks after the catch, in pixels.
+// Pure, so the shape can be tested without a canvas.
+export function wireSag(t, depth = WIRE.DEPTH, ticks = WIRE.TICKS) {
+  if (!(t >= 0) || t >= ticks) return 0;
+  const u = t / ticks;
+  // Decaying cosine: 1 at u=0, through zero and back, smaller each time.
+  return depth * (1 - u) * Math.cos(u * Math.PI * WIRE.SWINGS);
+}
+
+// Which cable the hook took: the one nearest where the aeroplane stopped.
+export function wireIndexAt(x0, x) {
+  if (typeof x !== 'number') return -1;
+  const i = Math.round((x - x0 - WIRE.FIRST) / WIRE.SPACING);
+  return Math.max(0, Math.min(WIRE.COUNT - 1, i));
+}
+
+// `wire` is {x, t, hook} from the scene: which cable was taken, how many ticks
+// ago, and where the hook has DRAGGED IT TO. The drag is the whole picture —
+// the stanchions stay where they are bolted and the cable is pulled out into a
+// long V behind the aeroplane, lengthening as it runs on down the deck.
+//
+// Drawing it at the cable's own position instead was the first attempt and it
+// read as nothing at all: a 22px wire dipping 7px, entirely underneath a 24px
+// aeroplane parked on top of it.
+export function drawWires(ctx, x0, deckY, wire) {
+  const top = deckY - DECK_THICK - 0.5;
+  const caught = wire ? wireIndexAt(x0, wire.x) : -1;
+  const ring = wire ? wireSag(wire.t) : 0;
+  for (let i = 0; i < WIRE.COUNT; i++) {
+    const x = x0 + WIRE.FIRST + i * WIRE.SPACING;
+    ctx.strokeStyle = SHIP.rule;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (i === caught) {
+      // The apex is the hook. While the aeroplane is still running it is ahead
+      // of the stanchions and moving; once it stops, the ring-down plays out
+      // there. Kept at least a little proud of the deck so the cable never
+      // disappears into the planking.
+      const apex = typeof wire.hook === 'number' ? wire.hook : x;
+      ctx.moveTo(x - WIRE.HALF, top);
+      ctx.lineTo(apex, top + Math.max(1, ring));
+      ctx.lineTo(x + WIRE.HALF, top);
+    } else {
+      ctx.moveTo(x - WIRE.HALF, top);
+      ctx.lineTo(x + WIRE.HALF, top);
+    }
+    ctx.stroke();
+    ctx.fillStyle = SHIP.deckShade;
+    ctx.fillRect(x - WIRE.HALF - 0.5, deckY - DECK_THICK - 1, 1.6, 2);
+    ctx.fillRect(x + WIRE.HALF - 1, deckY - DECK_THICK - 1, 1.6, 2);
+  }
+}
+
+export function drawDeck(ctx, x0, x1, deckY, tick, wire = null) {
   ctx.save();
   // The deck plate itself, seen almost edge-on: a bright top surface over a
   // shadowed under-edge.
@@ -178,20 +257,11 @@ export function drawDeck(ctx, x0, x1, deckY, tick) {
     ctx.stroke();
   }
 
-  // Arrestor wires: three cables standing proud of the deck on their stanchions.
-  // This is what the hook is actually reaching for.
-  ctx.strokeStyle = SHIP.rule;
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 3; i++) {
-    const x = x0 + 62 + i * 26;
-    ctx.beginPath();
-    ctx.moveTo(x - 11, deckY - DECK_THICK - 0.5);
-    ctx.lineTo(x + 11, deckY - DECK_THICK - 0.5);
-    ctx.stroke();
-    ctx.fillStyle = SHIP.deckShade;
-    ctx.fillRect(x - 11.5, deckY - DECK_THICK - 1, 1.6, 2);
-    ctx.fillRect(x + 10, deckY - DECK_THICK - 1, 1.6, 2);
-  }
+  // Arrestor wires: three cables standing proud of the deck on their
+  // stanchions. This is what the hook is actually reaching for — and when it
+  // takes one, that one bends. `wire` is {x, t} from the scene: where the hook
+  // stopped and how many ticks ago, or null for three cables at rest.
+  drawWires(ctx, x0, deckY, wire);
 
   // AA gun galleries along the deck edge: small repeated tubs slung under the
   // lip, each with a barrel poking out. In the reference these are the strongest

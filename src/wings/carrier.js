@@ -121,9 +121,34 @@ export function bolt(p) {
   return p;
 }
 
-// Caught a wire: stopped dead on the deck, ready to be rearmed.
+// CAUGHT. The hook has a wire and the aeroplane is being pulled up — it is on
+// the deck, it is not flying, and it is still moving. It used to stop dead on
+// the tick of the catch, which is why an arrestor wire could not be drawn doing
+// anything: there was no distance over which to draw it stretching, and the
+// aeroplane covered the one cable it had taken.
+//
+// `arrested` is what tells stepRoll to haul it down rather than let it coast,
+// and it is also what stops the throttle doing anything: you do not fly out of
+// a wire.
+export function trapOn(p) {
+  p.mode = MODE.ROLL;
+  p.arrested = true;
+  p.angle = 0;
+  p.turnTicks = null;
+  p.turnStartAngle = null;
+  p.turnDelta = null;
+  p.y = DECK_Y - PLANE_H;
+  p.vx = p.speed;
+  p.vy = 0;
+  p.gear = true;
+  return p;
+}
+
+// Stopped dead on the deck, ready to be rearmed. Still used for spotting a
+// fresh aircraft at the stern and for the end of an arrested run.
 export function arrest(p) {
   p.mode = MODE.DECK;
+  p.arrested = false;
   p.speed = 0;
   p.vx = 0;
   p.vy = 0;
