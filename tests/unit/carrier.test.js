@@ -41,20 +41,18 @@ test('the attitude has to be near level', () => {
   assert.equal(landingVerdict(onTheWire({ angle: LANDING.MAX_ANGLE - 0.01 })).ok, true);
 });
 
-test('coming in too fast is a bolter, not a fireball', () => {
-  // THIS ASSERTED A CRASH, and that was the bug. In the original you can come
-  // over the round-down far too fast and nothing explodes: you do not catch a
-  // wire, you float up the deck, and you go off the bow to try again or into
-  // the sea. Missing the wire costs the approach, not the aeroplane.
-  const fast = landingVerdict(onTheWire({ speed: LANDING.MAX_SPEED + 0.1 }));
-  assert.equal(fast.reason, 'too-fast');
-  assert.equal(fast.outcome, OUTCOME.BOLTER);
-  assert.equal(fast.ok, false, 'a bolter is not a trap');
-  // However fast. There is no speed at which the deck becomes fatal — only the
-  // ship's hull and the sea are, and they are tested elsewhere.
-  assert.equal(landingVerdict(onTheWire({ speed: 40 })).outcome, OUTCOME.BOLTER);
-  // The window is inclusive at the top: exactly MAX_SPEED still takes a wire.
-  assert.equal(landingVerdict(onTheWire({ speed: LANDING.MAX_SPEED })).outcome, OUTCOME.TRAP);
+test('any speed traps, however fast', () => {
+  // TWO REVERSALS LIVE HERE. This first asserted that coming in fast was a
+  // CRASH, which was the original complaint. Then it asserted a bolter. The
+  // user's call now: "any speed should do when landing as long as the wire
+  // catches us" — so arriving fast is simply a longer arrested run, because
+  // the cable takes the same load whatever you hit it at and has more of your
+  // energy to absorb.
+  for (const speed of [LANDING.MAX_SPEED, LANDING.MAX_SPEED + 0.1, 4, 40]) {
+    const v = landingVerdict(onTheWire({ speed }));
+    assert.equal(v.outcome, OUTCOME.TRAP, `${speed} did not take a wire`);
+    assert.equal(v.ok, true);
+  }
 });
 
 test('nothing is too slow any more', () => {

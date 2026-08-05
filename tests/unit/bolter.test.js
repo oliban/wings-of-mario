@@ -64,31 +64,45 @@ test('a good approach traps, runs on in the wire, and rearms', () => {
   assert.ok(sim.events.some((e) => e.type === 'landed'));
 });
 
-test('too fast does not destroy the aeroplane: it rolls', () => {
-  // THE WHOLE COMPLAINT, in one assertion.
+test('arriving fast is a longer run in the wire, not a bolter and not a fireball', () => {
+  // THE WHOLE COMPLAINT, and then the user's second call on it: any speed
+  // traps. A fast arrival is dragged further, and that is all.
   const sim = new WingsSim({ islands: ['1-1'] });
   overTheDeck(sim, LANDING.MAX_SPEED + 1.5);
+  const from = sim.plane.x;
   sim.step({});
   assert.equal(sim.squadron, 5, 'coming in fast still wrote the aeroplane off');
-  assert.notEqual(sim.plane.mode, MODE.DOWN);
-  assert.equal(sim.plane.mode, MODE.ROLL, 'he is not rolling down the deck');
-  assert.equal(sim.bolters, 1);
-  assert.equal(sim.lastBolter, 'too-fast');
-  assert.ok(sim.events.some((e) => e.type === 'bolter'), 'nothing announced the bolter');
+  assert.equal(sim.plane.mode, MODE.ROLL);
+  assert.equal(sim.plane.arrested, true, 'the wire did not catch him');
+  assert.equal(sim.bolters, 0, 'a fast arrival was called a bolter');
+
+  for (let i = 0; i < 600 && sim.plane.mode === MODE.ROLL; i++) sim.step({});
+  assert.equal(sim.plane.mode, MODE.DECK, 'he never came to rest');
+  assert.equal(sim.squadron, 5);
+
+  // Further than a gentle one: same wire, more energy to absorb.
+  const slow = new WingsSim({ islands: ['1-1'] });
+  overTheDeck(slow, LANDING.APPROACH_SPEED);
+  const slowFrom = slow.plane.x;
+  slow.step({});
+  for (let i = 0; i < 600 && slow.plane.mode === MODE.ROLL; i++) slow.step({});
+  assert.ok(sim.plane.x - from > slow.plane.x - slowFrom,
+    'a fast arrival was dragged no further than a slow one');
 });
 
-test('the speed is kept, because the wire is what you missed', () => {
-  const sim = new WingsSim({ islands: ['1-1'] });
-  const fast = LANDING.MAX_SPEED + 1.5;
-  overTheDeck(sim, fast);
-  sim.step({});
+test('a bolter keeps its speed, because the wire is what it missed', () => {
+  // The hook was up: nothing caught, so nothing slows him but the wheels.
   // Bleeding it off on touchdown would be the arrestor by another name.
+  const sim = new WingsSim({ islands: ['1-1'] });
+  overTheDeck(sim, LANDING.MAX_SPEED + 1.5, { gear: false });
+  sim.step({});
+  assert.equal(sim.plane.arrested, undefined === sim.plane.arrested ? undefined : false);
   assert.ok(sim.plane.speed > LANDING.MAX_SPEED, `touched down at ${sim.plane.speed}`);
 });
 
 test('a fast bolter runs off the bow and is flying again', () => {
   const sim = new WingsSim({ islands: ['1-1'] });
-  overTheDeck(sim, LANDING.MAX_SPEED + 2);
+  overTheDeck(sim, LANDING.MAX_SPEED + 2, { gear: false });
   sim.step({});
   assert.equal(sim.plane.mode, MODE.ROLL);
   // Roll it out with the throttle open, as a pilot going round again would.
@@ -102,7 +116,7 @@ test('a fast bolter runs off the bow and is flying again', () => {
 test('and he can come back and trap on the next circuit', () => {
   // "have to retry" — the aeroplane is intact and the deck will take him.
   const sim = new WingsSim({ islands: ['1-1'] });
-  overTheDeck(sim, LANDING.MAX_SPEED + 2);
+  overTheDeck(sim, LANDING.MAX_SPEED + 2, { gear: false });
   sim.step({});
   for (let i = 0; i < 400 && sim.plane.mode === MODE.ROLL; i++) sim.step({ thrust: 1 });
   assert.equal(sim.plane.mode, MODE.AIR);
@@ -119,7 +133,7 @@ test('a gentle bolter rolls to a stop and counts as down', () => {
   // without the wire would be a rule with nothing behind it.
   const sim = new WingsSim({ islands: ['1-1'] });
   sim.loadout.bomb = 0;
-  overTheDeck(sim, LANDING.MAX_SPEED + 0.05, { x: DECK_X0 + 16 });
+  overTheDeck(sim, LANDING.MAX_SPEED + 0.05, { x: DECK_X0 + 16, gear: false });
   sim.step({});
   assert.equal(sim.plane.mode, MODE.ROLL);
   for (let i = 0; i < 2000 && sim.plane.mode === MODE.ROLL; i++) sim.step({});
@@ -156,7 +170,7 @@ test('going off the bow below flying speed is the sea', () => {
   const sim = new WingsSim({ islands: ['1-1'] });
   const slow = LANDING.MAX_SPEED + 0.05;
   assert.ok(slow < FLIGHT.TAKEOFF_SPEED, 'this speed can fly; the test proves nothing');
-  overTheDeck(sim, slow, { x: DECK_X1 - 8 });
+  overTheDeck(sim, slow, { x: DECK_X1 - 8, gear: false });
   sim.step({});
   assert.equal(sim.plane.mode, MODE.ROLL);
   // He GLIDES first — twenty seconds of it, sinking a twentieth of a pixel a
@@ -173,7 +187,7 @@ test('but a pilot who flies it away keeps the aeroplane', () => {
   // out and goes round again. Thrust alone is not enough — an aeroplane that
   // is not being flown sinks, which is the whole tension of a low go-around.
   const sim = new WingsSim({ islands: ['1-1'] });
-  overTheDeck(sim, LANDING.MAX_SPEED + 0.4, { x: DECK_X1 - 24 });
+  overTheDeck(sim, LANDING.MAX_SPEED + 0.4, { x: DECK_X1 - 24, gear: false });
   sim.step({});
   const startY = sim.plane.y;
   for (let i = 0; i < 600 && sim.plane.mode !== MODE.DOWN; i++) {
@@ -187,7 +201,7 @@ test('but a pilot who flies it away keeps the aeroplane', () => {
 test('a bolter is deterministic, like everything else in here', () => {
   const run = () => {
     const sim = new WingsSim({ islands: ['1-1'], seed: 7 });
-    overTheDeck(sim, LANDING.MAX_SPEED + 1.1);
+    overTheDeck(sim, LANDING.MAX_SPEED + 1.1, { gear: false });
     for (let i = 0; i < 300; i++) sim.step({ thrust: 1 });
     const p = sim.plane;
     return [p.mode, +p.x.toFixed(6), +p.y.toFixed(6), +p.speed.toFixed(6), sim.bolters];

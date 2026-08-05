@@ -5,6 +5,7 @@ import { Parcel } from './parcel.js';
 import { drawSupplyDrop } from './art/parcel.js';
 import { ToolbeltSeeder } from './toolbelt-blocks.js';
 import { guardThrow } from './flat-throw.js';
+import { Wrecked } from './wrecked.js';
 import { BRICKBOMB_GRAVITY } from '../game/entities/brickbomb.js';
 import { tileForChar } from '../data/tiles.js';
 // The networked half of Mario's page (window.__NET). Imported here rather than
@@ -88,6 +89,13 @@ overlay.painters.push((ctx, cam) => {
 // the block system.
 const toolbelts = new ToolbeltSeeder();
 overlay.hooks.push((world) => toolbelts.step(world));
+
+// WHAT A BOMBED TILE TAKES WITH IT. A cannon whose barrel has been blown off
+// went on firing, and a piranha plant kept rising out of the empty air where
+// its pipe used to be: both read the tile map once, because upstream's terrain
+// never changes under them. See src/wings/wrecked.js.
+const wrecked = new Wrecked();
+overlay.hooks.push((world) => wrecked.step(world));
 
 // THE STANDING THROW. Upstream's launch is a pure function of how fast Mario is
 // moving, so at a standstill the bomb goes straight up and the row of bricks

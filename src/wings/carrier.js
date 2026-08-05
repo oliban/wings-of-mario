@@ -23,6 +23,9 @@ import { MODE, normalizeAngle } from './flight.js';
 // The speed window is the WIRE's, not survival's. Inside it the hook catches;
 // above it you are going too fast for the arrestor and you bolt.
 export const LANDING = {
+  // Kept as the speed the deck is COMFORTABLE at — the arrested run from here
+  // is about twenty pixels — but it is no longer a rule and nothing is refused
+  // for exceeding it. See landingVerdict.
   MAX_SPEED: 1.8,
   // What to AIM for on the approach: comfortably inside the wire's window with
   // room either side for a gust of stick. Not a rule — nothing is checked
@@ -75,11 +78,15 @@ export function landingVerdict(p) {
   if (!p.gear) {
     return { inBox: true, ok: false, outcome: OUTCOME.BOLTER, reason: 'hook-up' };
   }
-  // TOO FAST FOR THE ARRESTOR. You are down, and rolling, and the deck is
-  // going to run out. This was a fireball and it is the whole complaint.
-  if (p.speed > LANDING.MAX_SPEED) {
-    return { inBox: true, ok: false, outcome: OUTCOME.BOLTER, reason: 'too-fast' };
-  }
+  // NO SPEED LIMIT ON THE WIRE, by the user's call: "any speed should do when
+  // landing as long as the wire catches us." Arriving fast used to be a bolter
+  // and before that a fireball; it is now simply a LONGER arrested run, because
+  // the cable takes the same load whatever you hit it at and just has more of
+  // your energy to absorb. Come over the round-down flat out and it will drag
+  // you the length of the deck and hold you at the bow.
+  //
+  // What is left deciding a landing is what the pilot can actually see himself
+  // doing wrong: the hook, and the attitude.
   // NOTHING IS TOO SLOW ANY MORE. A minimum was enforced and destroyed the
   // aeroplane for arriving gently, which is backwards — slow is what a wire
   // wants. Coming in below flying speed is already punished, by the stall that
