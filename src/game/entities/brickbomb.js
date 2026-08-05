@@ -105,10 +105,21 @@ export const BRICKBOMB_MAX = 2;
 export const BRICKBOMB_GRAVITY = 0.42;
 export const BRICKBOMB_MAX_FALL = 8;
 
-// Launch power at a standstill and at a full run. The upper number is the old
-// 45-degree throw's speed as a vector: sqrt(4.76^2 + 4.76^2).
+// Launch power at a standstill and at a full run.
+//
+// Only the RUNNING end was opened up. At a fixed angle range goes as v-squared,
+// so sqrt(2) on the power is double the distance: the flat-out throw carries
+// about 15 tiles where it used to manage 7.4. The standstill number is left
+// alone deliberately — it decides how far over Mario's head the vertical throw
+// builds, and a row he cannot reach is not a platform. Raising only the top
+// also widens the gap between a walk and a sprint, which is the whole point of
+// the throw being speed-dependent.
+//
+// The fuse follows on its own: it is derived from the climb, so a harder throw
+// is automatically a longer one and the arc keeps its shape instead of being
+// cut off mid-flight.
 const THROW_POWER_MIN = 5.2;
-const THROW_POWER_MAX = 6.732;
+const THROW_POWER_MAX = 9.52;
 
 // The speed that counts as "flat out" — physics.js maxRunSpeed. Local rather
 // than imported so the ballistics stay one self-contained block, but it must

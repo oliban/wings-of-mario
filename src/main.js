@@ -188,7 +188,30 @@ class Game {
     return this;
   }
 
+  // iOS raises Copy / Look Up / Search Web on a long press, and holding a
+  // button IS a long press. CSS alone did not stop it: -webkit-touch-callout
+  // and user-select are set on every element and the menu still appeared on
+  // iOS 26. The gesture has to be refused as an EVENT, not merely styled away.
+  //
+  // Scope is deliberate. The two play surfaces — the television and the pad —
+  // already carry `touch-action: none`, so they have no pinch-to-zoom left to
+  // lose and preventing their touchstart default costs nothing we still have.
+  // The rest of the page is untouched, so pinch-to-zoom survives where it was
+  // still possible, the way the CSS comment promises. `selectstart` and
+  // `contextmenu` go document-wide because neither has anything to do with
+  // zooming and both are routes to the same menu on desktop Safari.
+  _suppressCallout() {
+    for (const id of ['stage', 'joypad']) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+    }
+    document.addEventListener('selectstart', (e) => e.preventDefault());
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
+
   _bindGestures() {
+    this._suppressCallout();
     const unlock = () => {
       if (this.audioUnlocked) return;
       this.audioUnlocked = true;

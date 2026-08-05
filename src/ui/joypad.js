@@ -70,21 +70,60 @@ if (root) {
   // drive measures clean. So let the phone keep the record instead. Off unless
   // asked for by hand, and it never touches the input path — it only watches.
   const DIARY = /[?&]inputlog\b/.test(location.search);
+  // The log goes to the SERVER, so painting it over the game as well only makes
+  // the game unplayable — and an input bug you cannot play your way to is one
+  // you cannot catch. ?inputlog=show puts it back on screen for the desktop,
+  // where there is room for it.
+  const SHOW = /[?&]inputlog=show\b/.test(location.search);
   let diary = null;
   if (DIARY) {
     diary = document.createElement('div');
-    diary.style.cssText =
-      'position:fixed;left:0;right:0;top:0;z-index:99;max-height:38vh;overflow:hidden;' +
-      'font:10px/1.35 ui-monospace,Menlo,monospace;color:#9fe;background:rgba(0,0,0,.82);' +
-      'padding:4px 6px;white-space:pre;pointer-events:none';
-    document.body.appendChild(diary);
+    if (SHOW) {
+      diary.style.cssText =
+        'position:fixed;left:0;right:0;top:0;z-index:99;max-height:38vh;overflow:hidden;' +
+        'font:10px/1.35 ui-monospace,Menlo,monospace;color:#9fe;background:rgba(0,0,0,.82);' +
+        'padding:4px 6px;white-space:pre;pointer-events:none';
+      document.body.appendChild(diary);
+    }
     const lines = [];
     let n = 0;
+
+    // The screen shows the last 26 lines, which is enough for a fault that
+    // happens in front of you and useless for one that takes ten minutes to
+    // appear. So every line is also posted to tools/logserve.mjs, which keeps
+    // the lot in input-log.txt. Batched on a timer rather than sent per event:
+    // a request per pointer event would itself be a source of jank, which is
+    // the last thing an input investigation needs. sendBeacon first because it
+    // survives the page being hidden — the moment a log is most likely to be
+    // lost is the moment iOS takes the tab away.
+    const SINK = '/__inputlog';
+    let queue = [];
+    let posting = true;
+    const flush = () => {
+      if (!queue.length || !posting) return;
+      const body = queue.join('\n');
+      queue = [];
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(SINK, new Blob([body], { type: 'text/plain' }));
+        } else {
+          fetch(SINK, { method: 'POST', body, keepalive: true }).catch(() => {});
+        }
+      } catch {
+        // No sink (plain static server, or the deployed site): the on-screen
+        // log still works, so stop trying rather than throwing every second.
+        posting = false;
+      }
+    };
+
     diary.note = (s) => {
       n++;
-      lines.push(`${String(n).padStart(3)} ${s}`);
+      const line = `${String(n).padStart(3)} ${s}`;
+      lines.push(line);
       if (lines.length > 26) lines.shift();
       diary.textContent = lines.join('\n');
+      queue.push(line);
+      if (queue.length > 400) queue.shift();
     };
     // The events themselves, in the capture phase so the log is what ARRIVED,
     // not what survived our own handlers.
@@ -98,6 +137,19 @@ if (root) {
         true
       );
     }
+    // The finger list alongside them, so a pointerup that never arrives is
+    // visible as a touch count that disagrees with what the pad believes.
+    for (const t of ['touchstart', 'touchend', 'touchcancel']) {
+      root.addEventListener(
+        t,
+        (e) => {
+          const on = [];
+          for (const f of e.touches || []) on.push(buttonsAt(f.clientX, f.clientY).join('+') || '-');
+          diary.note(`${t.padEnd(10)} fingers=${(e.touches || []).length} [${on.join(' ')}]`);
+        },
+        true
+      );
+    }
     // and every jump/run edge the game actually acted on, so a press that
     // arrived but was never consumed is visible as an event with no edge.
     const orig = input.update.bind(input);
@@ -107,7 +159,28 @@ if (root) {
       if (input.pressed(BTN.RUN)) diary.note('  >> RUN  edge consumed');
     };
     window.addEventListener('blur', () => diary.note('window blur -> all released'));
-    document.addEventListener('visibilitychange', () => diary.note(`visibility: ${document.visibilityState}`));
+    document.addEventListener('visibilitychange', () => {
+      diary.note(`visibility: ${document.visibilityState}`);
+      if (document.visibilityState === 'hidden') flush();
+    });
+    window.addEventListener('pagehide', flush);
+
+    // The report is "after a few levels", so the log has to say which level it
+    // is on and how long the session has run. Polled rather than hooked: the
+    // diary is a watcher and must not reach into the game to be told.
+    let lastLevel = null;
+    const t0 = Date.now();
+    setInterval(() => {
+      const g = window.__GAME;
+      const id = (g && g.game && g.game.levelId) || null;
+      if (id && id !== lastLevel) {
+        lastLevel = id;
+        diary.note(`--- level ${id}  (${Math.round((Date.now() - t0) / 1000)}s in) ---`);
+      }
+      flush();
+    }, 1000);
+
+    diary.note(`session start  ${navigator.userAgent.slice(0, 60)}`);
   }
 
   // --- pointer -> input ---------------------------------------------------
@@ -120,11 +193,47 @@ if (root) {
     return hit.dataset.btn.split(/\s+/).filter((b) => NAMES.includes(b));
   };
 
-  const commit = () => {
-    const on = new Set();
-    for (const list of held.values()) for (const b of list) on.add(b);
+  // TOUCHES ARE THE GROUND TRUTH, POINTER EVENTS ARE NOT.
+  //
+  // Measured on an iPhone, not theorised: over one session the pad received 158
+  // pointerdowns, 156 pointerups and ZERO pointercancels. A finger that went
+  // down on RIGHT never produced an up — not on the pad, not on the window
+  // fallback — and `held` never returned to empty again. That one missing event
+  // is BOTH bugs at once: the stuck direction walks Mario along on his own, and
+  // A and B go dead, because they are edge-triggered and a button the pad still
+  // believes is held can never produce another press. It reads as "A stopped
+  // working after a few levels" because it only takes one lost up in a session.
+  //
+  // A TouchEvent cannot go stale the same way: every one of them carries the
+  // complete list of fingers currently on the glass. So on any touch event the
+  // virtual pad is rebuilt from that list rather than amended — a missing
+  // touchend cannot strand a button, because the next touch event of any kind
+  // repairs the whole state. Pointer events stay in charge for mouse and pen,
+  // which is where they are reliable and where there is only ever one of them.
+  let touchOwned = false;
+
+  const setAll = (on) => {
     for (const b of NAMES) input.setVirtual(b, on.has(b));
     paint();
+  };
+
+  const commit = () => {
+    // Once a finger has touched the pad, the finger list decides. Leaving the
+    // pointer path live as well would let it reassert a button that the touch
+    // list has already said is not being pressed.
+    if (touchOwned) return;
+    const on = new Set();
+    for (const list of held.values()) for (const b of list) on.add(b);
+    setAll(on);
+  };
+
+  const fromTouches = (e) => {
+    touchOwned = true;
+    held.clear();
+    const on = new Set();
+    const list = e.touches || [];
+    for (const t of list) for (const b of buttonsAt(t.clientX, t.clientY)) on.add(b);
+    setAll(on);
   };
 
   const track = (e) => {
@@ -159,6 +268,13 @@ if (root) {
   root.addEventListener('pointerup', drop);
   root.addEventListener('pointercancel', drop);
   root.addEventListener('lostpointercapture', drop);
+
+  // The finger list, rebuilt on every touch event. touchend and touchcancel
+  // both carry the fingers that REMAIN, so lifting the last one releases
+  // everything without needing its individual up to arrive.
+  for (const t of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+    root.addEventListener(t, fromTouches, { passive: true });
+  }
   root.addEventListener('contextmenu', (e) => e.preventDefault());
   // Belt and braces: a pointerup delivered somewhere else entirely (capture
   // denied, or the pointer released over another window) still releases.

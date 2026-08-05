@@ -20,3 +20,6 @@ reference/
 # worktrees/ rather than all of .claude/ so real project config stays visible.
 .claude/worktrees/
 .superpowers/
+
+# The phone input diary (tools/logserve.mjs). A capture, not source.
+input-log.txt
