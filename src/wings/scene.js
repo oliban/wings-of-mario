@@ -297,13 +297,24 @@ export class Scene {
   // `turn` is the manoeuvre as the simulation published it in state().
   stepRoll(p, turn = NOT_TURNING) {
     const a = p.angle;
-    // On the deck the aeroplane is upright, facing right, by definition. This
-    // is also what puts a respawn back the right way up without a special case.
+    // ON THE DECK THE AEROPLANE IS UPRIGHT — but not necessarily facing right,
+    // not since a landing can arrive from either direction.
+    //
+    // drawPlane ROTATES by the heading, so an aeroplane at PI is drawn turned
+    // through a half circle: on its back. What puts it the right way up again
+    // is a roll of PI, which flips the profile vertically as well, and the two
+    // together read as an aeroplane facing left. Forcing the roll to zero here
+    // gave exactly the reported bug — "when coming in from right catching the
+    // cable, the plane turned upside down".
+    //
+    // So the deck's roll follows the heading, which is the same rule the free
+    // -flight branch below uses for a teleport.
     if (p.mode === MODE.DECK || p.mode === MODE.ROLL) {
-      this.roll = 0;
+      const upright = Math.cos(a) < 0 ? Math.PI : 0;
+      this.roll = upright;
       this.rollVel = 0;
-      this.rollTarget = 0;
-      this.rollBase = 0;
+      this.rollTarget = upright;
+      this.rollBase = upright;
       this.wasTurning = false;
       this.prevAngle = a;
       return;

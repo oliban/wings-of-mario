@@ -719,7 +719,12 @@ class Pilot {
   trackAttitude() {
     const p = this.sim.plane;
     if (p.mode === 'deck' || p.mode === 'roll') {
-      mirrored = false;
+      // Mirrored means "a stall turn left it inverted". An aeroplane parked
+      // facing WEST is not inverted — its heading is PI and the renderer's roll
+      // follows the heading (see Scene#stepRoll) — so the flag tracks the
+      // heading here rather than being cleared, or the next stall turn starts
+      // from the wrong parity and flips the aeroplane on its back.
+      mirrored = Math.cos(p.angle) < 0;
       wasTurning = false;
       return;
     }
