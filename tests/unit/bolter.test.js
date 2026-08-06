@@ -154,7 +154,13 @@ test('a forgotten hook is a bolter, not a write-off', () => {
 
 test('flying into the ship is still fatal', () => {
   // The line that has to stay: a bolter is a missed wire, not a missed rule.
-  for (const over of [{ angle: Math.PI }, { angle: LANDING.MAX_ANGLE + 0.2 }]) {
+  // Arriving BACKWARDS is no longer one of these — a flat-top has a cable
+  // across it and no opinion about which way you cross it, so westbound traps
+  // like eastbound and is tested below.
+  for (const over of [
+    { angle: LANDING.MAX_ANGLE + 0.2 },
+    { angle: -LANDING.MAX_ANGLE - 0.2 },
+  ]) {
     const sim = new WingsSim({ islands: ['1-1'] });
     overTheDeck(sim, LANDING.APPROACH_SPEED, over);
     sim.step({});
@@ -217,4 +223,49 @@ test('the takeoff roll is untouched by any of this', () => {
   assert.equal(sim.plane.mode, MODE.AIR, 'the aeroplane never got airborne');
   assert.ok(sim.plane.speed >= FLIGHT.TAKEOFF_SPEED);
   assert.equal(sim.bolters, 0, 'a takeoff registered as a bolter');
+});
+
+test('a westbound arrival traps, rolls west, and parks facing west', () => {
+  // The user: "I want to be able to land on carrier from either direction."
+  // The wire catches him the same; the arrested run then has to go the way he
+  // is pointing, and he has to stay pointing that way once stopped rather than
+  // spinning round on the spot.
+  const sim = new WingsSim({ islands: ['1-1'] });
+  const p = overTheDeck(sim, LANDING.APPROACH_SPEED, { x: DECK_X1 - 60, angle: Math.PI });
+  const from = p.x;
+  sim.step({});
+  assert.equal(p.mode, MODE.ROLL, 'a westbound approach did not trap');
+  assert.equal(p.arrested, true);
+  assert.equal(p.rollDir, -1);
+
+  for (let i = 0; i < 400 && p.mode === MODE.ROLL; i++) sim.step({});
+  assert.equal(p.mode, MODE.DECK, 'never came to rest');
+  assert.ok(p.x < from, 'the arrested run went the wrong way');
+  assert.equal(p.angle, Math.PI, 'he was spun round on the spot');
+  assert.equal(sim.squadron, 5, 'landing the other way cost an aircraft');
+});
+
+test('a westbound bolter runs off the STERN, not the bow', () => {
+  const sim = new WingsSim({ islands: ['1-1'] });
+  const p = overTheDeck(sim, LANDING.MAX_SPEED + 2, { x: DECK_X0 + 80, angle: Math.PI, gear: false });
+  sim.step({});
+  assert.equal(p.mode, MODE.ROLL);
+  assert.equal(p.rollDir, -1);
+  for (let i = 0; i < 400 && p.mode === MODE.ROLL; i++) sim.step({ thrust: 1 });
+  assert.equal(p.mode, MODE.AIR, 'he never came off the end of the deck');
+  assert.ok(p.x <= DECK_X0 + 4, 'he left over the bow instead of the stern');
+  assert.equal(sim.squadron, 5);
+});
+
+test('a fresh aeroplane is always spotted facing down the deck', () => {
+  // Whatever the last one did. Without resetting the roll state a respawn
+  // after a westbound landing would try to take off backwards off the stern.
+  const sim = new WingsSim({ islands: ['1-1'] });
+  const p = overTheDeck(sim, LANDING.APPROACH_SPEED, { x: DECK_X1 - 60, angle: Math.PI });
+  sim.step({});
+  for (let i = 0; i < 400 && p.mode === MODE.ROLL; i++) sim.step({});
+  sim.lose('sea');
+  sim.respawn();
+  assert.equal(sim.plane.rollDir, 1);
+  assert.equal(sim.plane.angle, 0);
 });

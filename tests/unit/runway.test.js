@@ -239,10 +239,14 @@ test('wheels on the strip, level and the right way round, is a roll-out', () => 
 test('the two ways to crash on a strip, in the order they are decided', () => {
   const isle = stripIsland(30);
   const r = runwayAt(isle, 5);
+  // ARRIVING WESTBOUND IS NO LONGER ONE OF THEM. A strip of flat ground has no
+  // opinion about which way you roll along it, the same as the carrier's wire —
+  // so what is left is the nose being too far off level, either way up and
+  // either way round.
   const cases = [
-    [{ angle: Math.PI }, 'wrong-way'],
     [{ angle: LANDING.MAX_ANGLE + 0.01 }, 'attitude'],
     [{ angle: -LANDING.MAX_ANGLE - 0.01 }, 'attitude'],
+    [{ angle: Math.PI - LANDING.MAX_ANGLE - 0.01 }, 'attitude'],
   ];
   for (const [over, reason] of cases) {
     const v = islandVerdict(planeOn(r, over), r);
@@ -260,12 +264,36 @@ test('the two ways to crash on a strip, in the order they are decided', () => {
   assert.equal(up.outcome, ISLAND_OUTCOME.NONE);
   assert.equal(up.inBox, false);
   assert.equal(up.reason, 'gear-up');
-  // ORDERING: flying into it backwards is fatal whatever the gear is doing, and
-  // must not be reported as a raised undercarriage.
+  // ORDERING: a nose-down arrival is fatal whatever the gear is doing, and must
+  // not be reported as a raised undercarriage. (Backwards is no longer fatal at
+  // all — it is a landing like any other.)
   assert.equal(
-    islandVerdict(planeOn(r, { angle: Math.PI, gear: false }), r).reason,
-    'wrong-way',
+    islandVerdict(planeOn(r, { angle: LANDING.MAX_ANGLE + 0.3, gear: false }), r).reason,
+    'attitude',
   );
+});
+
+test('a strip can be rolled along in either direction', () => {
+  // "same goes on islands." A westbound arrival lands, rolls west, and ends the
+  // run at the far END of the strip rather than at the end the eastbound run
+  // uses — which in deck space is a different x, because stepGroundRoll
+  // translates the strip onto the deck.
+  const isle = stripIsland(30);
+  const r = runwayAt(isle, 5);
+
+  const west = islandVerdict(planeOn(r, { angle: Math.PI }), r);
+  assert.equal(west.outcome, ISLAND_OUTCOME.ROLLOUT, 'a westbound arrival was refused');
+  assert.equal(west.ok, true);
+
+  const p = planeOn(r, { angle: Math.PI, speed: LANDING.APPROACH_SPEED });
+  touchdown(p, r);
+  assert.equal(p.rollDir, -1, 'the roll runs the wrong way');
+  assert.equal(p.angle, Math.PI, 'he was spun round to face east');
+
+  const east = planeOn(r, { angle: 0, speed: LANDING.APPROACH_SPEED });
+  touchdown(east, r);
+  assert.equal(east.rollDir, 1);
+  assert.ok(east.rollEnd > p.rollEnd, 'both directions end the run at the same place');
 });
 
 // ---------------------------------------------------------------------------
@@ -402,8 +430,8 @@ test('a parked aeroplane flies off the island again', () => {
 
 test('the ways to arrive badly still cost an aeroplane', () => {
   for (const [over, reason] of [
-    [{ angle: Math.PI }, 'island-wrong-way'],
     [{ angle: LANDING.MAX_ANGLE + 0.2 }, 'island-attitude'],
+    [{ angle: -LANDING.MAX_ANGLE - 0.2 }, 'island-attitude'],
   ]) {
     const { sim, r } = simOn('1-4');
     const squadron = sim.squadron;

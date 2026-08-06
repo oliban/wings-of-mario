@@ -9,7 +9,7 @@ import { takeoff, flyTo, bombTile, autoLand } from './bot.js';
 import {
   SPEED_TUNE, getMaxSpeed, setMaxSpeed, resetMaxSpeed, normalizeAngle,
 } from './flight.js';
-import { LANDING } from './carrier.js';
+import { LANDING, pitchOffLevel, landingDir } from './carrier.js';
 
 const HEADLESS = new URLSearchParams(location.search).has('headless');
 if (HEADLESS) document.body.classList.add('headless');
@@ -238,9 +238,17 @@ function paintSpeedBadge() {
 // Called once per rendered frame from Pilot#render.
 function updateAngleBadge(sim) {
   if (typeof document === 'undefined' || !sim || !sim.plane) return;
-  const a = normalizeAngle(sim.plane.angle);
-  const ok = Math.abs(a) <= LANDING.MAX_ANGLE && Math.cos(sim.plane.angle) > 0;
-  badgeAngleLine = `ANGLE  ${a >= 0 ? ' ' : ''}${a.toFixed(3)} rad`
+  // OFF LEVEL, not the raw heading — which is the number the landing rule
+  // actually tests, and the whole point of putting it on screen.
+  //
+  // It showed the raw angle at first, and that read 2.902 for an aeroplane
+  // flying WEST and almost perfectly level: a fifth of a radian off the
+  // planking, next to a limit of 0.40, looking hopeless. The user landed on
+  // that reading and was told it was wrong. Level west is PI, and PI is level.
+  const a = pitchOffLevel(sim.plane.angle);
+  const heading = landingDir(sim.plane) === 1 ? 'E' : 'W';
+  const ok = Math.abs(a) <= LANDING.MAX_ANGLE;
+  badgeAngleLine = `ANGLE  ${a >= 0 ? ' ' : ''}${a.toFixed(3)} rad  ${heading}`
     + `   (land within ${LANDING.MAX_ANGLE.toFixed(2)})  ${ok ? 'OK' : '--'}`;
   ensureSpeedBadge();
   paintSpeedBadge();

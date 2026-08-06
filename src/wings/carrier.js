@@ -53,6 +53,19 @@ export const OUTCOME = {
 };
 
 // The box in which the tailhook can reach a wire at all.
+// HOW FAR OFF LEVEL, whichever way he is pointing. Level east is 0 and level
+// west is +/-PI, and both are level: what matters for putting wheels down is
+// the angle between the nose and the deck, not which end of it he came from.
+export function pitchOffLevel(angle) {
+  const a = normalizeAngle(angle);
+  return Math.abs(a) <= Math.PI / 2 ? a : normalizeAngle(a - Math.PI);
+}
+
+// Which way he is travelling over the deck: +1 east, -1 west.
+export function landingDir(p) {
+  return Math.cos(p.angle) >= 0 ? 1 : -1;
+}
+
 export function inLandingBox(p) {
   const wheels = p.y + PLANE_H;
   return (
@@ -73,12 +86,16 @@ export function landingVerdict(p) {
   if (!inLandingBox(p)) {
     return { inBox: false, ok: false, outcome: OUTCOME.NONE, reason: 'off-deck' };
   }
-  // Backwards over the deck, or nose-down into it. Not a landing attempt at
-  // all: a wire cannot help either of these and the deck is what you hit.
-  if (Math.cos(p.angle) <= 0) {
-    return { inBox: true, ok: false, outcome: OUTCOME.CRASH, reason: 'wrong-way' };
-  }
-  if (Math.abs(normalizeAngle(p.angle)) > LANDING.MAX_ANGLE) {
+  // EITHER DIRECTION LANDS. Arriving westbound used to be 'wrong-way' and
+  // fatal, which is a rule about the ship's geometry that the ship does not
+  // actually have: a flat-top has a wire across it and no opinion about which
+  // way you cross it. The user asked for both, and the arrestor run and the
+  // roll now follow whichever way the nose is pointing.
+  //
+  // So the attitude is measured against the heading he is ACTUALLY flying —
+  // level east or level west — and only being nose-up or nose-down beyond the
+  // limit is a crash.
+  if (Math.abs(pitchOffLevel(p.angle)) > LANDING.MAX_ANGLE) {
     return { inBox: true, ok: false, outcome: OUTCOME.CRASH, reason: 'attitude' };
   }
   // THE HOOK IS UP. Wheels touch, nothing catches — the definition of a
@@ -123,8 +140,11 @@ export function hitsHull(p) {
 // The speed is KEPT, deliberately. Bleeding it off here would be the wire by
 // another name, and the wire is the thing you missed.
 export function bolt(p) {
+  const dir = landingDir(p);
   p.mode = MODE.ROLL;
-  p.angle = 0;
+  p.rollDir = dir;
+  p.rollEnd = dir === 1 ? DECK_X1 : DECK_X0;
+  p.angle = dir === 1 ? 0 : Math.PI;
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
@@ -146,9 +166,12 @@ export function bolt(p) {
 // and it is also what stops the throttle doing anything: you do not fly out of
 // a wire.
 export function trapOn(p) {
+  const dir = landingDir(p);
   p.mode = MODE.ROLL;
   p.arrested = true;
-  p.angle = 0;
+  p.rollDir = dir;
+  p.rollEnd = dir === 1 ? DECK_X1 : DECK_X0;
+  p.angle = dir === 1 ? 0 : Math.PI;
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
@@ -167,7 +190,9 @@ export function arrest(p) {
   p.speed = 0;
   p.vx = 0;
   p.vy = 0;
-  p.angle = 0;
+  // Left as he stopped: an aeroplane that trapped westbound is parked facing
+  // west, and spinning it round on the spot would be a magic trick.
+  p.angle = p.rollDir === -1 ? Math.PI : 0;
   p.gear = true;
   p.y = DECK_SURFACE_Y - PLANE_H;
   return p;
@@ -175,6 +200,10 @@ export function arrest(p) {
 
 // Put a fresh aircraft at the stern, pointing down the deck.
 export function spotOnDeck(p) {
+  // A fresh aeroplane is always spotted at the stern pointing down the deck,
+  // whatever the last one did — so the roll state goes back to east first.
+  p.rollDir = 1;
+  p.rollEnd = DECK_X1;
   arrest(p);
   p.x = DECK_X0 + 16;
   return p;

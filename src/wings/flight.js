@@ -230,6 +230,10 @@ export function turnToward(a, target, step) {
 export function createPlane(opts = {}) {
   return {
     mode: opts.mode || MODE.DECK,
+    // Which way a ground roll runs, and the x it ends at. Set on touchdown;
+    // a takeoff is always eastbound to the bow, which is these defaults.
+    rollDir: opts.rollDir === -1 ? -1 : 1,
+    rollEnd: opts.rollEnd != null ? opts.rollEnd : DECK_X1,
     x: opts.x != null ? opts.x : DECK_X0 + 16,
     y: opts.y != null ? opts.y : DECK_SURFACE_Y - PLANE_H,
     angle: opts.angle != null ? opts.angle : 0,
@@ -304,9 +308,14 @@ const ROLL_STOP = 0.05;
 // The takeoff roll. The plane is pinned to the deck, gains speed against
 // rolling friction, and only rotates once there is air over the wings.
 function stepRoll(p, pitch, throttle, F) {
-  p.angle = 0;
-  // On the deck the aeroplane is upright, facing right, by definition — no
-  // stall turn survives a landing or a respawn either.
+  // WHICH WAY THE ROLL RUNS. A takeoff is always eastbound — the aeroplane is
+  // spotted at the stern pointing down the deck — but a LANDING can now arrive
+  // from either direction, and a westbound arrival has to roll west. `rollDir`
+  // is set on touchdown and defaults to east for everything else.
+  const dir = p.rollDir === -1 ? -1 : 1;
+  // Upright, pointing the way it is rolling. No stall turn survives a landing
+  // or a respawn either.
+  p.angle = dir === -1 ? Math.PI : 0;
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
@@ -331,8 +340,8 @@ function stepRoll(p, pitch, throttle, F) {
   // with the throttle open, every speed below the floor is on its way UP
   // through it.
   if (!p.arrested && throttle <= 0 && p.speed < ROLL_STOP) p.speed = 0;
-  p.x += p.speed;
-  p.vx = p.speed;
+  p.x += p.speed * dir;
+  p.vx = p.speed * dir;
   p.vy = 0;
   p.mode = p.speed > 0 ? MODE.ROLL : MODE.DECK;
 
@@ -347,9 +356,12 @@ function stepRoll(p, pitch, throttle, F) {
   // caught — the cable does not let go because the deck ran out — so it stops
   // there rather than tipping a landing that WORKED into a ditching the player
   // could not have seen coming.
-  if (p.x >= DECK_X1) {
+  // The end of the run is whichever end he is rolling towards: the bow going
+  // east, the stern going west.
+  const past = dir === 1 ? p.x >= p.rollEnd : p.x <= p.rollEnd;
+  if (past) {
     if (p.arrested) {
-      p.x = DECK_X1;
+      p.x = p.rollEnd;
       p.speed = 0;
       return;
     }

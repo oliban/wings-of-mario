@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, HULL_BOTTOM, PLANE_H } from '../../src/wings/geo.js';
 import { MODE, createPlane } from '../../src/wings/flight.js';
 import {
-  LANDING, OUTCOME, inLandingBox, landingVerdict, hitsHull, arrest, bolt, spotOnDeck,
+  LANDING, OUTCOME, inLandingBox, landingVerdict, landingDir, hitsHull, arrest, bolt,
+  spotOnDeck,
 } from '../../src/wings/carrier.js';
 
 // A textbook approach: over the middle of the deck, wheels on the planking,
@@ -31,8 +32,40 @@ test('the hook has to be down', () => {
   assert.equal(landingVerdict(onTheWire({ gear: false })).reason, 'hook-up');
 });
 
-test('you have to be going the right way', () => {
-  assert.equal(landingVerdict(onTheWire({ angle: Math.PI })).reason, 'wrong-way');
+test('either direction lands, because a wire does not care', () => {
+  // THIS ASSERTED THE OPPOSITE: arriving westbound was 'wrong-way' and fatal.
+  // That is a rule about the ship's geometry the ship does not have — a
+  // flat-top has a cable across it and no opinion about which way you cross it
+  // — and the user asked for both. The arrested run and the roll now follow
+  // whichever way the nose is pointing.
+  const west = landingVerdict(onTheWire({ angle: Math.PI }));
+  assert.equal(west.outcome, OUTCOME.TRAP, 'a westbound arrival did not trap');
+  assert.equal(west.ok, true);
+  // Level is level either way, and slightly off level is still fine.
+  for (const a of [Math.PI - 0.1, -Math.PI + 0.1, 0.1, -0.1]) {
+    assert.equal(landingVerdict(onTheWire({ angle: a })).outcome, OUTCOME.TRAP, `angle ${a}`);
+  }
+});
+
+test('but the nose still has to be near level, whichever way it points', () => {
+  // Nose-up or nose-down beyond the limit is a crash from either direction.
+  for (const a of [
+    LANDING.MAX_ANGLE + 0.1,
+    -LANDING.MAX_ANGLE - 0.1,
+    Math.PI - LANDING.MAX_ANGLE - 0.1,
+    -Math.PI + LANDING.MAX_ANGLE + 0.1,
+  ]) {
+    const v = landingVerdict(onTheWire({ angle: a }));
+    assert.equal(v.outcome, OUTCOME.CRASH, `angle ${a.toFixed(2)} should be a crash`);
+    assert.equal(v.reason, 'attitude');
+  }
+});
+
+test('the old eastbound-only rule, kept as a note', () => {
+  // landingDir is what replaced it: which way he is crossing, not whether he
+  // is allowed to.
+  assert.equal(landingDir(onTheWire({ angle: 0 })), 1);
+  assert.equal(landingDir(onTheWire({ angle: Math.PI })), -1);
 });
 
 test('the attitude has to be near level', () => {
@@ -74,10 +107,8 @@ test('a forgotten hook is a bolter too, not a write-off', () => {
 });
 
 test('flying INTO the ship is still fatal, and should be', () => {
-  // The two ways to arrive that no wire could help. Tested after the bolters
-  // above so the order of the rules is pinned: these decide first, however
-  // fast you are doing them.
-  assert.equal(landingVerdict(onTheWire({ angle: Math.PI })).outcome, OUTCOME.CRASH);
+  // Nose-down into the deck. Arriving BACKWARDS is no longer one of these —
+  // see the westbound test above.
   assert.equal(
     landingVerdict(onTheWire({ angle: LANDING.MAX_ANGLE + 0.1 })).outcome, OUTCOME.CRASH
   );

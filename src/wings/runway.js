@@ -1,7 +1,7 @@
 import { TILE } from '../core/constants.js';
 import { DECK_X1, DECK_SURFACE_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H } from './geo.js';
 import { MODE, FLIGHT, stepPlane, normalizeAngle } from './flight.js';
-import { LANDING } from './carrier.js';
+import { LANDING, pitchOffLevel, landingDir } from './carrier.js';
 
 // PUTTING IT DOWN ON AN ISLAND.
 //
@@ -264,10 +264,11 @@ export function islandVerdict(p, r) {
   if (!inRunwayBox(p, r)) {
     return { inBox: false, ok: false, outcome: ISLAND_OUTCOME.NONE, reason: 'off-strip' };
   }
-  if (Math.cos(p.angle) <= 0) {
-    return { inBox: true, ok: false, outcome: ISLAND_OUTCOME.CRASH, reason: 'wrong-way' };
-  }
-  if (Math.abs(normalizeAngle(p.angle)) > LANDING.MAX_ANGLE) {
+  // EITHER DIRECTION, exactly as on the carrier: a strip of flat ground has no
+  // opinion about which way you roll along it. What is measured is how far off
+  // LEVEL the nose is, whichever heading he is flying — see pitchOffLevel in
+  // src/wings/carrier.js, which both sides share so the two can never drift.
+  if (Math.abs(pitchOffLevel(p.angle)) > LANDING.MAX_ANGLE) {
     return { inBox: true, ok: false, outcome: ISLAND_OUTCOME.CRASH, reason: 'attitude' };
   }
   // WHEELS UP IS NOT A LANDING ATTEMPT AT ALL — and it is not a crash either.
@@ -287,8 +288,14 @@ export function islandVerdict(p, r) {
 // and the speed is KEPT for the same reason: nothing here is a wire, so nothing
 // here is entitled to take the energy away.
 export function touchdown(p, r) {
+  const dir = landingDir(p);
   p.mode = MODE.ROLL;
-  p.angle = 0;
+  p.rollDir = dir;
+  // The end of the strip he is rolling towards. In deck space stepRoll ends the
+  // run at p.rollEnd; stepGroundRoll translates the strip onto the deck, so this
+  // is the deck-space x of whichever end of the strip is ahead of him.
+  p.rollEnd = dir === 1 ? DECK_X1 : DECK_X1 - (r.x1 - r.x0);
+  p.angle = dir === 1 ? 0 : Math.PI;
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
