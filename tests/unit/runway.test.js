@@ -143,17 +143,43 @@ test('runwayUnder only answers for wheels near the surface', () => {
 // Which levels actually have one
 // ---------------------------------------------------------------------------
 
-test('most of Mario\'s levels cannot be landed on', () => {
+test('a level with a long flat floor can be landed on, and one without cannot', () => {
+  // THIS ASSERTED THE OPPOSITE — that most levels have no strip and world 1 has
+  // exactly one, on 1-4. That fell out of taking the TOPMOST blocking tile as
+  // the surface, so a single question block or brick row four rows overhead
+  // broke the run beneath it. Eighteen levels had no runway at all and the
+  // aeroplane simply flew into the ground. A pilot lands on the road, under the
+  // overhead signs: the surface is the floor, and what is above it is an
+  // obstacle to clear.
   const landable = Object.keys(LEVELS)
     .filter((id) => runways(new Island(getLevel(id), ORIGIN)).length > 0);
-  assert.ok(landable.length < Object.keys(LEVELS).length / 2,
-    `${landable.length} of ${Object.keys(LEVELS).length} landable is too many`);
-  // World 1 has exactly one strip in it, on the castle's western rock mass.
-  const world1 = ['1-1', '1-2', '1-3', '1-4'].filter((id) => landable.includes(id));
-  assert.deepEqual(world1, ['1-4']);
-  // 8-4's ceiling is 317 unbroken tiles of '#' with open sky above it and
-  // nothing underneath. It is a roof and it is not a runway.
-  assert.deepEqual(runways(new Island(getLevel('8-4'), ORIGIN)), []);
+
+  // 1-1 is the case the user hit. Its floor is long and flat and it is now
+  // landable, brick rows and all.
+  assert.ok(landable.includes('1-1'), '1-1 still has nowhere to put an aeroplane down');
+
+  // Still not everywhere: it is meant to be somewhere you look for, and a
+  // level of pits and stairs has no run long enough.
+  assert.ok(landable.length < Object.keys(LEVELS).length,
+    'every level is landable, which makes the strip meaningless');
+  for (const id of ['1-3', '5-3', '8-2']) {
+    assert.ok(!landable.includes(id), `${id} should have no strip long enough`);
+  }
+});
+
+test('headroom is required, so a pipe is not a runway', () => {
+  // The other half of "the floor is the surface": without a clearance rule the
+  // ground under a pipe or a low ledge would count, and the aeroplane could
+  // never get down to it.
+  const isle = new Island(getLevel('1-1'), ORIGIN);
+  for (const r of runways(isle)) {
+    for (let tx = r.tx0; tx <= r.tx1; tx++) {
+      for (let d = 1; d <= RUNWAY.CLEAR_TILES; d++) {
+        assert.equal(isle.blocksTile(tx, r.ty - d), false,
+          `${tx},${r.ty - d} is over the strip and solid`);
+      }
+    }
+  }
 });
 
 test('bombing a strip destroys it', () => {
@@ -210,14 +236,13 @@ test('wheels on the strip, level and the right way round, is a roll-out', () => 
   }
 });
 
-test('the three ways to crash on a strip, in the order they are decided', () => {
+test('the two ways to crash on a strip, in the order they are decided', () => {
   const isle = stripIsland(30);
   const r = runwayAt(isle, 5);
   const cases = [
     [{ angle: Math.PI }, 'wrong-way'],
     [{ angle: LANDING.MAX_ANGLE + 0.01 }, 'attitude'],
     [{ angle: -LANDING.MAX_ANGLE - 0.01 }, 'attitude'],
-    [{ gear: false }, 'gear-up'],
   ];
   for (const [over, reason] of cases) {
     const v = islandVerdict(planeOn(r, over), r);
@@ -225,6 +250,16 @@ test('the three ways to crash on a strip, in the order they are decided', () => 
     assert.equal(v.reason, reason);
     assert.equal(v.ok, false);
   }
+
+  // WHEELS UP IS NOT A CRASH, and this asserted that it was. A low strafing
+  // pass over a beach wrote the aeroplane off for flying low. The gear switch
+  // says "I mean to put it down here"; without it this is simply not a landing
+  // and he flies on — and meets the terrain check a tick later if he really is
+  // too low.
+  const up = islandVerdict(planeOn(r, { gear: false }), r);
+  assert.equal(up.outcome, ISLAND_OUTCOME.NONE);
+  assert.equal(up.inBox, false);
+  assert.equal(up.reason, 'gear-up');
   // ORDERING: flying into it backwards is fatal whatever the gear is doing, and
   // must not be reported as a raised undercarriage.
   assert.equal(
@@ -368,8 +403,7 @@ test('a parked aeroplane flies off the island again', () => {
 test('the ways to arrive badly still cost an aeroplane', () => {
   for (const [over, reason] of [
     [{ angle: Math.PI }, 'island-wrong-way'],
-    [{ angle: 0.6 }, 'island-attitude'],
-    [{ gear: false }, 'island-gear-up'],
+    [{ angle: LANDING.MAX_ANGLE + 0.2 }, 'island-attitude'],
   ]) {
     const { sim, r } = simOn('1-4');
     const squadron = sim.squadron;
@@ -384,16 +418,18 @@ test('the ways to arrive badly still cost an aeroplane', () => {
 });
 
 test('flying into ground that is not a strip is still a crash', () => {
-  const sim = new WingsSim({ islands: ['1-1'] });
-  const isle = sim.islandById('1-1');
-  assert.deepEqual(runways(isle), [], '1-1 has nowhere to land');
+  // 1-3 has no run long enough: pits and stairs the whole way.
+  const sim = new WingsSim({ islands: ['1-3'] });
+  const isle = sim.islandById('1-3');
+  assert.deepEqual(runways(isle), [], '1-3 has nowhere to land');
   const p = sim.plane;
   p.mode = MODE.AIR;
-  p.x = isle.originX + 20 * TILE;
+  p.x = isle.originX + 10 * TILE;
   // Nose buried in the shelf. The nose is what decides a hillside, so an
   // aeroplane whose WHEELS are exactly on the surface is still flying — this
   // has to be a genuine impact, not a landing the strip rules declined.
-  p.y = ISLAND_TOP_Y + 13 * TILE - 2;
+  // Column 10 of 1-3 has its floor on row 14.
+  p.y = ISLAND_TOP_Y + 14 * TILE - 2;
   p.angle = 0;
   p.speed = LANDING.APPROACH_SPEED;
   p.gear = true;
@@ -491,4 +527,70 @@ test('scuttling is refused anywhere it would be a free ride home', async () => {
   sim.plane.mode = MODE.AIR;
   sim.grounded = true;
   assert.equal(sim.canScuttle(), false, 'scuttled in mid-air');
+});
+
+test('parked on an island, the engine is off and the fuel stops going down', () => {
+  // "it would not refuel but it would save me fuel by standing still a bit."
+  // It is the only thing an island landing is worth: no rearm, no refuel, but
+  // you can stop the clock and think.
+  const { sim, r } = simOn('1-4');
+  arrive(sim, r);
+  for (let i = 0; i < 400 && sim.plane.mode !== MODE.DECK; i++) sim.step({ gear: true });
+  assert.equal(sim.plane.mode, MODE.DECK, 'never came to rest on the strip');
+  assert.equal(sim.grounded, true);
+
+  const parked = sim.plane.fuel;
+  for (let i = 0; i < 600; i++) sim.step({ gear: true });
+  assert.equal(sim.plane.fuel, parked, 'a parked aeroplane burned fuel');
+
+  // But it is SHUT DOWN, not merely stopped: open the throttle and it drinks.
+  for (let i = 0; i < 60; i++) sim.step({ thrust: 1, gear: true });
+  assert.ok(sim.plane.fuel < parked, 'running the engine on the ground was free');
+});
+
+test('and it still does not refuel or rearm, which is the point', () => {
+  const { sim, r } = simOn('1-4');
+  sim.plane.fuel = 20;
+  sim.loadout.bomb = 0;
+  arrive(sim, r);
+  for (let i = 0; i < 400 && sim.plane.mode !== MODE.DECK; i++) sim.step({ gear: true });
+  assert.equal(sim.plane.mode, MODE.DECK);
+  for (let i = 0; i < 200; i++) sim.step({ gear: true });
+  assert.ok(sim.plane.fuel <= 20, 'the island refuelled him');
+  assert.equal(sim.bombs, 0, 'the island rearmed him');
+});
+
+test('a textbook approach gets down on ordinary levels, not just the castle', () => {
+  // THE USER'S REPORT: "Landing on a level makes plane crash. I want to be able
+  // to." Every earlier test here flew 1-4, which was the ONE level in world 1
+  // with a strip under the old surface rule — so the suite was green while the
+  // levels a player actually flies over had nowhere to land at all.
+  //
+  // Hand-placed rather than flown: src/wings/bot.js#autoLandIsland still only
+  // manages 1-4, because its approach path runs through the pipes and brick
+  // rows of an overworld level. That is a limitation of the scripted pilot, not
+  // of the landing, and it is why this test places the aeroplane itself.
+  for (const id of ['1-1', '1-2', '2-1', '8-4']) {
+    const sim = new WingsSim({ islands: [id] });
+    const strips = runways(sim.islandById(id));
+    assert.ok(strips.length > 0, `${id} has nowhere to put an aeroplane down`);
+    const r = strips[0];
+    const p = sim.plane;
+    p.mode = MODE.AIR;
+    p.x = r.x0 + 3 * TILE;
+    p.y = r.y - PLANE_H;
+    p.angle = 0;
+    p.speed = LANDING.APPROACH_SPEED;
+    p.vx = p.speed;
+    p.vy = 0;
+    p.gear = true;
+    sim.groundArmed = true;
+
+    sim.step({ gear: true });
+    assert.notEqual(sim.plane.mode, MODE.DOWN, `${id}: a textbook approach crashed`);
+    for (let i = 0; i < 900 && sim.plane.mode === MODE.ROLL; i++) sim.step({ gear: true });
+    assert.equal(sim.plane.mode, MODE.DECK, `${id}: never came to rest`);
+    assert.equal(sim.grounded, true, `${id}: not parked on the strip`);
+    assert.equal(sim.squadron, 5, `${id}: landing cost an aircraft`);
+  }
 });

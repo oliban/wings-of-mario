@@ -277,7 +277,19 @@ export function stepPlane(p, input = {}) {
   else if (p.turnTicks != null) stepTurn(p, F);
   else stepAir(p, pitch, thrust, F);
 
-  p.fuel = Math.max(0, p.fuel - (FLIGHT.FUEL_IDLE + FLIGHT.FUEL_THROTTLE * power));
+  // PARKED IS ENGINE OFF. An aeroplane standing still on the ground with the
+  // throttle shut is not burning anything, and the user asked for exactly that:
+  // "it would not refuel but it would save me fuel by standing still a bit."
+  // It is the only thing an island landing is worth — you cannot rearm and you
+  // cannot refuel, but you can stop the clock and think.
+  //
+  // Stopped and on a surface, which on the carrier is the deck and on an island
+  // is the strip. Idling with the throttle open still burns: shutting down is
+  // the deliberate act.
+  const shutDown = p.mode === MODE.DECK && p.speed === 0 && power <= 0;
+  if (!shutDown) {
+    p.fuel = Math.max(0, p.fuel - (FLIGHT.FUEL_IDLE + FLIGHT.FUEL_THROTTLE * power));
+  }
   p.ticks++;
   return p;
 }

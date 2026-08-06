@@ -86,6 +86,10 @@ export const RUNWAY = {
   // Two tiles is enough to tell the two apart. The rock mass at the west end of
   // 1-4 is twelve rows deep and still qualifies; 8-4's one-tile roof does not.
   DEPTH_TILES: 2,
+  // Rows of air the aeroplane needs over the strip to fly in at all. Two tiles
+  // is 32px against a 12px aeroplane: it can pass under 1-1's brick rows, which
+  // sit four rows up, and cannot squeeze under a pipe.
+  CLEAR_TILES: 2,
   // How far either way a strip is walked before we stop caring. Nothing is this
   // long (the widest flat run in the shipped levels is 122 tiles) and it bounds
   // the one loop that runs on a touchdown.
@@ -113,12 +117,41 @@ export const ISLAND_OUTCOME = {
 // island's own rows and out into open sky. A floating brick row does not shade a
 // runway; it becomes the surface of its own columns and breaks the run, which is
 // exactly right, because the wheels would find the bricks first.
+// THE GROUND, not the topmost thing in the column.
+//
+// This used to return the first blocking tile from the sky down, which meant a
+// single question block or brick row four rows overhead became "the surface" of
+// its column and broke the strip. 1-1 is littered with them, and the result was
+// that eighteen levels — all of world 1 bar 1-4 — had no runway at all and the
+// user's aeroplane simply flew into the ground: "Landing on a level makes plane
+// crash. I want to be able to."
+//
+// A pilot lands on the road, under the overhead signs. So the surface is the
+// LOWEST blocking tile the column has (the floor), and anything above it is an
+// obstacle to be cleared, not a new surface — see clearAbove().
 export function surfaceRow(island, tx) {
   if (tx < 0 || tx >= island.w) return null;
-  for (let ty = 0; ty < island.h; ty++) {
-    if (island.blocksTile(tx, ty)) return ty;
+  for (let ty = island.h - 1; ty >= 0; ty--) {
+    if (island.blocksTile(tx, ty)) {
+      // The floor's own TOP: walk up through the solid mass to its first row.
+      let top = ty;
+      while (top > 0 && island.blocksTile(tx, top - 1)) top--;
+      return top;
+    }
   }
   return null;
+}
+
+// Is there room to fly in over this column at the strip's height? The
+// aeroplane is PLANE_H tall and arrives shallow, so it needs a couple of tiles
+// of air above the wheels — enough to pass under a brick row, not enough to
+// squeeze under a pipe.
+export function clearAbove(island, tx, ty) {
+  for (let d = 1; d <= RUNWAY.CLEAR_TILES; d++) {
+    if (ty - d < 0) break;
+    if (island.blocksTile(tx, ty - d)) return false;
+  }
+  return true;
 }
 
 // The same column, but only if what is under the surface is ground rather than
@@ -129,6 +162,9 @@ export function groundRow(island, tx) {
   for (let d = 1; d < RUNWAY.DEPTH_TILES; d++) {
     if (!island.blocksTile(tx, ty + d)) return null;
   }
+  // Headroom, or it is not a runway however flat it is: a column with a pipe
+  // or a low ledge over it is somewhere the aeroplane cannot get down to.
+  if (!clearAbove(island, tx, ty)) return null;
   return ty;
 }
 
@@ -234,8 +270,14 @@ export function islandVerdict(p, r) {
   if (Math.abs(normalizeAngle(p.angle)) > LANDING.MAX_ANGLE) {
     return { inBox: true, ok: false, outcome: ISLAND_OUTCOME.CRASH, reason: 'attitude' };
   }
+  // WHEELS UP IS NOT A LANDING ATTEMPT AT ALL — and it is not a crash either.
+  // It was a crash, which meant a low strafing pass over a beach wrote the
+  // aeroplane off for the crime of flying low. The gear switch is what says "I
+  // mean to put it down here", so without it this simply is not a landing and
+  // the aeroplane flies on. If he is genuinely too low he will meet the terrain
+  // check a tick later, exactly as he always did.
   if (!p.gear) {
-    return { inBox: true, ok: false, outcome: ISLAND_OUTCOME.CRASH, reason: 'gear-up' };
+    return { inBox: false, ok: false, outcome: ISLAND_OUTCOME.NONE, reason: 'gear-up' };
   }
   return { inBox: true, ok: true, outcome: ISLAND_OUTCOME.ROLLOUT, reason: 'rollout' };
 }

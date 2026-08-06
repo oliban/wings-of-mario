@@ -32,7 +32,13 @@ export const LANDING = {
   // against it — but the bots fly it and it is the number to quote a player.
   // It replaces a MIN_SPEED that used to be enforced, and killed you.
   APPROACH_SPEED: 1.2,
-  MAX_ANGLE: 0.22,
+  // HOW LEVEL IS LEVEL ENOUGH. 0.22 rad is 12.6 degrees, and it was too fine
+  // to fly by eye — the aeroplane pitches continuously and a shallow approach
+  // that LOOKS level is routinely a degree or two out. 0.40 is 23 degrees:
+  // still obviously an approach rather than a dive, and forgiving enough that
+  // getting the height and the line right is the skill, not holding the nose
+  // inside a band you cannot see. The island uses this same number.
+  MAX_ANGLE: 0.40,
   Y_TOLERANCE: 10,
   X_MARGIN: 8,
 };
