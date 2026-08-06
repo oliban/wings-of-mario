@@ -232,7 +232,7 @@ let badgeAngleLine = '';
 function paintSpeedBadge() {
   if (!speedBadge) return;
   const speed = badgeSpeedLine || `DEBUG  MAX SPEED ${getMaxSpeed().toFixed(1)}`;
-  speedBadge.textContent = `${speed}\n${badgeAngleLine}\nQ slower   W faster   E default   1-8 world`;
+  speedBadge.textContent = `${speed}\n${badgeAngleLine}\nQ slower   W max   E default   1-8 world`;
 }
 
 // Called once per rendered frame from Pilot#render.
@@ -298,6 +298,20 @@ function updateAngleBadge(sim) {
 // the change immediately rather than after a crash.
 function speedTune(sim, delta) {
   const v = setMaxSpeed(getMaxSpeed() + delta * SPEED_TUNE.STEP);
+  if (sim && sim.plane) sim.plane.maxSpeed = v;
+  showSpeedBadge(v);
+  return v;
+}
+
+// W — STRAIGHT TO THE TOP, in one press rather than twelve. Asked for because
+// the only reason to reach for the tuning keys mid-playtest is to get somewhere
+// quickly, and stepping there 1.5 at a time from 9 is eleven presses of a key
+// whose whole purpose is saving time.
+//
+// Q still steps DOWN, which is where fine control is actually wanted: you jump
+// to the top, then back off until it handles the way you want.
+function speedMax(sim) {
+  const v = setMaxSpeed(SPEED_TUNE.MAX);
   if (sim && sim.plane) sim.plane.maxSpeed = v;
   showSpeedBadge(v);
   return v;
@@ -465,7 +479,7 @@ class Pilot {
       if (name === 'drop') pending.drop = true;
       if (name === 'fire') pending.fire = true;
       if (name === 'speedDown') speedTune(this.sim, -1);
-      if (name === 'speedUp') speedTune(this.sim, +1);
+      if (name === 'speedUp') speedMax(this.sim);
       if (name === 'speedReset') speedReset(this.sim);
       if (name === 'worldPrev') this.jumpTo(this.sim.archipelago.world - 1);
       if (name === 'worldNext') this.jumpTo(this.sim.archipelago.world + 1);

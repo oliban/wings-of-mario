@@ -30,23 +30,27 @@ test('the debug speed keys', async (t) => {
     assert.match(text, /ANGLE\s+-?\d+\.\d+ rad/, 'no live attitude on the badge');
   });
 
-  await t.test('W speeds the aeroplane up, Q slows it down', async () => {
+  await t.test('W goes straight to the top, Q steps back down', async () => {
+    // W USED TO STEP, 1.5 at a time, which is eleven presses from 9 to 27 on a
+    // key whose whole purpose is saving time in a playtest. It jumps now; Q
+    // still steps, because backing off is where fine control is actually
+    // wanted.
     await page.keyboard.press('KeyW');
-    assert.equal(await maxSpeed(), 10.5);
+    assert.equal(await maxSpeed(), 27.0, 'W did not go to the maximum');
     await page.keyboard.press('KeyW');
-    assert.equal(await maxSpeed(), 12.0);
+    assert.equal(await maxSpeed(), 27.0, 'and it clamps there');
     await page.keyboard.press('KeyQ');
+    assert.equal(await maxSpeed(), 25.5);
     await page.keyboard.press('KeyQ');
-    await page.keyboard.press('KeyQ');
-    assert.equal(await maxSpeed(), 7.5);
+    assert.equal(await maxSpeed(), 24.0);
   });
 
   await t.test('the current maximum is on screen, marked as debug', async () => {
     const text = await badge();
     assert.match(text, /DEBUG/);
-    assert.match(text, /MAX SPEED 7\.5/);
+    assert.match(text, /MAX SPEED 24\.0/);
     assert.match(text, /Q slower/);
-    assert.match(text, /W faster/);
+    assert.match(text, /W max/);
     assert.match(text, /E default/);
     assert.match(text, /1-8 world/);
   });

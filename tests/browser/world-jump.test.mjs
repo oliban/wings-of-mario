@@ -192,9 +192,10 @@ test('the debug world jump', async (t) => {
     const world = await worldOf(page);
     await page.keyboard.press('KeyQ');
     assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 7.5, 'Q did not slow it');
+    // W goes straight to the maximum now rather than stepping: eleven presses
+    // from the default was a poor use of a key whose purpose is saving time.
     await page.keyboard.press('KeyW');
-    await page.keyboard.press('KeyW');
-    assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 10.5, 'W did not speed it up');
+    assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 27.0, 'W did not go to the max');
     await page.keyboard.press('KeyE');
     assert.equal(await page.evaluate(() => window.__WINGS.maxSpeed()), 9.0, 'E did not reset it');
     assert.equal(await worldOf(page), world, 'a speed key moved the archipelago');

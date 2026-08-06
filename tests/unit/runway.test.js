@@ -172,7 +172,10 @@ test('a level with a long flat floor can be landed on, and one without cannot', 
   // level of pits and stairs has no run long enough.
   assert.ok(landable.length < Object.keys(LEVELS).length,
     'every level is landable, which makes the strip meaningless');
-  for (const id of ['1-3', '5-3', '8-2']) {
+  // The x-3 levels: platforms and gaps the whole way, with no run long enough
+  // at any height. Everything else has somewhere now — floors, and ceilings
+  // since the user asked for those too.
+  for (const id of ['1-3', '3-3', '5-3']) {
     assert.ok(!landable.includes(id), `${id} should have no strip long enough`);
   }
 });

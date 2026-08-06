@@ -139,15 +139,26 @@ export const ISLAND_OUTCOME = {
 // A pilot lands on the road, under the overhead signs. So the surface is the
 // LOWEST blocking tile the column has (the floor), and anything above it is an
 // obstacle to be cleared, not a new surface — see clearAbove().
-export function surfaceRow(island, tx) {
+export function surfaceRow(island, tx, fromTy = 0) {
   if (tx < 0 || tx >= island.w) return null;
-  for (let ty = island.h - 1; ty >= 0; ty--) {
-    if (island.blocksAircraftTile(tx, ty)) {
-      // The floor's own TOP: walk up through the solid mass to its first row.
-      let top = ty;
-      while (top > 0 && island.blocksAircraftTile(tx, top - 1)) top--;
-      return top;
-    }
+  // THE FIRST SOLID TILE AT OR BELOW `fromTy` — which is the aeroplane's own
+  // row when there is an aeroplane asking.
+  //
+  // This has been wrong twice, in opposite directions. Taking the TOPMOST solid
+  // tile in the column made every floating question block "the surface" of its
+  // column and broke the run beneath it: eighteen levels had no runway at all.
+  // Taking the LOWEST fixed that and broke the other case — a ceiling can never
+  // be a surface if the floor forty rows below always wins, so "I want to be
+  // able to land on that roof" could not work however thin the roof was allowed
+  // to be.
+  //
+  // Neither is a property of the column. It is a property of where the
+  // aeroplane is: the ground under you is the first thing under YOU. Blocks
+  // above the wheels are something to fly beneath; the floor below a roof you
+  // are standing on is not your problem.
+  const start = Math.max(0, Math.floor(fromTy));
+  for (let ty = start; ty < island.h; ty++) {
+    if (island.blocksAircraftTile(tx, ty)) return ty;
   }
   return null;
 }
@@ -166,8 +177,8 @@ export function clearAbove(island, tx, ty) {
 
 // The same column, but only if what is under the surface is ground rather than
 // a lid. See RUNWAY.DEPTH_TILES.
-export function groundRow(island, tx) {
-  const ty = surfaceRow(island, tx);
+export function groundRow(island, tx, fromTy = 0) {
+  const ty = surfaceRow(island, tx, fromTy);
   if (ty == null) return null;
   for (let d = 1; d < RUNWAY.DEPTH_TILES; d++) {
     if (!island.blocksAircraftTile(tx, ty + d)) return null;
@@ -185,16 +196,19 @@ export function groundRow(island, tx) {
 //
 // The returned geometry is in WORLD pixels: `y` is the top of the surface tile —
 // where the wheels rest — and `x1` is the right edge of the last tile.
-export function runwayAt(island, tx) {
-  const ty = groundRow(island, tx);
+export function runwayAt(island, tx, fromTy = 0) {
+  const ty = groundRow(island, tx, fromTy);
   if (ty == null) return null;
+  // The neighbours are asked from the SAME height, so a strip is a run of
+  // columns whose surface is at one row as seen from where the aeroplane is.
+  const at = (c) => groundRow(island, c, fromTy);
   let tx0 = tx;
   let tx1 = tx;
-  while (tx0 > 0 && tx - tx0 < RUNWAY.SCAN_TILES && groundRow(island, tx0 - 1) === ty) tx0--;
+  while (tx0 > 0 && tx - tx0 < RUNWAY.SCAN_TILES && at(tx0 - 1) === ty) tx0--;
   while (
     tx1 + 1 < island.w
     && tx1 - tx < RUNWAY.SCAN_TILES
-    && groundRow(island, tx1 + 1) === ty
+    && at(tx1 + 1) === ty
   ) tx1++;
   const tiles = tx1 - tx0 + 1;
   if (tiles < MIN_RUNWAY_TILES) return null;
@@ -214,14 +228,39 @@ export function runwayAt(island, tx) {
 // the tests that ask which levels are landable at all; the sim itself never
 // needs the whole list, only the one under the wheels.
 export function runways(island) {
+  // EVERY SURFACE AT EVERY HEIGHT, because a strip is not a property of a
+  // column — it is a property of a ROW, and a level can have several. 1-2 has a
+  // floor and a ceiling and both are landable; scanning each column once from
+  // the sky found only whichever came first, and scanning from the floor found
+  // only floors.
+  //
+  // So: walk the rows. A column belongs to a strip at `ty` when the tile there
+  // is solid and there is room to fly in over it; consecutive such columns are
+  // a run, and a long enough run is a runway.
   const out = [];
-  let tx = 0;
-  while (tx < island.w) {
-    const r = runwayAt(island, tx);
-    if (r) {
-      out.push(r);
-      tx = r.tx1 + 1;
-    } else tx++;
+  for (let ty = 0; ty < island.h; ty++) {
+    let run = 0;
+    for (let tx = 0; tx <= island.w; tx++) {
+      const on = tx < island.w
+        && island.blocksAircraftTile(tx, ty)
+        && clearAbove(island, tx, ty);
+      if (on) { run++; continue; }
+      if (run >= MIN_RUNWAY_TILES) {
+        const tx0 = tx - run;
+        const tx1 = tx - 1;
+        out.push({
+          island: island.id,
+          ty,
+          tx0,
+          tx1,
+          tiles: run,
+          y: ISLAND_TOP_Y + ty * TILE,
+          x0: island.originX + tx0 * TILE,
+          x1: island.originX + (tx1 + 1) * TILE,
+        });
+      }
+      run = 0;
+    }
   }
   return out;
 }
@@ -232,11 +271,14 @@ export function runways(island) {
 // surface, rather than sixty times a second for the whole sortie.
 export function runwayUnder(island, px, py) {
   const tx = Math.floor((px - island.originX) / TILE);
-  const ty = groundRow(island, tx);
+  // FROM THE WHEELS DOWN. A roof you are standing on is the ground; the floor
+  // beneath it is not.
+  const fromTy = Math.floor((py - ISLAND_TOP_Y) / TILE);
+  const ty = groundRow(island, tx, fromTy);
   if (ty == null) return null;
   const y = ISLAND_TOP_Y + ty * TILE;
   if (Math.abs(py - y) > LANDING.Y_TOLERANCE) return null;
-  return runwayAt(island, tx);
+  return runwayAt(island, tx, fromTy);
 }
 
 // ---------------------------------------------------------------------------
