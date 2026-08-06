@@ -268,10 +268,23 @@ function updateAngleBadge(sim) {
   // that reading and was told it was wrong. Level west is PI, and PI is level.
   const a = pitchOffLevel(sim.plane.angle);
   const heading = landingDir(sim.plane) === 1 ? 'E' : 'W';
-  const ok = Math.abs(a) <= LANDING.MAX_ANGLE;
+  const level = Math.abs(a) <= LANDING.MAX_ANGLE;
   const fast = sim.plane.speed > LANDING.MAX_SPEED;
+  // WHERE, and whether there is a where at all. The badge went green on angle
+  // alone, which is true over open sea and over a castle roof — and a roof is a
+  // one-tile ceiling with nothing under it, which is not a runway however level
+  // you are. Green now means "you could put it down here", which needs a
+  // surface as well as an attitude.
+  const surface = typeof sim.landingSurface === 'function' ? sim.landingSurface() : null;
+  const parked = sim.plane.mode !== 'air';
+  const ok = level && (parked || !!surface);
+  const where = parked ? 'DOWN'
+    : surface === 'deck' ? 'OVER THE DECK'
+      : surface === 'strip' ? 'OVER A STRIP'
+        : 'NOWHERE TO LAND';
   badgeAngleLine = `ANGLE  ${a >= 0 ? ' ' : ''}${a.toFixed(3)} rad  ${heading}`
-    + `   (land within ${LANDING.MAX_ANGLE.toFixed(2)})  ${ok ? 'OK' : '--'}\n`
+    + `   (land within ${LANDING.MAX_ANGLE.toFixed(2)})  ${level ? 'OK' : '--'}\n`
+    + `${where}\n`
     + `SPEED  ${sim.plane.speed.toFixed(2)}`
     + `        (wire takes ${LANDING.MAX_SPEED.toFixed(1)})  ${fast ? 'LONG RUN' : 'OK'}`;
   ensureSpeedBadge();

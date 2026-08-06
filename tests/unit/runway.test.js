@@ -99,11 +99,19 @@ test('scenery is not a surface', () => {
   assert.equal(surfaceRow(isle, 3), 13, 'the coin row is passed straight through');
 });
 
-test('a one-tile lid over a hollow level is not ground', () => {
+test('a one-tile lid IS ground, by the user\'s call', () => {
+  // THIS ASSERTED THE OPPOSITE. Two tiles of solid under a strip told a floor
+  // from a roof, and it was my rule — it kept every underground and castle
+  // ceiling from being an aerodrome, which kept a runway something you look
+  // for. The user overruled it: "I want to be able to land on that roof even
+  // though one tile thick."
   const isle = fakeIsland(['..........', '..........', '##########']);
   assert.equal(surfaceRow(isle, 3), 2);
-  assert.equal(groundRow(isle, 3), null, 'nothing underneath it');
-  assert.equal(runwayAt(isle, 3), null);
+  assert.equal(groundRow(isle, 3), 2, 'a single course is ground enough now');
+  // Still has to be long enough, though — that rule is untouched.
+  assert.equal(runwayAt(isle, 3), null, 'ten tiles is not a runway');
+  const long = fakeIsland(['.'.repeat(40), '.'.repeat(40), '#'.repeat(40)]);
+  assert.ok(runwayAt(long, 5), 'a long enough lid is landable');
 });
 
 test('a strip has to be long enough, unbroken and flat', () => {
@@ -529,7 +537,8 @@ test('the same aeroplane takes off from the island and lands back on the ship', 
 // RUNWAY.DEPTH_TILES and RUNWAY.SCAN_TILES are read by the walk above; keep the
 // object exported and non-empty so a rename cannot silently pass.
 test('the strip rules are stated, not implied', () => {
-  assert.equal(RUNWAY.DEPTH_TILES, 2);
+  assert.equal(RUNWAY.DEPTH_TILES, 1);
+  assert.equal(RUNWAY.CLEAR_TILES, 2);
   assert.ok(RUNWAY.SCAN_TILES > MIN_RUNWAY_TILES * 2);
 });
 

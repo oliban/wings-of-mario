@@ -85,7 +85,17 @@ export const RUNWAY = {
   //
   // Two tiles is enough to tell the two apart. The rock mass at the west end of
   // 1-4 is twelve rows deep and still qualifies; 8-4's one-tile roof does not.
-  DEPTH_TILES: 2,
+  // HOW THICK THE GROUND UNDER A STRIP MUST BE. Two tiles told a floor from a
+  // roof, and every underground and castle ceiling — one unbroken row across
+  // the whole map with open sky above — stopped being an aerodrome. That was my
+  // rule, to keep a runway something you look for.
+  //
+  // The user overruled it: "I want to be able to land on that roof even though
+  // one tile thick." So a single course of solid tiles is ground enough. It
+  // makes a good many more places landable, ceilings included, which is the
+  // point — and a strip is still a long unbroken run at one height with clear
+  // air over it, so it is not everywhere.
+  DEPTH_TILES: 1,
   // Rows of air the aeroplane needs over the strip to fly in at all. Two tiles
   // is 32px against a 12px aeroplane: it can pass under 1-1's brick rows, which
   // sit four rows up, and cannot squeeze under a pipe.

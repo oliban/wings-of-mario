@@ -2,7 +2,8 @@ import { TILE } from '../core/constants.js';
 import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import {
-  landingVerdict, hitsHull, arrest, bolt, trapOn, spotOnDeck, wireCrossed, OUTCOME,
+  landingVerdict, inLandingBox, hitsHull, arrest, bolt, trapOn, spotOnDeck, wireCrossed,
+  OUTCOME,
 } from './carrier.js';
 import {
   createLoadout, release, stepShot, detonate, canDamage, GUN_INTERVAL, GUN_TRACE_TICKS,
@@ -444,6 +445,28 @@ export class WingsSim {
   //
   // The point tested is the middle of the undercarriage, not the nose: the nose
   // is what flies into a hillside and the wheels are what land on one.
+  // IS THERE ANYWHERE TO PUT IT DOWN, right here, right now? 'deck', 'strip',
+  // or null — and deliberately ignoring the attitude, the speed and the gear,
+  // because this answers "is there a surface" and the verdict answers "are you
+  // flying it properly".
+  //
+  // The panel needs it. A green badge used to mean only that the ANGLE was
+  // inside the limit, so it read green over open sea and over a castle roof
+  // alike — and a player who trusted it flew into a ceiling: "i crashed when
+  // trying to land on this roof despite green status". A ceiling is one tile
+  // thick with nothing under it, which is exactly what RUNWAY.DEPTH_TILES
+  // exists to refuse.
+  landingSurface() {
+    const p = this.plane;
+    if (p.mode !== MODE.AIR) return null;
+    if (inLandingBox(p)) return 'deck';
+    const wx = p.x + PLANE_W / 2;
+    const wy = p.y + PLANE_H;
+    const isle = this.islandAt(wx, wy);
+    if (!isle) return null;
+    return runwayUnder(isle, wx, wy) ? 'strip' : null;
+  }
+
   islandArrival() {
     const p = this.plane;
     const wx = p.x + PLANE_W / 2;
