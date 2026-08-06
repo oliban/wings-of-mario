@@ -263,7 +263,12 @@ ${entsBlock(L.entities)}
 export default {
   id: '4-4',
   name: 'WORLD 4-4',
-  time: 300,
+  // 400, not 300: the area header's top two bits are the GameTimerSetting
+  // (asm:4415-4423) and index GameTimerData = 400/300/200 (asm:2828-2831).
+  // CastleArea2/5/6 all carry header0 $5b -> setting 1 -> 400. These are the
+  // loop mazes, the longest levels in the game to solve, and they were the
+  // only three in the game running TIGHTER than the original.
+  time: 400,
   theme: 'castle',
   music: 'castle',
   width: ${L.width},

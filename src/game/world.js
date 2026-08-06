@@ -595,6 +595,11 @@ function dedupeAudio(impl) {
 // ===========================================================================
 // World
 // ===========================================================================
+// Enemy ids BELOW Bloober ($07), which are exactly the ground walkers: green
+// koopa $00, buzzy $02, red koopa $03, hammer bro $05, goomba $06. These are
+// the only enemies the ROM will not let you stomp merely by being above them.
+const GROUND_WALKER_IDS = new Set(['goomba', 'buzzy', 'hammerbro']);
+
 export class World {
   constructor(opts = {}) {
     this.cam = new Camera();
@@ -2097,7 +2102,32 @@ export class World {
       // the recomputed feetBefore with it) and falls through to onPlayerTouch,
       // i.e. the player kills one and is hurt by the other.
       const stompTimed = stompable && (p.stompTimer | 0) > 0;
-      if (stompTimed || (stompable && p.vy > 0 && feetBefore <= e.y + e.h * 0.55)) {
+      // ChkForPlayerInjury (asm:11337-11347) is TWO tests, not one. Moving
+      // DOWN always stomps — that is the one we had. But moving up, or not
+      // moving vertically at all, the ROM still stomps anything with an id at
+      // or above Bloober ($07) whenever the player is ABOVE it:
+      //
+      //   lda Player_Y_Position / clc / adc #$0c
+      //   cmp Enemy_Y_Position,x
+      //   bcc EnemyStomped        ; player's position above the enemy's
+      //
+      // That is what makes a cheep-cheep leaping into you from underneath DIE
+      // and bump you, instead of killing you — the case reported. Without it a
+      // fish that arrives while you are rising or standing still is pure
+      // damage, which is not how the original plays.
+      //
+      // The cutoff is the enemy ID, and everything below $07 is a ground
+      // walker: green koopa $00, buzzy $02, red koopa $03, hammer bro $05,
+      // goomba $06. So walking into a goomba's side still hurts. A WINGED
+      // koopa is $0e-$10, above the line, which is why a paratroopa coming
+      // down on you can still be stomped.
+      const risingHit =
+        stompable &&
+        !stompTimed &&
+        p.vy <= 0 &&
+        this._positionStomps(e) &&
+        p.y + 12 < e.y;
+      if (stompTimed || risingHit || (stompable && p.vy > 0 && feetBefore <= e.y + e.h * 0.55)) {
         const absorbed = this._safeCall(e, 'onStomp', p);
         // A broken onStomp absorbed nothing. _reportError has already dropped
         // the entity, so there is no touch to fall through to either — awarding
@@ -2115,6 +2145,24 @@ export class World {
       if (typeof e.onPlayerTouch === 'function') this._safeCall(e, 'onPlayerTouch', p);
       this._endMerge();
     }
+  }
+
+  // Is this enemy above the ROM's Bloober ($07) cutoff, i.e. does being ABOVE
+  // it count as a stomp even when the player is not falling? See the ladder in
+  // _playerEntityCollisions.
+  //
+  // Water areas are excluded wholesale, and that is the ROM's own shape rather
+  // than a special case of ours: HandlePECollisions reaches
+  // `lda AreaType / beq InjurePlayer` (asm:11346) BEFORE ChkForPlayerInjury for
+  // everything under $15, so in water every contact injures and the stomp test
+  // is never reached at all. It is the same line that makes a blooper
+  // unstompable anywhere in the game.
+  _positionStomps(e) {
+    if (!e) return false;
+    if (this.level && this.level.theme === 'water') return false;
+    const type = e.type || (e.constructor && e.constructor.type) || '';
+    if (type === 'koopa') return !!e.winged; // $0e-$10 winged, $00/$03 not
+    return !GROUND_WALKER_IDS.has(type);
   }
 
   // `inc StompTimer` (asm:11507) lives in HandleStompedShellE, the CHAIN path —

@@ -111,6 +111,16 @@ const RELEASE_AT = Math.max(10, THROW_ANIM.holds[0] || 14);
 // enemy gravity, so the arc survives a change to the physics contract.
 const HOP_RISE = 71;
 
+// The screen height above which the long hop becomes available at all, in the
+// ROM's own units ($70, HammerBroJumpCode asm:9251).
+const HOP_LONG_ABOVE = 0x70;
+
+// Our enemy rows sit one row below the ROM's and InitEnemyObject places the body
+// at row*16+8 (asm:8060-8062), so our y is 8px under the Enemy_Y_Position the
+// comparison above is written against. Take it off before comparing, rather than
+// baking the offset into the threshold, so the threshold stays the ROM's number.
+const ROM_Y_BIAS = 8;
+
 // The thrown hammer itself lives in ./hammer.js and is spawned by type.
 export default class HammerBro extends Entity {
   static type = 'hammerbro';
@@ -197,10 +207,26 @@ export default class HammerBro extends Entity {
 
     if (above || !below || !rng.chance(0.45)) {
       // HammerBroJumpLData = $20, $37 (asm:9238) is how long he stays in the
-      // air. Outside hard mode HJump forces the offset to 0 and he always gets
-      // the short $20 hop; in hard mode the offset comes off the LSFR, so half
-      // his hops are the long $37 one (asm:9262-9271).
-      const long = hardMode(this.world) && rng.chance(0.5);
+      // air, chosen by a bitmask that HammerBroJumpCode derives from his HEIGHT
+      // ON SCREEN before it ever consults the dice (asm:9246-9256):
+      //
+      //   Y >= $80  bottom half of the screen -> mask 0, always the short hop
+      //   Y <  $70  above the middle          -> mask 1, the long hop is in play
+      //   between   -> mask 0, and only the rise is a coin flip
+      //
+      // Only then is the masked LSFR bit taken, and HJump forces the offset back
+      // to 0 outside secondary hard mode (asm:9262-9271). So the long hop needs
+      // ALL THREE: high on the screen, hard mode, and the dice.
+      //
+      // We had the last two and not the first, which was invisible until hard
+      // mode was armed from 5-3 (`3095797`). That turned 8-4's bro — sitting at
+      // ROM row 11, Y $b8, squarely in the bottom half — from a bro who never
+      // long-hopped into one who does it half the time, in the corridor before
+      // that level's hardest mandatory jump. The original never gives him that
+      // hop at all.
+      const romY = this.y - ROM_Y_BIAS;
+      const highOnScreen = romY < HOP_LONG_ABOVE;
+      const long = highOnScreen && hardMode(this.world) && rng.chance(0.5);
       this.vy = -Math.sqrt(2 * enemyGravity() * (long ? HOP_RISE * (0x37 / 0x20) : HOP_RISE));
       this.grounded = false;
       fx(this.world, 'landingDust', cx, this.y + this.h, 0.8);

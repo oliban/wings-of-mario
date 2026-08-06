@@ -57,6 +57,13 @@ const STRINGS = {
     notBuiltA: 'MEN SPELET ÄR INTE',
     notBuiltB: 'HELT FÄRDIGBYGGT ÄN',
 
+    // 8-4's real ending. Five separate messages, staggered — see
+    // PrincessEndScreen for why they are five and not one block.
+    questOver: 'DIN FÄRD ÄR ÖVER.',
+    newQuest: 'VI GER DIG EN NY FÄRD.',
+    pushButtonB: 'TRYCK KNAPP B',
+    toSelectWorld: 'FÖR ATT VÄLJA VÄRLD',
+
     // options
     video: 'BILD',
     music: 'MUSIK',
@@ -97,6 +104,11 @@ const STRINGS = {
     anotherCastleB: 'ANOTHER CASTLE!',
     notBuiltA: 'BUT THE GAME IS YET',
     notBuiltB: 'TO BE COMPLETELY BUILT',
+
+    questOver: 'YOUR QUEST IS OVER.',
+    newQuest: 'WE PRESENT YOU A NEW QUEST.',
+    pushButtonB: 'PUSH BUTTON B',
+    toSelectWorld: 'TO SELECT A WORLD',
 
     video: 'VIDEO',
     music: 'MUSIC',

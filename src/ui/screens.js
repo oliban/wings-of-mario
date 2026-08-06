@@ -1348,9 +1348,121 @@ export class CastleEndScreen {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 8-4's real ending. NOT the Toad card with different words — the original
+// prints FIVE separate messages on a stagger, and the stagger is the scene.
+//
+// PrintVictoryMessages (asm:1176-1226) adds 4 to SecondaryMsgCounter every
+// frame and carries into PrimaryMsgCounter, so one counter step is 64 frames.
+// World 8 prints on steps 0, 3, 4, 5, 6 — steps 1 and 2 are a deliberate pause
+// with nothing on screen but the thanks. Rows and columns below are recovered
+// from each record's VRAM address as (addr - $2400) / 32, because they sit in
+// nametable 1: $2548 -> row 10 col 8, $25a7 -> 13/7, $25e3 -> 15/3, $264a ->
+// 18/10, $2688 -> 20/8.
+//
+// "PUSH BUTTON B TO SELECT A WORLD" is TWO records a step apart
+// (WorldSelectMessage1/2, asm:2350 and 2357), not one line. Everyone
+// misremembers it as one.
+const VICTORY_STEP = 64;
+
+// The counter reaches 7 and PrintVictoryMessages sets WorldEndTimer = 6
+// (asm:1224). That timer lives at $07a1 inside the interval-timer block, and
+// IntervalTimerControl reloads with $14 = 20 (asm:790-794), so it ticks once
+// every 21 frames — not every frame, which is the easy mistake. 448 + 126.
+const VICTORY_END = 7 * VICTORY_STEP + 6 * 21;
+
+// Music starts on the SAME step as "YOUR QUEST IS OVER." (asm:1204-1207,
+// `cpy #$03 / bne PrintMsg`, world 8 only), so the fanfare plays under the
+// thanks rather than opening the scene.
+const VICTORY_MUSIC_STEP = 3;
+
+const VICTORY_LINES = [
+  { key: 'thankYou', step: 0, row: 10, col: 8 },
+  { key: 'questOver', step: 3, row: 13, col: 7 },
+  { key: 'newQuest', step: 4, row: 15, col: 3 },
+  { key: 'pushButtonB', step: 5, row: 18, col: 10 },
+  { key: 'toSelectWorld', step: 6, row: 20, col: 8 },
+];
+
+export class PrincessEndScreen {
+  constructor(opts = {}) {
+    this.t = 0;
+    this.running = false;
+    this.world = null;
+    this.showHud = opts.showHud !== false;
+    this._musicAt = -1;
+  }
+
+  show(world) {
+    this.world = world || null;
+    this.t = 0;
+    this.running = true;
+    this._musicAt = VICTORY_MUSIC_STEP * VICTORY_STEP;
+    return this;
+  }
+
+  get finished() {
+    return !this.running;
+  }
+
+  // Which lines are on screen at frame t. Exported shape so a test can assert
+  // the schedule without driving the renderer.
+  static linesAt(tick) {
+    return VICTORY_LINES.filter((l) => tick >= l.step * VICTORY_STEP);
+  }
+
+  static get END_FRAME() {
+    return VICTORY_END;
+  }
+
+  update() {
+    if (!this.running) return this;
+    this.t++;
+    if (this._musicAt >= 0 && this.t >= this._musicAt) {
+      this._musicAt = -1;
+      music('level-complete');
+    }
+    // PlayerEndWorld (asm:1232-1247) does not read the controller until the
+    // world end timer has expired, so this card CANNOT be dismissed early. A
+    // skippable ending would eat the reveal on the one screen the whole game
+    // builds towards.
+    if (this.t >= VICTORY_END) this.running = false;
+    return this;
+  }
+
+  draw(ctx) {
+    fillRect(ctx, '#000000', 0, 0, SCREEN_W, SCREEN_H);
+    if (this.showHud) hud.draw(ctx, this.world);
+
+    const peach = artOf(bossMod, ['PEACH', 'PRINCESS', 'TOAD']);
+    const s = peach && (peach.frame ? peach.frame(this.t) : peach);
+    if (s && typeof s.draw === 'function') s.draw(ctx, (SCREEN_W - s.w) >> 1, 48);
+
+    for (const line of PrincessEndScreen.linesAt(this.t)) {
+      const text = t(line.key);
+      // The ROM's column is authored for its own English string. Keep it when
+      // the text still fits the 32-column screen and centre it otherwise, so a
+      // translation cannot run off the right edge.
+      const w = text.length;
+      const x = line.col + w <= 32 ? line.col * 8 : Math.max(0, (SCREEN_W - w * 8) >> 1);
+      drawText(ctx, text, x, line.row * 8, line.step === 0 ? 'gold' : 'white');
+    }
+    return this;
+  }
+}
+
 /* --------------------------------------------------------------- manager */
 
-const BLOCKING = new Set(['title', 'intro', 'options', 'gameover', 'tally', 'pause', 'castle']);
+const BLOCKING = new Set([
+  'title',
+  'intro',
+  'options',
+  'gameover',
+  'tally',
+  'pause',
+  'castle',
+  'princess',
+]);
 
 export class Screens {
   constructor(opts = {}) {
@@ -1360,6 +1472,7 @@ export class Screens {
     this.gameOver = new GameOverScreen(opts.gameOver);
     this.tally = new LevelCompleteTally(opts.tally);
     this.castle = new CastleEndScreen(opts.castle);
+    this.princess = new PrincessEndScreen(opts.princess);
     this.options = new OptionsScreen({ options });
     this.settings = options;
     this.transition = transition;
@@ -1488,6 +1601,13 @@ export class Screens {
     return this._promise('castle');
   }
 
+  /** 8-4 only: the Princess, on the original's own five-message stagger. */
+  showPrincessEnd(world) {
+    this.princess.show(world === undefined ? this.world : world);
+    this.state = 'princess';
+    return this._promise('princess');
+  }
+
   showGameOver(world, opts = {}) {
     this.gameOver.show(world === undefined ? this.world : world);
     if (opts.hold != null) this.gameOver.hold = opts.hold;
@@ -1585,6 +1705,13 @@ export class Screens {
           this._settle('castle');
         }
         break;
+      case 'princess':
+        this.princess.update();
+        if (this.princess.finished) {
+          this.state = 'none';
+          this._settle('princess');
+        }
+        break;
       case 'tally':
         this.tally.update();
         if (this.tally.finished) {
@@ -1618,6 +1745,9 @@ export class Screens {
         break;
       case 'castle':
         this.castle.draw(ctx);
+        break;
+      case 'princess':
+        this.princess.draw(ctx);
         break;
       case 'tally':
         this.tally.draw(ctx);

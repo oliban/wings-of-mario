@@ -355,13 +355,20 @@ class Game {
       }
       const next = nextLevel(this.levelId);
       const s = this.slots[this.turn];
-      // Beating a castle gets the classic Toad scene before anything else.
+      // Beating a castle gets the classic Toad scene — except the LAST one,
+      // which gets the Princess. They are different scenes, not the same card
+      // with different words: the ending prints five separate messages on the
+      // original's own stagger and cannot be dismissed early. Keyed off there
+      // being no next level rather than off the id, so the roster decides which
+      // castle is last.
       if (this.world.theme === 'castle' || /-4$/.test(String(this.levelId))) {
-        await screens.showCastleEnd(this.world, {
-          lines: next
-            ? [t('thankYou'), t('anotherCastleA'), t('anotherCastleB')]
-            : [t('thankYou'), t('notBuiltA'), t('notBuiltB')],
-        });
+        if (next) {
+          await screens.showCastleEnd(this.world, {
+            lines: [t('thankYou'), t('anotherCastleA'), t('anotherCastleB')],
+          });
+        } else {
+          await screens.showPrincessEnd(this.world);
+        }
       }
       if (next) {
         this.saveSlot();
@@ -433,9 +440,28 @@ class Game {
 
   // Tear the run down BEFORE returning to the title so a new game can never
   // inherit the level, lives or score of the one that just ended.
-  async endSession() {
+  // `cleared` is what tells finishing the game apart from running out of
+  // lives, and onLevelComplete has been passing it since long before anything
+  // read it — endSession took no arguments at all, so it was silently dropped
+  // and beating 8-4 dumped you on the title screen like a game over.
+  //
+  // Clearing it starts the SECOND QUEST: the same 32 levels with
+  // PrimaryHardMode armed. startGame() already means fresh slots, three lives,
+  // no score, back to 1-1, keeping the player count — everything the original
+  // does — so the quest only has to set the flag and let it run. A game over
+  // goes to the title and CLEARS the flag, which is the original's rule too:
+  // the only thing that ever arms primary hard mode is finishing 8-4.
+  async endSession(opts = {}) {
+    if (opts && opts.cleared === true) {
+      this.quest = (this.quest || 1) + 1;
+      this.world.primaryHardMode = true;
+      await this.startGame(this.playerCount);
+      return;
+    }
     this.started = false;
     this.playerCount = 1;
+    this.quest = 1;
+    this.world.primaryHardMode = false;
     this.harryMode = false;
     this.slots = [this.newSlot(), this.newSlot()];
     this.turn = 0;
