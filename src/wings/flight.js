@@ -1,5 +1,5 @@
 import {
-  CEILING_Y, DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, PLANE_W, PLANE_H, clamp,
+  CEILING_Y, DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, PLANE_W, PLANE_H, restY, clamp,
 } from './geo.js';
 
 // Everything here is pixels PER FRAME at the fixed 60.0988Hz timestep, and
@@ -72,6 +72,11 @@ export const FLIGHT = {
   // of deck: long enough to SEE the wire take the load, short enough that it
   // still reads as being caught rather than as braking.
   ARREST_DECEL: 0.075,
+  // Wheel brakes, held against the direction of roll. Stronger than rolling
+  // friction and weaker than an arrestor wire: it stops a landing rollout in
+  // about a third of the distance coasting would take, and still leaves the
+  // wire the fastest way to stop.
+  ROLL_BRAKE: 0.045,
   ROLL_DRAG: 0.01,
   TAKEOFF_SPEED: 2.2,
   FUEL_MAX: 100,
@@ -235,7 +240,7 @@ export function createPlane(opts = {}) {
     rollDir: opts.rollDir === -1 ? -1 : 1,
     rollEnd: opts.rollEnd != null ? opts.rollEnd : DECK_X1,
     x: opts.x != null ? opts.x : DECK_X0 + 16,
-    y: opts.y != null ? opts.y : DECK_SURFACE_Y - PLANE_H,
+    y: opts.y != null ? opts.y : restY(DECK_SURFACE_Y),
     angle: opts.angle != null ? opts.angle : 0,
     speed: opts.speed || 0,
     vx: 0,
@@ -279,7 +284,7 @@ export function stepPlane(p, input = {}) {
   // The constants for THIS aeroplane. At the default max speed this is the
   // FLIGHT object itself.
   const F = tunedFlight(p);
-  if (p.mode === MODE.DECK || p.mode === MODE.ROLL) stepRoll(p, pitch, power, F);
+  if (p.mode === MODE.DECK || p.mode === MODE.ROLL) stepRoll(p, pitch, thrust, F);
   else if (p.turnTicks != null) stepTurn(p, F);
   else stepAir(p, pitch, thrust, F);
 
@@ -307,7 +312,7 @@ const ROLL_STOP = 0.05;
 
 // The takeoff roll. The plane is pinned to the deck, gains speed against
 // rolling friction, and only rotates once there is air over the wings.
-function stepRoll(p, pitch, throttle, F) {
+function stepRoll(p, pitch, thrust, F) {
   // WHICH WAY THE ROLL RUNS. A takeoff is always eastbound — the aeroplane is
   // spotted at the stern pointing down the deck — but a LANDING can now arrive
   // from either direction, and a westbound arrival has to roll west. `rollDir`
@@ -319,15 +324,29 @@ function stepRoll(p, pitch, throttle, F) {
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
-  p.y = DECK_SURFACE_Y - PLANE_H;
+  p.y = restY(DECK_SURFACE_Y);
   // IN THE WIRE. The throttle is ignored and the arrestor does the work: a
   // constant, hard pull-up rather than proportional drag, because a wire takes
   // the same load whatever speed you hit it at — and because proportional drag
   // never actually reaches zero (see the floor below).
+  // THE STICK IS SIGNED ON THE GROUND TOO. `thrust` is a world-frame
+  // direction, +1 east and -1 west, and stepRoll used to be handed only its
+  // MAGNITUDE — so holding the key against the way you were rolling accelerated
+  // you exactly as holding it with you did, and there was no way to slow down:
+  // "when landed on ground, I need to be able to decellerate by pressing the
+  // key in opposite direction of planes direction."
+  //
+  // With the roll: engine. Against it: brakes, which bite harder than rolling
+  // friction and are what stop you in a sensible distance. Neither does
+  // anything in the wire — you do not brake out of an arrestor cable.
+  const along = thrust === 0 ? 0 : (thrust > 0 ? 1 : -1) * dir;
+  const throttle = along > 0 ? Math.abs(thrust) : 0;
+  const braking = along < 0 ? Math.abs(thrust) : 0;
   if (p.arrested) {
     p.speed = Math.max(0, p.speed - F.ARREST_DECEL);
   } else {
-    p.speed += F.ROLL_THRUST * throttle - F.ROLL_DRAG * p.speed;
+    p.speed += F.ROLL_THRUST * throttle - F.ROLL_DRAG * p.speed - F.ROLL_BRAKE * braking;
+    if (p.speed < 0) p.speed = 0;
   }
   // ROLLING DRAG IS PROPORTIONAL, so speed decays towards zero and never
   // reaches it: 0.99 of something is never nothing. That was invisible while

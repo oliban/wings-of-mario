@@ -1,5 +1,5 @@
 import {
-  DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, HULL_BOTTOM, PLANE_W, PLANE_H,
+  DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, HULL_BOTTOM, PLANE_W, PLANE_H, restY,
 } from './geo.js';
 import { MODE, normalizeAngle } from './flight.js';
 
@@ -177,7 +177,7 @@ export function bolt(p) {
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
-  p.y = DECK_SURFACE_Y - PLANE_H;
+  p.y = restY(DECK_SURFACE_Y);
   p.vx = p.speed;
   p.vy = 0;
   // Wheels are down whether or not the hook was: you are rolling on them.
@@ -204,7 +204,7 @@ export function trapOn(p) {
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
-  p.y = DECK_SURFACE_Y - PLANE_H;
+  p.y = restY(DECK_SURFACE_Y);
   p.vx = p.speed;
   p.vy = 0;
   p.gear = true;
@@ -223,7 +223,7 @@ export function arrest(p) {
   // west, and spinning it round on the spot would be a magic trick.
   p.angle = p.rollDir === -1 ? Math.PI : 0;
   p.gear = true;
-  p.y = DECK_SURFACE_Y - PLANE_H;
+  p.y = restY(DECK_SURFACE_Y);
   return p;
 }
 

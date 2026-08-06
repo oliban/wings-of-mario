@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { CEILING_Y, DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, PLANE_H } from '../../src/wings/geo.js';
+import { CEILING_Y, DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, PLANE_H, restY } from '../../src/wings/geo.js';
 import {
   FLIGHT, MODE, createPlane, stepPlane, normalizeAngle, turnToward, nosePoint,
 } from '../../src/wings/flight.js';
@@ -60,7 +60,7 @@ test('a fresh plane is spotted on the deck with the hook down', () => {
   assert.equal(p.speed, 0);
   assert.equal(p.angle, 0);
   assert.equal(p.gear, true);
-  assert.equal(p.y, DECK_SURFACE_Y - PLANE_H);
+  assert.equal(p.y, restY(DECK_SURFACE_Y));
   assert.ok(p.x >= DECK_X0 && p.x < DECK_X1);
   assert.equal(p.fuel, FLIGHT.FUEL_MAX);
   assert.equal(p.turnTicks, null, 'a fresh plane should not be mid-turn');
@@ -84,7 +84,7 @@ test('pulling back below flying speed does not leave the deck', () => {
   for (let i = 0; i < 40; i++) stepPlane(p, { thrust: 1, pitch: 1 });
   assert.ok(p.speed < FLIGHT.TAKEOFF_SPEED, 'test premise: still below rotation speed');
   assert.notEqual(p.mode, MODE.AIR);
-  assert.equal(p.y, DECK_SURFACE_Y - PLANE_H, 'the plane left the deck early');
+  assert.equal(p.y, restY(DECK_SURFACE_Y), 'the plane left the deck early');
 });
 
 // Verified: 106 ticks, back to level, net drift 38px. Pitch alone can still

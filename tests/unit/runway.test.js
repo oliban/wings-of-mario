@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { TILE } from '../../src/core/constants.js';
 import { getLevel, LEVELS } from '../../src/data/levels/index.js';
-import { ISLAND_TOP_Y, PLANE_W, PLANE_H, SEA_Y } from '../../src/wings/geo.js';
+import {
+  ISLAND_TOP_Y, PLANE_W, PLANE_H, restY, WHEEL_DROP, WHEEL_SINK, SEA_Y,
+} from '../../src/wings/geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane } from '../../src/wings/flight.js';
 import { LANDING } from '../../src/wings/carrier.js';
 import { Island } from '../../src/wings/island.js';
@@ -206,7 +208,7 @@ function planeOn(r, over = {}) {
   return createPlane({
     mode: MODE.AIR,
     x: r.x0 + 64,
-    y: r.y - PLANE_H,
+    y: restY(r.y),
     angle: 0,
     speed: LANDING.APPROACH_SPEED,
     gear: true,
@@ -217,7 +219,7 @@ function planeOn(r, over = {}) {
 test('off the strip is no verdict at all', () => {
   const isle = stripIsland(30);
   const r = runwayAt(isle, 5);
-  const high = planeOn(r, { y: r.y - PLANE_H - 100 });
+  const high = planeOn(r, { y: restY(r.y) - 100 });
   const v = islandVerdict(high, r);
   assert.equal(v.inBox, false);
   assert.equal(v.outcome, ISLAND_OUTCOME.NONE);
@@ -306,7 +308,11 @@ test('touchdown puts the wheels on the strip and keeps the speed', () => {
   const p = planeOn(r, { speed: 1.5, angle: 0.1 });
   touchdown(p, r);
   assert.equal(p.mode, MODE.ROLL);
-  assert.equal(p.y + PLANE_H, r.y);
+  // THE WHEELS on the strip, not the collision box: the tyres hang 5.3px below
+  // the box and used to be buried that deep in the ground. Two pixels in reads
+  // as contact.
+  assert.ok(Math.abs((p.y + PLANE_H + WHEEL_DROP) - (r.y + WHEEL_SINK)) < 0.01,
+    'the wheels are not resting on the strip');
   assert.equal(p.angle, 0);
   assert.equal(p.speed, 1.5, 'nothing here is a wire');
   assert.equal(p.gear, true);
@@ -320,7 +326,8 @@ test('a ground roll is the deck roll: same distance, on the ground', () => {
   const x0 = p.x;
   for (let i = 0; i < 5000 && p.mode !== MODE.DECK; i++) stepGroundRoll(p, { thrust: 0 }, r);
   assert.equal(p.mode, MODE.DECK, 'it stops');
-  assert.equal(p.y + PLANE_H, r.y, 'and it stops ON the ground, not at deck height');
+  assert.ok(Math.abs((p.y + PLANE_H + WHEEL_DROP) - (r.y + WHEEL_SINK)) < 0.01,
+    'it stops at deck height rather than on the ground');
   assert.ok(Math.abs((p.x - x0) - rolloutPx(LANDING.MAX_SPEED)) < 0.5);
   assert.ok(p.x + PLANE_W < r.x1, 'inside the strip, which is what the minimum length buys');
 });
@@ -371,7 +378,7 @@ function arrive(sim, r, over = {}) {
   const p = sim.plane;
   p.mode = MODE.AIR;
   p.x = r.x0 + 64;
-  p.y = r.y - PLANE_H;
+  p.y = restY(r.y);
   p.angle = 0;
   p.speed = LANDING.APPROACH_SPEED;
   p.gear = true;
@@ -415,7 +422,7 @@ test('an arrival at the bottom of the tolerance band is a landing, not a hillsid
   sim.step({ gear: true });
   assert.notEqual(sim.plane.mode, MODE.DOWN, 'it is a landing');
   assert.ok(sim.groundRoll);
-  assert.equal(sim.plane.y + PLANE_H, r.y, 'and the wheels are put back on the surface');
+  assert.equal(sim.plane.y, restY(r.y), 'and the wheels are put back on the surface');
 });
 
 test('a parked aeroplane flies off the island again', () => {
@@ -489,7 +496,7 @@ test('a scripted pilot can find a strip and put the aeroplane down on it', () =>
   assert.ok(autoLandIsland(sim, '1-4'), 'down on the island');
   assert.equal(sim.plane.mode, MODE.DECK);
   assert.ok(sim.groundRoll, 'and parked on a strip, not on the ship');
-  assert.equal(sim.plane.y + PLANE_H, sim.groundRoll.y);
+  assert.equal(sim.plane.y, restY(sim.groundRoll.y));
   assert.equal(sim.squadron, 5, 'no aeroplane was lost doing it');
 });
 
@@ -606,7 +613,7 @@ test('a textbook approach gets down on ordinary levels, not just the castle', ()
     const p = sim.plane;
     p.mode = MODE.AIR;
     p.x = r.x0 + 3 * TILE;
-    p.y = r.y - PLANE_H;
+    p.y = restY(r.y);
     p.angle = 0;
     p.speed = LANDING.APPROACH_SPEED;
     p.vx = p.speed;

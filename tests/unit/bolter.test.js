@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { WingsSim } from '../../src/wings/sim.js';
 import { MODE, FLIGHT } from '../../src/wings/flight.js';
 import { LANDING, OUTCOME } from '../../src/wings/carrier.js';
-import { DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, PLANE_H } from '../../src/wings/geo.js';
+import { DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, PLANE_H, restY } from '../../src/wings/geo.js';
 
 // THE BOLTER, end to end through the simulation.
 //
@@ -25,7 +25,7 @@ const overTheDeck = (sim, speed, over = {}) => {
   const p = sim.plane;
   p.mode = MODE.AIR;
   p.x = DECK_X0 + 40;
-  p.y = DECK_SURFACE_Y - PLANE_H;
+  p.y = restY(DECK_SURFACE_Y);
   p.angle = 0;
   p.speed = speed;
   p.vx = speed;
@@ -284,4 +284,51 @@ test('a fresh aeroplane is always spotted facing down the deck', () => {
   sim.respawn();
   assert.equal(sim.plane.rollDir, 1);
   assert.equal(sim.plane.angle, 0);
+});
+
+test('the brakes work: holding against the roll stops you sooner', () => {
+  // "when landed on ground, I need to be able to decellerate by pressing the
+  // key in opposite direction of planes direction." `thrust` is a world-frame
+  // direction, and stepRoll used to be handed only its MAGNITUDE — so holding
+  // the key against the way you were rolling accelerated you exactly as
+  // holding it with you did, and there was no way to slow down at all.
+  const roll = (input) => {
+    const sim = new WingsSim({ islands: ['1-1'] });
+    overTheDeck(sim, LANDING.MAX_SPEED + 1, { gear: false }); // a bolter: no wire
+    sim.step({});
+    const from = sim.plane.x;
+    for (let i = 0; i < 400 && sim.plane.mode === MODE.ROLL; i++) sim.step(input);
+    return { travelled: sim.plane.x - from, mode: sim.plane.mode };
+  };
+
+  const coasting = roll({});
+  const braking = roll({ thrust: -1 });
+  assert.ok(braking.travelled < coasting.travelled * 0.6,
+    `braking ran ${braking.travelled.toFixed(0)}px against ${coasting.travelled.toFixed(0)} coasting`);
+  assert.equal(braking.mode, MODE.DECK, 'braking did not bring him to a stop on the deck');
+
+  // And holding it WITH the roll still accelerates, as it always did.
+  const gunning = roll({ thrust: 1 });
+  assert.ok(gunning.travelled > coasting.travelled, 'the throttle stopped accelerating him');
+});
+
+test('you cannot brake out of an arrestor wire', () => {
+  // The cable takes the aeroplane; the wheels are not what is stopping it.
+  const braked = new WingsSim({ islands: ['1-1'] });
+  overTheDeck(braked, LANDING.APPROACH_SPEED);
+  braked.step({});
+  for (let i = 0; i < 200 && !braked.plane.arrested; i++) braked.step({});
+  const at = braked.plane.x;
+  let ticks = 0;
+  while (braked.plane.mode === MODE.ROLL && ticks < 400) { braked.step({ thrust: -1 }); ticks++; }
+  const withBrakes = braked.plane.x - at;
+
+  const plain = new WingsSim({ islands: ['1-1'] });
+  overTheDeck(plain, LANDING.APPROACH_SPEED);
+  plain.step({});
+  for (let i = 0; i < 200 && !plain.plane.arrested; i++) plain.step({});
+  const at2 = plain.plane.x;
+  while (plain.plane.mode === MODE.ROLL) plain.step({});
+  assert.ok(Math.abs(withBrakes - (plain.plane.x - at2)) < 0.01,
+    'the brakes changed the arrested run');
 });

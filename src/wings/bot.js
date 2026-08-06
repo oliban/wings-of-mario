@@ -128,6 +128,16 @@ export function bombTile(sim, islandId, tx, ty, budget = 8000) {
   // waiting for the aeroplane to get quick enough to expose it.
   const surface = surfaceOf(island);
 
+  // CLIMB BEFORE CROSSING ANYTHING. The transit leg used to be flown straight
+  // at the run-in point, which meant climbing and travelling at once — and the
+  // first island is only a couple of thousand pixels from the carrier, so the
+  // aeroplane was still low when it got there and flew into 1-1's block row.
+  // It survived on luck: a three-pixel change in where the aeroplane sits on
+  // the deck was enough to turn a near miss into a hit.
+  //
+  // Gaining the height first costs a few hundred ticks of a budget measured in
+  // thousands and makes the leg independent of what happens to be in the way.
+  if (!flyTo(sim, sim.plane.x + 700, cruiseY, budget, { near: 64, floor: SEA_Y })) return false;
   if (!flyTo(sim, target.x - 900, cruiseY, budget, { near: 64, floor: SEA_Y })) return false;
 
   const p = sim.plane;

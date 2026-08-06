@@ -34,6 +34,28 @@ export const DECK_Y = 512;
 // depend on the art, which is the same reason art/palette.js copies the engine's
 // colours instead of importing them. The tests pin the two together.
 export const DECK_TOP = 7;
+
+// HOW FAR THE WHEELS HANG BELOW THE COLLISION BOX. The aeroplane's box is 12px
+// tall and its undercarriage is drawn to 14 local units below centre, which at
+// PLANE_SCALE is 11.3 — so the tyres sit 5.3px below the box's own bottom edge.
+// Seat the box ON a surface and the wheels are buried in it: on the carrier the
+// deck plate is thick enough to hide that, on an island's ground it read as an
+// aeroplane sunk into the dirt.
+//
+// A copy of a number that lives in art/plane.js's drawGear, for the same reason
+// DECK_TOP copies DECK_THICK: geo.js is the geometry the simulation shares and
+// must not depend on the art. tests/unit/art.test.js pins the two together.
+export const WHEEL_DROP = 5.31;
+
+// How deep the tyres are allowed to sit in whatever they are standing on. Two
+// pixels reads as contact — a wheel resting in the surface rather than on top
+// of it like a decal — and is what the user asked for.
+export const WHEEL_SINK = 2;
+
+// Where the aeroplane's BOX goes so its wheels stand on `surfaceY`.
+export function restY(surfaceY) {
+  return surfaceY - PLANE_H - (WHEEL_DROP - WHEEL_SINK);
+}
 export const DECK_SURFACE_Y = DECK_Y - DECK_TOP;
 export const HULL_BOTTOM = SEA_Y + 24;
 

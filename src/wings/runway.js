@@ -1,5 +1,5 @@
 import { TILE } from '../core/constants.js';
-import { DECK_X1, DECK_SURFACE_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H } from './geo.js';
+import { DECK_X1, DECK_SURFACE_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H, restY } from './geo.js';
 import { MODE, FLIGHT, stepPlane, normalizeAngle } from './flight.js';
 import { LANDING, pitchOffLevel, landingDir } from './carrier.js';
 
@@ -300,7 +300,7 @@ export function touchdown(p, r) {
   p.turnStartAngle = null;
   p.turnDelta = null;
   p.arrested = false;
-  p.y = r.y - PLANE_H;
+  p.y = restY(r.y);
   p.vx = p.speed;
   p.vy = 0;
   p.gear = true;
