@@ -6,7 +6,10 @@ import { WingsSim, SQUADRON } from './sim.js';
 import { ARCHIPELAGO } from './archipelago.js';
 import { Sail, SAIL_KIND } from './sail.js';
 import { takeoff, flyTo, bombTile, autoLand } from './bot.js';
-import { SPEED_TUNE, getMaxSpeed, setMaxSpeed, resetMaxSpeed } from './flight.js';
+import {
+  SPEED_TUNE, getMaxSpeed, setMaxSpeed, resetMaxSpeed, normalizeAngle,
+} from './flight.js';
+import { LANDING } from './carrier.js';
 
 const HEADLESS = new URLSearchParams(location.search).has('headless');
 if (HEADLESS) document.body.classList.add('headless');
@@ -176,9 +179,11 @@ function readKeys() {
 // guesswork.
 let speedBadge = null;
 
-function showSpeedBadge(value) {
-  if (typeof document === 'undefined') return;
-  if (!speedBadge) {
+// The badge itself, made once. It used to appear only when the tuning keys
+// were pressed; the attitude line needs it up from the start.
+function ensureSpeedBadge() {
+  if (typeof document === 'undefined' || speedBadge) return;
+  {
     speedBadge = document.createElement('div');
     speedBadge.id = 'wings-debug-speed';
     speedBadge.style.cssText = [
@@ -193,10 +198,52 @@ function showSpeedBadge(value) {
     ].join(';');
     document.body.appendChild(speedBadge);
   }
+}
+
+function showSpeedBadge(value) {
+  ensureSpeedBadge();
+  if (!speedBadge) return;
   const at = value === SPEED_TUNE.DEFAULT ? '  (default)'
     : value === SPEED_TUNE.MIN ? '  (min)'
       : value === SPEED_TUNE.MAX ? '  (max)' : '';
-  speedBadge.textContent = `DEBUG  MAX SPEED ${value.toFixed(1)}${at}\nQ slower   W faster   E default   1-8 world`;
+  badgeSpeedLine = `DEBUG  MAX SPEED ${value.toFixed(1)}${at}`;
+  paintSpeedBadge();
+}
+
+// THE LIVE ATTITUDE, in the debug badge rather than on the instrument panel.
+//
+// Asked for to work out what a landing should tolerate — "I need it to find
+// what should be acceptable when landing" — and it has to be LIVE, because the
+// aeroplane pitches continuously and the number only means anything at the
+// moment the wheels touch. A badge that only redrew when a key was pressed
+// would show the angle you had when you last pressed Q.
+//
+// It went on the HUD's SPEED cell first. That cell is 115 pixels wide and the
+// readout ran thirty-seven past its own right edge, off the panel entirely —
+// and it was the wrong place regardless: the panel is the game's instruments,
+// this is a debug tool.
+//
+// Signed and normalised to the same +/-PI range landingVerdict tests, so what
+// is on screen is what the rule compares against, with the limit printed beside
+// it so there is nothing to look up.
+let badgeSpeedLine = null;
+let badgeAngleLine = '';
+
+function paintSpeedBadge() {
+  if (!speedBadge) return;
+  const speed = badgeSpeedLine || `DEBUG  MAX SPEED ${getMaxSpeed().toFixed(1)}`;
+  speedBadge.textContent = `${speed}\n${badgeAngleLine}\nQ slower   W faster   E default   1-8 world`;
+}
+
+// Called once per rendered frame from Pilot#render.
+function updateAngleBadge(sim) {
+  if (typeof document === 'undefined' || !sim || !sim.plane) return;
+  const a = normalizeAngle(sim.plane.angle);
+  const ok = Math.abs(a) <= LANDING.MAX_ANGLE && Math.cos(sim.plane.angle) > 0;
+  badgeAngleLine = `ANGLE  ${a >= 0 ? ' ' : ''}${a.toFixed(3)} rad`
+    + `   (land within ${LANDING.MAX_ANGLE.toFixed(2)})  ${ok ? 'OK' : '--'}`;
+  ensureSpeedBadge();
+  paintSpeedBadge();
 }
 
 // Moves the setting AND the aeroplane currently in the air. The setting is
@@ -651,6 +698,7 @@ class Pilot {
   render() {
     if (this.fatal) return;
     try {
+      updateAngleBadge(this.sim);
       this.scene.consume(this.sim);
       this.renderer.beginFrame();
       this.scene.submit(this.renderer, this.sim);

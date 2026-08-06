@@ -17,9 +17,17 @@ test('the debug speed keys', async (t) => {
   });
   const maxSpeed = () => page.evaluate(() => window.__WINGS.sim.plane.maxSpeed);
 
-  await t.test('starts at the default with no readout in sight', async () => {
+  await t.test('starts at the default, with the badge already up', async () => {
     assert.equal(await maxSpeed(), 9.0);
-    assert.equal(await badge(), null, 'the debug badge exists before anyone asks for it');
+    // THIS ASSERTED THE BADGE WAS ABSENT until a tuning key was pressed, which
+    // was right while it only carried MAX SPEED. It now carries the live
+    // ATTITUDE as well, and an attitude readout that appears only after you
+    // press Q is no use to a pilot lining up an approach — the number matters
+    // at the moment the wheels touch.
+    const text = await badge();
+    assert.ok(text, 'the debug badge is not up');
+    assert.match(text, /MAX SPEED 9\.0/);
+    assert.match(text, /ANGLE\s+-?\d+\.\d+ rad/, 'no live attitude on the badge');
   });
 
   await t.test('W speeds the aeroplane up, Q slows it down', async () => {
