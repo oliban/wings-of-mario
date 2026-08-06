@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DECK_X0, DECK_X1, DECK_Y, HULL_BOTTOM, PLANE_H } from '../../src/wings/geo.js';
+import { DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, HULL_BOTTOM, PLANE_H } from '../../src/wings/geo.js';
 import { MODE, createPlane } from '../../src/wings/flight.js';
 import {
   LANDING, OUTCOME, inLandingBox, landingVerdict, hitsHull, arrest, bolt, spotOnDeck,
@@ -12,7 +12,7 @@ function onTheWire(over = {}) {
   return createPlane({
     mode: MODE.AIR,
     x: DECK_X0 + 120,
-    y: DECK_Y - PLANE_H,
+    y: DECK_SURFACE_Y - PLANE_H,
     angle: 0,
     speed: (LANDING.MIN_SPEED + LANDING.MAX_SPEED) / 2,
     gear: true,
@@ -87,15 +87,15 @@ test('flying INTO the ship is still fatal, and should be', () => {
 });
 
 test('altitude and position put you out of the box entirely', () => {
-  assert.equal(landingVerdict(onTheWire({ y: DECK_Y - PLANE_H - 60 })).reason, 'off-deck');
+  assert.equal(landingVerdict(onTheWire({ y: DECK_SURFACE_Y - PLANE_H - 60 })).reason, 'off-deck');
   assert.equal(landingVerdict(onTheWire({ x: DECK_X0 - 200 })).reason, 'off-deck');
   assert.equal(landingVerdict(onTheWire({ x: DECK_X1 + 40 })).reason, 'off-deck');
   assert.equal(inLandingBox(onTheWire()), true);
 });
 
 test('the box is a narrow altitude slot, not the whole sky', () => {
-  assert.equal(inLandingBox(onTheWire({ y: DECK_Y - PLANE_H - (LANDING.Y_TOLERANCE - 1) })), true);
-  assert.equal(inLandingBox(onTheWire({ y: DECK_Y - PLANE_H - (LANDING.Y_TOLERANCE + 1) })), false);
+  assert.equal(inLandingBox(onTheWire({ y: DECK_SURFACE_Y - PLANE_H - (LANDING.Y_TOLERANCE - 1) })), true);
+  assert.equal(inLandingBox(onTheWire({ y: DECK_SURFACE_Y - PLANE_H - (LANDING.Y_TOLERANCE + 1) })), false);
 });
 
 test('the hull is solid below the deck', () => {
@@ -113,7 +113,7 @@ test('arresting stops the plane dead on the deck with the hook down', () => {
   assert.equal(p.vy, 0);
   assert.equal(p.angle, 0);
   assert.equal(p.gear, true);
-  assert.equal(p.y, DECK_Y - PLANE_H);
+  assert.equal(p.y, DECK_SURFACE_Y - PLANE_H);
 });
 
 test('spotting puts the next aircraft at the stern', () => {

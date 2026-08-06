@@ -533,6 +533,20 @@ export function drawPanel(ctx, viewW, viewH, sim, world, tick) {
     ctx.fillText('SPEED', x0 + 8, iy + 11);
     readout(ctx, x0 + 46, iy + 5, 34, 11, p.speed.toFixed(1));
 
+    // THE ATTITUDE, IN RADIANS, beside the speed. Asked for by the user to
+    // find what a landing should actually tolerate: the aeroplane pitches
+    // continuously and an approach that LOOKS level is routinely a degree or
+    // two out, so the number is the only way to see what a real approach is
+    // holding. Signed, because which way the nose is out matters, and shown as
+    // the same normalised angle landingVerdict tests — see LANDING.MAX_ANGLE
+    // in src/wings/carrier.js.
+    ctx.font = FONT_LABEL;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = PANEL.inkDim;
+    ctx.fillText('ANG', x0 + 86, iy + 11);
+    readout(ctx, x0 + 112, iy + 5, 40, 11, world.angle);
+
     ctx.font = FONT_LABEL;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';

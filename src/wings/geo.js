@@ -20,6 +20,21 @@ export const ISLAND_TOP_Y = SEA_Y - ISLAND_H;
 export const DECK_X0 = 96;
 export const DECK_X1 = 416;
 export const DECK_Y = 512;
+
+// THE PLANKING THE WHEELS ACTUALLY REST ON.
+//
+// DECK_Y is where the deck plate's UNDERSIDE is — it is what the hull is drawn
+// down from — and the aeroplane was being sat on that line, which put it a deck
+// thickness too low: wheels hanging past the lip, fuselage level with the deck
+// edge rather than standing on it. The user: "the plane is too low I want it to
+// look like it is in the middle of the runway."
+//
+// Mirrors DECK_THICK in src/wings/art/carrier.js. Deliberately a copy and not
+// an import: geo.js is the geometry every part of the sim shares and must not
+// depend on the art, which is the same reason art/palette.js copies the engine's
+// colours instead of importing them. The tests pin the two together.
+export const DECK_TOP = 7;
+export const DECK_SURFACE_Y = DECK_Y - DECK_TOP;
 export const HULL_BOTTOM = SEA_Y + 24;
 
 // Plane hitbox. x,y is its top-left, per ARCHITECTURE.md section 1.

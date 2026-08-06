@@ -1,4 +1,6 @@
-import { DECK_X0, DECK_X1, DECK_Y, HULL_BOTTOM, PLANE_W, PLANE_H } from './geo.js';
+import {
+  DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, HULL_BOTTOM, PLANE_W, PLANE_H,
+} from './geo.js';
 import { MODE, normalizeAngle } from './flight.js';
 
 // LANDING, and what happens when you get it wrong.
@@ -56,8 +58,8 @@ export function inLandingBox(p) {
   return (
     p.x + PLANE_W > DECK_X0 + LANDING.X_MARGIN &&
     p.x < DECK_X1 &&
-    wheels >= DECK_Y - LANDING.Y_TOLERANCE &&
-    wheels <= DECK_Y + LANDING.Y_TOLERANCE
+    wheels >= DECK_SURFACE_Y - LANDING.Y_TOLERANCE &&
+    wheels <= DECK_SURFACE_Y + LANDING.Y_TOLERANCE
   );
 }
 
@@ -107,7 +109,7 @@ export function hitsHull(p) {
   return (
     p.x + PLANE_W > DECK_X0 &&
     p.x < DECK_X1 &&
-    wheels > DECK_Y + LANDING.Y_TOLERANCE &&
+    wheels > DECK_SURFACE_Y + LANDING.Y_TOLERANCE &&
     p.y < HULL_BOTTOM
   );
 }
@@ -126,7 +128,7 @@ export function bolt(p) {
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
-  p.y = DECK_Y - PLANE_H;
+  p.y = DECK_SURFACE_Y - PLANE_H;
   p.vx = p.speed;
   p.vy = 0;
   // Wheels are down whether or not the hook was: you are rolling on them.
@@ -150,7 +152,7 @@ export function trapOn(p) {
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
-  p.y = DECK_Y - PLANE_H;
+  p.y = DECK_SURFACE_Y - PLANE_H;
   p.vx = p.speed;
   p.vy = 0;
   p.gear = true;
@@ -167,7 +169,7 @@ export function arrest(p) {
   p.vy = 0;
   p.angle = 0;
   p.gear = true;
-  p.y = DECK_Y - PLANE_H;
+  p.y = DECK_SURFACE_Y - PLANE_H;
   return p;
 }
 

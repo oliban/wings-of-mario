@@ -18,7 +18,7 @@ import {
 import { HUD_H, CELLS, drawPanel } from '../../src/wings/art/hud.js';
 import { WORLD_SCALE, PLAY_H } from '../../src/wings/scene.js';
 import { drawBomb, drawRocket, drawTracer, drawFireball } from '../../src/wings/art/ordnance.js';
-import { VIEW_W, VIEW_H, DECK_X0, DECK_X1, DECK_Y, SEA_Y } from '../../src/wings/geo.js';
+import { VIEW_W, VIEW_H, DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, SEA_Y } from '../../src/wings/geo.js';
 
 // The pilot view is no longer a pixel-art pipeline, so there are no sprite grids
 // to check for ragged rows. What replaced those tests are the things the new

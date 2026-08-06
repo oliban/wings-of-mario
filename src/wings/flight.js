@@ -1,4 +1,6 @@
-import { CEILING_Y, DECK_X0, DECK_X1, DECK_Y, PLANE_W, PLANE_H, clamp } from './geo.js';
+import {
+  CEILING_Y, DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, PLANE_W, PLANE_H, clamp,
+} from './geo.js';
 
 // Everything here is pixels PER FRAME at the fixed 60.0988Hz timestep, and
 // radians per frame for rotation. Nothing reads a clock or an RNG.
@@ -229,7 +231,7 @@ export function createPlane(opts = {}) {
   return {
     mode: opts.mode || MODE.DECK,
     x: opts.x != null ? opts.x : DECK_X0 + 16,
-    y: opts.y != null ? opts.y : DECK_Y - PLANE_H,
+    y: opts.y != null ? opts.y : DECK_SURFACE_Y - PLANE_H,
     angle: opts.angle != null ? opts.angle : 0,
     speed: opts.speed || 0,
     vx: 0,
@@ -308,7 +310,7 @@ function stepRoll(p, pitch, throttle, F) {
   p.turnTicks = null;
   p.turnStartAngle = null;
   p.turnDelta = null;
-  p.y = DECK_Y - PLANE_H;
+  p.y = DECK_SURFACE_Y - PLANE_H;
   // IN THE WIRE. The throttle is ignored and the arrestor does the work: a
   // constant, hard pull-up rather than proportional drag, because a wire takes
   // the same load whatever speed you hit it at — and because proportional drag

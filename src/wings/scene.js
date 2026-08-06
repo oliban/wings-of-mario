@@ -598,6 +598,10 @@ export class Scene {
       // how to draw uncertainty; the sim only supplies it.
       contact: sim.radarContact(),
       fuel: clamp(p.fuel / FLIGHT.FUEL_MAX, 0, 1),
+      // The attitude the landing rules actually test — normalised to +/-PI and
+      // signed, so the panel shows the same number LANDING.MAX_ANGLE is
+      // compared against rather than a raw heading that reads 6.28 near level.
+      angle: normalizeAngle(p.angle).toFixed(2),
       // WHY NOTHING CAUGHT. While he is rolling up the deck the approach
       // verdict is already stale — he is not in the air any more — so the
       // bolter's own reason is what the panel says, and it stays up for the

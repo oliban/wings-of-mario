@@ -1,5 +1,7 @@
 import { TILE } from '../core/constants.js';
-import { DECK_X0, DECK_Y, SEA_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H, localTileToWorld } from './geo.js';
+import {
+  DECK_X0, DECK_Y, DECK_SURFACE_Y, SEA_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H, localTileToWorld,
+} from './geo.js';
 import { MODE, FLIGHT, normalizeAngle } from './flight.js';
 import { LANDING } from './carrier.js';
 import { runways } from './runway.js';
@@ -145,7 +147,7 @@ export function bombTile(sim, islandId, tx, ty, budget = 8000) {
 // with the hook down. Returns true once a wire is caught.
 export function autoLand(sim, budget = 8000) {
   const p = sim.plane;
-  const glideY = DECK_Y - PLANE_H / 2 - 1;
+  const glideY = DECK_SURFACE_Y - PLANE_H / 2 - 1;
 
   // 1. Fly the pattern: get well west of the stern, above the deck. This is
   //    what forces the reversal, since the deck only accepts an eastbound

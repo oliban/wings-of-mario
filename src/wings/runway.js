@@ -1,5 +1,5 @@
 import { TILE } from '../core/constants.js';
-import { DECK_X1, DECK_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H } from './geo.js';
+import { DECK_X1, DECK_SURFACE_Y, ISLAND_TOP_Y, PLANE_W, PLANE_H } from './geo.js';
 import { MODE, FLIGHT, stepPlane, normalizeAngle } from './flight.js';
 import { LANDING } from './carrier.js';
 
@@ -309,7 +309,7 @@ export function touchdown(p, r) {
 // stepRoll in flight.js already does every part of this — rolling friction, the
 // stop floor, rotating off at TAKEOFF_SPEED, and running out of surface back
 // into the air with the gear up — but it names the carrier directly: it pins
-// `p.y` to DECK_Y and ends the roll at DECK_X1. Writing a second copy with an
+// `p.y` to DECK_SURFACE_Y and ends the roll at DECK_X1. Writing a second copy with an
 // island's numbers in it would be two roll models that agree today and drift the
 // first time either is tuned, and the roll is precisely the thing the design
 // asks to be shared with the bow.
@@ -327,7 +327,7 @@ export function touchdown(p, r) {
 export function stepGroundRoll(p, input, r) {
   if (p.mode !== MODE.ROLL && p.mode !== MODE.DECK) return stepPlane(p, input);
   const dx = r.x1 - DECK_X1;
-  const dy = r.y - DECK_Y;
+  const dy = r.y - DECK_SURFACE_Y;
   p.x -= dx;
   p.y -= dy;
   stepPlane(p, input);

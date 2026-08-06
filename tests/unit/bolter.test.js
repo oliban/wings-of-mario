@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { WingsSim } from '../../src/wings/sim.js';
 import { MODE, FLIGHT } from '../../src/wings/flight.js';
 import { LANDING, OUTCOME } from '../../src/wings/carrier.js';
-import { DECK_X0, DECK_X1, DECK_Y, PLANE_H } from '../../src/wings/geo.js';
+import { DECK_X0, DECK_X1, DECK_Y, DECK_SURFACE_Y, PLANE_H } from '../../src/wings/geo.js';
 
 // THE BOLTER, end to end through the simulation.
 //
@@ -25,7 +25,7 @@ const overTheDeck = (sim, speed, over = {}) => {
   const p = sim.plane;
   p.mode = MODE.AIR;
   p.x = DECK_X0 + 40;
-  p.y = DECK_Y - PLANE_H;
+  p.y = DECK_SURFACE_Y - PLANE_H;
   p.angle = 0;
   p.speed = speed;
   p.vx = speed;

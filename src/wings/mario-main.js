@@ -5,7 +5,6 @@ import { Parcel } from './parcel.js';
 import { drawSupplyDrop } from './art/parcel.js';
 import { ToolbeltSeeder } from './toolbelt-blocks.js';
 import { guardThrow } from './flat-throw.js';
-import { installPeachEnding, stepSecondQuest } from './peach-ending.js';
 import { Wrecked } from './wrecked.js';
 import { BRICKBOMB_GRAVITY } from '../game/entities/brickbomb.js';
 import { tileForChar } from '../data/tiles.js';
@@ -110,14 +109,6 @@ overlay.hooks.push((world) => wrecked.step(world));
 // one property read.
 overlay.hooks.push((world) => guardThrow(world, { gravity: BRICKBOMB_GRAVITY, tileSize: TILE }));
 
-// THE SECOND QUEST'S ENEMIES. On the hook list for the same reason as the
-// toolbelt seeder: a world is rebuilt by a death and a pipe as well as by a
-// load, and the wrap has to be on the instance the engine is actually using.
-// It is idempotent and does nothing until 8-4 has been cleared once. See
-// src/wings/second-quest.js — the scene itself is installed in boot(), because
-// it wraps the Game and the Screens manager rather than the World.
-overlay.hooks.push((world) => stepSecondQuest(world));
-
 // THE CARRIER GROUP SAILING, on Mario's screen. On the same hook list as the
 // ferry and the gun, and for the same reason: it is the only fixed 60.0988Hz
 // timestep this page has, and the fade must be counted in ticks so that the
@@ -179,9 +170,6 @@ function boot() {
   if (!ready(g)) return false;
   overlay.attach(g);
   ride.attach(g);
-  // THE PRINCESS AND THE NEW QUEST. Wraps window.__GAME's own Game and Screens
-  // instances, so it needs both to exist — which is what ready() above is for.
-  installPeachEnding(g);
   if (!running) {
     running = true;
     requestAnimationFrame(frame);
