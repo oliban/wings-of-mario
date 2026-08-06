@@ -69,7 +69,9 @@ test('a full sortie flies through __WINGS in a real browser', { timeout: 60000 }
     // 'trapped' is the hook taking a wire; 'landed' is the arrested run coming
     // to rest a few ticks later. Two moments, two events — the arrestor wire is
     // drawn stretching between them.
-    assert.deepEqual(r.events, ['released', 'detonation', 'trapped', 'landed']);
+    // Three moments now: the wheels touching, the hook catching, and the
+    // arrested run coming to rest.
+    assert.deepEqual(r.events, ['released', 'detonation', 'touchdown', 'trapped', 'landed']);
   });
 
   await t.test('no uncaught page errors across the whole sortie', async () => {

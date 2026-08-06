@@ -1,4 +1,5 @@
 import { SHIP, ENSIGN } from './palette.js';
+import { WIRE_COUNT, WIRE_FIRST, WIRE_SPACING } from '../carrier.js';
 import { drawParkedPlane } from './plane.js';
 
 // The carrier. Two things make a side-on grey box read as a flat-top, and
@@ -140,10 +141,12 @@ export function drawHull(ctx, x0, x1, deckY, seaY) {
 // cable under a sudden load does, and it is why this reads as elastic rather
 // than as a line being dragged: the recoil is the part the eye believes.
 export const WIRE = {
-  // Three cables, 26px apart, the first 62px up the deck from the stern.
-  COUNT: 3,
-  FIRST: 62,
-  SPACING: 26,
+  // Three cables, 26px apart, the first 62px up the deck from the stern. The
+  // numbers come from src/wings/carrier.js: the hook catches when it crosses
+  // one, so where they are is a rule the simulation owns and this only draws.
+  COUNT: WIRE_COUNT,
+  FIRST: WIRE_FIRST,
+  SPACING: WIRE_SPACING,
   HALF: 11,
   // How far the hook pulls the wire down at the moment of the catch.
   DEPTH: 7,

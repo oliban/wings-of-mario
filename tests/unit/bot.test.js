@@ -61,7 +61,11 @@ test('a whole sortie: deck, island, crater, deck', () => {
     // 'trapped' is the hook taking a wire; 'landed' is the arrested run coming
     // to rest a few ticks later. Two events because it is two moments, and the
     // wire is drawn stretching between them.
-    ['released', 'detonation', 'trapped', 'landed']
+    // Three moments now, not two: 'touchdown' is the wheels meeting the deck,
+    // 'trapped' is the hook meeting a cable somewhere up it, 'landed' is the
+    // arrested run coming to rest. The wire is drawn stretching between the
+    // last two.
+    ['released', 'detonation', 'touchdown', 'trapped', 'landed']
   );
 });
 

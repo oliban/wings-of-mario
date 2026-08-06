@@ -2,7 +2,7 @@ import { TILE } from '../core/constants.js';
 import { SEA_Y, PLANE_W, PLANE_H, cameraFor, worldBounds } from './geo.js';
 import { MODE, FLIGHT, createPlane, stepPlane, nosePoint } from './flight.js';
 import {
-  landingVerdict, hitsHull, arrest, bolt, trapOn, spotOnDeck, OUTCOME,
+  landingVerdict, hitsHull, arrest, bolt, trapOn, spotOnDeck, wireCrossed, OUTCOME,
 } from './carrier.js';
 import {
   createLoadout, release, stepShot, detonate, canDamage, GUN_INTERVAL, GUN_TRACE_TICKS,
@@ -69,6 +69,10 @@ export class WingsSim {
     // the deck — which is a landing, ugly but down — or off the bow and back
     // in the air, where it is an ordinary aeroplane again.
     this.rolling = false;
+    // Last tick's hook position, for the swept wire test. Null means "a roll
+    // has just started, take this tick as the start".
+    this._hookX = null;
+    this.hookDown = false;
     // DOWN ON AN ISLAND: the strip the aeroplane is rolling or parked on, or
     // null when it is anywhere else. It is what routes the step through
     // stepGroundRoll instead of stepPlane, and it is deliberately NOT the same
@@ -138,6 +142,7 @@ export class WingsSim {
       else stepPlane(p, input);
     }
     this.settleGround();
+    this.catchWire();
     this.settleBolter();
     this.triggers(input);
     this.stepShots();
@@ -493,8 +498,11 @@ export class WingsSim {
   // told which one will fix it next circuit.
   bolter(reason) {
     bolt(this.plane);
+    this._hookX = null;
     this.hookArmed = false;
     this.rolling = true;
+    // Nothing to catch with: that is what a bolter IS.
+    this.hookDown = false;
     this.lastBolter = reason;
     this.bolters++;
     this.emit('bolter', { reason });
@@ -524,7 +532,55 @@ export class WingsSim {
   //
   // The catch is announced here, on the tick it happens, because that is when
   // the wire takes the load.
+  // WHEELS DOWN, HOOK TRAILING, STILL FLYING THE AEROPLANE. This used to grab
+  // him on the tick he entered the box, wherever that was, which is why a
+  // landing felt like hitting a wall the moment the wheels touched: "the plane
+  // should not come to a complete halt directly, remain speed but have the
+  // plane horizontal and let the hooks catch the wire when they are over them".
+  //
+  // So an arrival is a ROLL first. He is down, level, at the speed he brought,
+  // and the arrestor does nothing until the hook actually crosses a cable —
+  // which catchWire() below tests every tick. Cross one and it takes him; cross
+  // all three without catching and the deck runs out, which is a bolter and was
+  // always the other half of this.
   trap() {
+    bolt(this.plane);
+    this._hookX = null;
+    this.hookArmed = false;
+    this.rolling = true;
+    // THE HOOK IS DOWN on this arrival, which is what makes it catchable.
+    // bolt() puts the WHEELS down whether or not the hook was — you roll on
+    // them either way — so `p.gear` cannot answer this once the roll has
+    // started, and a hook-up bolter was being caught by the first wire it
+    // crossed.
+    this.hookDown = true;
+    this.lastBolter = null;
+    this.emit('touchdown', { x: this.plane.x + PLANE_W / 2 });
+    return this;
+  }
+
+  // THE HOOK MEETING A CABLE, swept between last tick's position and this one.
+  // Only while rolling on the deck with the gear down and not already caught.
+  catchWire() {
+    const p = this.plane;
+    // AN ARRIVAL, not a departure. `rolling` is set by an arrival and by
+    // nothing else — a takeoff rolls up the same deck with the gear down and
+    // would otherwise be grabbed by its own wires on the way out, which is
+    // exactly what happened the first time this ran.
+    if (!this.rolling || !this.hookDown) return null;
+    if (p.mode !== MODE.ROLL || p.arrested) return null;
+    if (this.grounded) return null; // on an island there is no wire to catch
+    const prev = this._hookX == null ? p.x : this._hookX;
+    const now = p.x;
+    this._hookX = now;
+    const at = wireCrossed(prev, now);
+    if (at == null) return null;
+    trapOn(p);
+    this.emit('trapped', { x: at });
+    return at;
+  }
+
+  _trapLegacy() {
     trapOn(this.plane);
     this.hookArmed = false;
     this.rolling = true;
@@ -537,6 +593,7 @@ export class WingsSim {
     // The bolter that ended in a landing is over; the panel should stop saying
     // why it happened.
     this.lastBolter = null;
+    this._hookX = null;
     arrest(this.plane);
     this.hookArmed = false;
     this.rearm();

@@ -43,12 +43,20 @@ test('a good approach traps, runs on in the wire, and rearms', () => {
   const from = sim.plane.x;
   sim.step({});
 
-  // CAUGHT, AND STILL MOVING. It used to stop dead on the tick of the catch,
-  // which left the arrestor wire nothing to be drawn stretching over and the
-  // aeroplane sitting on top of the one cable it had taken.
-  assert.equal(sim.plane.mode, MODE.ROLL, 'the wire stopped him dead again');
-  assert.equal(sim.plane.arrested, true);
-  assert.ok(sim.events.some((e) => e.type === 'trapped'), 'the catch was never announced');
+  // DOWN AND STILL ROLLING, NOT YET CAUGHT. The wire used to grab him on the
+  // tick he entered the box, wherever that was, which made a landing feel like
+  // hitting a wall the moment the wheels touched. He is level, on his wheels,
+  // carrying the speed he brought, and the hook is trailing.
+  assert.equal(sim.plane.mode, MODE.ROLL, 'the wheels are not on the deck');
+  assert.equal(sim.plane.arrested, false, 'the wire took him before he reached one');
+  assert.ok(sim.events.some((e) => e.type === 'touchdown'), 'the touchdown was never announced');
+
+  // THEN THE HOOK MEETS A CABLE, somewhere up the deck, and that is the catch.
+  for (let i = 0; i < 200 && !sim.plane.arrested; i++) sim.step({});
+  assert.equal(sim.plane.arrested, true, 'he rolled the whole deck without catching');
+  const caught = sim.events.find((e) => e.type === 'trapped');
+  assert.ok(caught, 'the catch was never announced');
+  assert.ok(caught.x > from, 'the wire he caught is behind where he touched down');
 
   // Hauled down over the next few ticks — and the throttle does not save him,
   // because you do not fly out of a wire.
@@ -56,7 +64,7 @@ test('a good approach traps, runs on in the wire, and rearms', () => {
   assert.equal(sim.plane.mode, MODE.DECK, 'he never came to rest');
   assert.equal(sim.plane.speed, 0);
   assert.ok(sim.plane.x > from, 'the arrested run covered no ground at all');
-  assert.ok(sim.plane.x - from < 60, `he was dragged ${(sim.plane.x - from).toFixed(0)}px: too far`);
+  assert.ok(sim.plane.x - from < 120, `he ran ${(sim.plane.x - from).toFixed(0)}px: too far`);
 
   assert.equal(sim.squadron, 5, 'a good landing cost an aircraft');
   assert.ok(sim.bombs > 0, 'a landing must rearm');
@@ -73,8 +81,10 @@ test('arriving fast is a longer run in the wire, not a bolter and not a fireball
   sim.step({});
   assert.equal(sim.squadron, 5, 'coming in fast still wrote the aeroplane off');
   assert.equal(sim.plane.mode, MODE.ROLL);
-  assert.equal(sim.plane.arrested, true, 'the wire did not catch him');
   assert.equal(sim.bolters, 0, 'a fast arrival was called a bolter');
+  // He rolls until the hook meets a cable, then it takes him.
+  for (let i = 0; i < 200 && !sim.plane.arrested; i++) sim.step({});
+  assert.equal(sim.plane.arrested, true, 'the wire never caught him');
 
   for (let i = 0; i < 600 && sim.plane.mode === MODE.ROLL; i++) sim.step({});
   assert.equal(sim.plane.mode, MODE.DECK, 'he never came to rest');
@@ -85,7 +95,7 @@ test('arriving fast is a longer run in the wire, not a bolter and not a fireball
   overTheDeck(slow, LANDING.APPROACH_SPEED);
   const slowFrom = slow.plane.x;
   slow.step({});
-  for (let i = 0; i < 600 && slow.plane.mode === MODE.ROLL; i++) slow.step({});
+  for (let i = 0; i < 800 && slow.plane.mode === MODE.ROLL; i++) slow.step({});
   assert.ok(sim.plane.x - from > slow.plane.x - slowFrom,
     'a fast arrival was dragged no further than a slow one');
 });
@@ -231,12 +241,18 @@ test('a westbound arrival traps, rolls west, and parks facing west', () => {
   // is pointing, and he has to stay pointing that way once stopped rather than
   // spinning round on the spot.
   const sim = new WingsSim({ islands: ['1-1'] });
-  const p = overTheDeck(sim, LANDING.APPROACH_SPEED, { x: DECK_X1 - 60, angle: Math.PI });
+  // Touched down with enough deck left to REACH a cable. The wires sit near the
+  // stern, where an eastbound arrival meets them first; coming the other way he
+  // has to carry enough energy back to them, and a westbound touchdown right up
+  // at the bow rolls to a stop short of the first one — which is a landing too,
+  // just not a trap.
+  const p = overTheDeck(sim, LANDING.APPROACH_SPEED, { x: DECK_X1 - 130, angle: Math.PI });
   const from = p.x;
   sim.step({});
-  assert.equal(p.mode, MODE.ROLL, 'a westbound approach did not trap');
-  assert.equal(p.arrested, true);
+  assert.equal(p.mode, MODE.ROLL, 'a westbound approach did not put wheels down');
   assert.equal(p.rollDir, -1);
+  for (let i = 0; i < 200 && !p.arrested; i++) sim.step({});
+  assert.equal(p.arrested, true, 'the wire never caught him going west');
 
   for (let i = 0; i < 400 && p.mode === MODE.ROLL; i++) sim.step({});
   assert.equal(p.mode, MODE.DECK, 'never came to rest');

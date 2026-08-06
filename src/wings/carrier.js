@@ -45,6 +45,35 @@ export const LANDING = {
   X_MARGIN: 8,
 };
 
+// WHERE THE WIRES ARE, in world pixels. The geometry lives here rather than in
+// art/carrier.js because the SIMULATION needs it now: the hook catches when it
+// crosses a cable, so where the cables are is a rule and not a decoration. The
+// art reads these and draws them; it used to own them, which was fine while
+// nothing but the painter cared.
+export const WIRE_FIRST = 62;
+export const WIRE_SPACING = 26;
+export const WIRE_COUNT = 3;
+
+export function wireXs() {
+  const out = [];
+  for (let i = 0; i < WIRE_COUNT; i++) out.push(DECK_X0 + WIRE_FIRST + i * WIRE_SPACING);
+  return out;
+}
+
+// Did the hook cross a cable between `from` and `to`? Returns its x, or null.
+//
+// A SWEPT TEST, not a proximity one. At three pixels a tick a hook can step
+// clean over a cable between two frames, and "near enough" would either miss it
+// or catch it twice; asking which wires lie in the interval just crossed cannot
+// do either. Ties go to the first one met, which going west is the rightmost.
+export function wireCrossed(from, to) {
+  const lo = Math.min(from, to);
+  const hi = Math.max(from, to);
+  const xs = wireXs().filter((x) => x > lo && x <= hi);
+  if (!xs.length) return null;
+  return to >= from ? xs[0] : xs[xs.length - 1];
+}
+
 export const OUTCOME = {
   NONE: 'none',
   TRAP: 'trap',

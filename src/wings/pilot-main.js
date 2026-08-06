@@ -236,6 +236,27 @@ function paintSpeedBadge() {
 }
 
 // Called once per rendered frame from Pilot#render.
+// GREEN WHEN YOU COULD PUT IT DOWN RIGHT NOW, red when you could not. Asked
+// for so the state is readable without parsing two numbers mid-approach:
+// "Show the whole debug box green when landing rad ok and red when not" —
+// "same with speed".
+//
+// The two are judged differently because the rules are different. The ANGLE is
+// the one that kills: outside it, arriving is a crash. SPEED no longer refuses
+// anything at all — any speed traps and simply drags you further — so it is
+// amber past the wire's comfortable window rather than red: a warning that the
+// run will be long, not that the landing is off.
+const BADGE_OK = { border: '#2f7', bg: 'rgba(0,26,10,.82)', ink: '#a8ffc8' };
+const BADGE_BAD = { border: '#d34', bg: 'rgba(20,0,0,.82)', ink: '#ffb0b8' };
+
+function paintBadgeState(ok) {
+  if (!speedBadge) return;
+  const c = ok ? BADGE_OK : BADGE_BAD;
+  speedBadge.style.borderColor = c.border;
+  speedBadge.style.background = c.bg;
+  speedBadge.style.color = c.ink;
+}
+
 function updateAngleBadge(sim) {
   if (typeof document === 'undefined' || !sim || !sim.plane) return;
   // OFF LEVEL, not the raw heading — which is the number the landing rule
@@ -248,9 +269,13 @@ function updateAngleBadge(sim) {
   const a = pitchOffLevel(sim.plane.angle);
   const heading = landingDir(sim.plane) === 1 ? 'E' : 'W';
   const ok = Math.abs(a) <= LANDING.MAX_ANGLE;
+  const fast = sim.plane.speed > LANDING.MAX_SPEED;
   badgeAngleLine = `ANGLE  ${a >= 0 ? ' ' : ''}${a.toFixed(3)} rad  ${heading}`
-    + `   (land within ${LANDING.MAX_ANGLE.toFixed(2)})  ${ok ? 'OK' : '--'}`;
+    + `   (land within ${LANDING.MAX_ANGLE.toFixed(2)})  ${ok ? 'OK' : '--'}\n`
+    + `SPEED  ${sim.plane.speed.toFixed(2)}`
+    + `        (wire takes ${LANDING.MAX_SPEED.toFixed(1)})  ${fast ? 'LONG RUN' : 'OK'}`;
   ensureSpeedBadge();
+  paintBadgeState(ok);
   paintSpeedBadge();
 }
 
