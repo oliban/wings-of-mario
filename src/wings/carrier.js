@@ -172,7 +172,8 @@ export function bolt(p) {
   const dir = landingDir(p);
   p.mode = MODE.ROLL;
   p.rollDir = dir;
-  p.rollEnd = dir === 1 ? DECK_X1 : DECK_X0;
+  p.rollMin = DECK_X0;
+  p.rollMax = DECK_X1;
   p.angle = dir === 1 ? 0 : Math.PI;
   p.turnTicks = null;
   p.turnStartAngle = null;
@@ -199,7 +200,8 @@ export function trapOn(p) {
   p.mode = MODE.ROLL;
   p.arrested = true;
   p.rollDir = dir;
-  p.rollEnd = dir === 1 ? DECK_X1 : DECK_X0;
+  p.rollMin = DECK_X0;
+  p.rollMax = DECK_X1;
   p.angle = dir === 1 ? 0 : Math.PI;
   p.turnTicks = null;
   p.turnStartAngle = null;
@@ -232,7 +234,8 @@ export function spotOnDeck(p) {
   // A fresh aeroplane is always spotted at the stern pointing down the deck,
   // whatever the last one did — so the roll state goes back to east first.
   p.rollDir = 1;
-  p.rollEnd = DECK_X1;
+  p.rollMin = DECK_X0;
+  p.rollMax = DECK_X1;
   arrest(p);
   p.x = DECK_X0 + 16;
   return p;

@@ -132,10 +132,10 @@ export const ISLAND_OUTCOME = {
 export function surfaceRow(island, tx) {
   if (tx < 0 || tx >= island.w) return null;
   for (let ty = island.h - 1; ty >= 0; ty--) {
-    if (island.blocksTile(tx, ty)) {
+    if (island.blocksAircraftTile(tx, ty)) {
       // The floor's own TOP: walk up through the solid mass to its first row.
       let top = ty;
-      while (top > 0 && island.blocksTile(tx, top - 1)) top--;
+      while (top > 0 && island.blocksAircraftTile(tx, top - 1)) top--;
       return top;
     }
   }
@@ -149,7 +149,7 @@ export function surfaceRow(island, tx) {
 export function clearAbove(island, tx, ty) {
   for (let d = 1; d <= RUNWAY.CLEAR_TILES; d++) {
     if (ty - d < 0) break;
-    if (island.blocksTile(tx, ty - d)) return false;
+    if (island.blocksAircraftTile(tx, ty - d)) return false;
   }
   return true;
 }
@@ -160,7 +160,7 @@ export function groundRow(island, tx) {
   const ty = surfaceRow(island, tx);
   if (ty == null) return null;
   for (let d = 1; d < RUNWAY.DEPTH_TILES; d++) {
-    if (!island.blocksTile(tx, ty + d)) return null;
+    if (!island.blocksAircraftTile(tx, ty + d)) return null;
   }
   // Headroom, or it is not a runway however flat it is: a column with a pipe
   // or a low ledge over it is somewhere the aeroplane cannot get down to.
@@ -277,8 +277,20 @@ export function islandVerdict(p, r) {
   // mean to put it down here", so without it this simply is not a landing and
   // the aeroplane flies on. If he is genuinely too low he will meet the terrain
   // check a tick later, exactly as he always did.
+  // WHEELS UP IS NOT A LANDING — but it IS still over the strip, and saying
+  // otherwise re-armed the latch that stops him landing twice.
+  //
+  // That is what made an island takeoff impossible. He rotates, the gear comes
+  // up, this reported "not in the box", the latch re-armed — and on the very
+  // next tick the player's gear toggle (a HELD switch, still down) lowered the
+  // wheels again and the strip landed him a second time. Roll, rotate, land,
+  // roll, rotate, land, every tick, never climbing: "it just keeps going
+  // straight without taking off."
+  //
+  // In the box and not a landing. The latch stays shut until he is genuinely
+  // clear of the strip, which is what climbing away does.
   if (!p.gear) {
-    return { inBox: false, ok: false, outcome: ISLAND_OUTCOME.NONE, reason: 'gear-up' };
+    return { inBox: true, ok: false, outcome: ISLAND_OUTCOME.NONE, reason: 'gear-up' };
   }
   return { inBox: true, ok: true, outcome: ISLAND_OUTCOME.ROLLOUT, reason: 'rollout' };
 }
@@ -291,10 +303,11 @@ export function touchdown(p, r) {
   const dir = landingDir(p);
   p.mode = MODE.ROLL;
   p.rollDir = dir;
-  // The end of the strip he is rolling towards. In deck space stepRoll ends the
-  // run at p.rollEnd; stepGroundRoll translates the strip onto the deck, so this
-  // is the deck-space x of whichever end of the strip is ahead of him.
-  p.rollEnd = dir === 1 ? DECK_X1 : DECK_X1 - (r.x1 - r.x0);
+  // BOTH ends of the strip, in deck space: stepGroundRoll translates the strip
+  // onto the deck for the duration of a step, putting its right edge on the bow.
+  // Both are needed so turning round on the spot knows where the other one is.
+  p.rollMax = DECK_X1;
+  p.rollMin = DECK_X1 - (r.x1 - r.x0);
   p.angle = dir === 1 ? 0 : Math.PI;
   p.turnTicks = null;
   p.turnStartAngle = null;

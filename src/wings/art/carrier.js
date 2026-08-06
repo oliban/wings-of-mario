@@ -191,13 +191,21 @@ export function drawWires(ctx, x0, deckY, wire) {
     ctx.lineWidth = 1;
     ctx.beginPath();
     if (i === caught) {
-      // The apex is the hook. While the aeroplane is still running it is ahead
-      // of the stanchions and moving; once it stops, the ring-down plays out
-      // there. Kept at least a little proud of the deck so the cable never
-      // disappears into the planking.
+      // THE APEX IS THE CLAW, both across the deck and down it. The scene
+      // hands over the hook's own position (see HOOK_LOCAL in art/plane.js) so
+      // the cable ends where the aeroplane is actually holding it rather than
+      // at a point near the fuselage — and it follows the tail round when the
+      // aeroplane lands the other way.
+      //
+      // The ring-down is added to the claw's height rather than replacing it,
+      // so the cable still visibly springs once he has stopped. Clamped to the
+      // planking so it can never be drawn sagging up through the deck.
       const apex = typeof wire.hook === 'number' ? wire.hook : x;
+      const apexY = typeof wire.hookY === 'number'
+        ? Math.max(top + 1, wire.hookY + ring)
+        : top + Math.max(1, ring);
       ctx.moveTo(x - WIRE.HALF, top);
-      ctx.lineTo(apex, top + Math.max(1, ring));
+      ctx.lineTo(apex, apexY);
       ctx.lineTo(x + WIRE.HALF, top);
     } else {
       ctx.moveTo(x - WIRE.HALF, top);

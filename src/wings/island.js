@@ -1,5 +1,9 @@
 import { TILE } from '../core/constants.js';
 import { tileForChar, CHAR_TO_TILE } from '../data/tiles.js';
+
+// The characters nothing is ever drawn for: the hidden 1UP block and the
+// hidden coin. Mirrors INVISIBLE in src/wings/art/mario-tiles.js.
+const HIDDEN_CHARS = new Set(['1', 'C']);
 import { blastTiles, tileKey, parseTileKey } from './blast.js';
 import { ISLAND_TOP_Y, worldToLocalTile } from './geo.js';
 import { isProtected } from './sanctuary.js';
@@ -80,6 +84,31 @@ export class Island {
   // What stops an aeroplane: solid tiles and one-way platforms. A plane must
   // not explode against a free-floating coin, a bush, or a tile character
   // nobody defined.
+  // WHAT THE AEROPLANE CAN FLY INTO — which is not the same as what is solid.
+  //
+  // '1' and 'C' are HIDDEN blocks: the extra life and the hidden coin. They are
+  // solid to Mario, who discovers them by jumping into one, and they are drawn
+  // by nothing at all. An aeroplane hitting one exploded against empty sky:
+  // "the plane explodes mid-air here... it is hitting the invisible brick that
+  // yields an extra life."
+  //
+  // Being killed by something the screen does not show is not difficulty, it is
+  // a lie. They stay solid for everything else — Mario still finds them, bombs
+  // still take them — but they are air as far as the aeroplane is concerned.
+  //
+  // The set is the renderer's own INVISIBLE list from art/mario-tiles.js, which
+  // is the definition of "nothing is drawn here", copied for the same reason
+  // geo.js copies the deck's thickness: the simulation must not import the art.
+  blocksAircraftTile(tx, ty) {
+    if (HIDDEN_CHARS.has(this.charAt(tx, ty))) return false;
+    return this.blocksTile(tx, ty);
+  }
+
+  blocksAircraftAt(px, py) {
+    const { tx, ty } = worldToLocalTile(this.originX, px, py);
+    return this.blocksAircraftTile(tx, ty);
+  }
+
   blocksTile(tx, ty) {
     const ch = this.charAt(tx, ty);
     if (this._unknown(ch)) return false;

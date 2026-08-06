@@ -264,8 +264,14 @@ test('the two ways to crash on a strip, in the order they are decided', () => {
   // too low.
   const up = islandVerdict(planeOn(r, { gear: false }), r);
   assert.equal(up.outcome, ISLAND_OUTCOME.NONE);
-  assert.equal(up.inBox, false);
   assert.equal(up.reason, 'gear-up');
+  // IN the box, though — and this asserted otherwise. Saying "not in the box"
+  // re-armed the latch that stops him landing twice, so a takeoff went: rotate,
+  // gear up, latch re-arms, the player's HELD gear toggle lowers the wheels
+  // again on the very next tick, and the strip lands him a second time. Every
+  // tick. He never climbed away: "it just keeps going straight without taking
+  // off."
+  assert.equal(up.inBox, true, 'a gear-up pass over a strip must not re-arm the latch');
   // ORDERING: a nose-down arrival is fatal whatever the gear is doing, and must
   // not be reported as a raised undercarriage. (Backwards is no longer fatal at
   // all — it is a landing like any other.)
@@ -295,7 +301,12 @@ test('a strip can be rolled along in either direction', () => {
   const east = planeOn(r, { angle: 0, speed: LANDING.APPROACH_SPEED });
   touchdown(east, r);
   assert.equal(east.rollDir, 1);
-  assert.ok(east.rollEnd > p.rollEnd, 'both directions end the run at the same place');
+  // Both ends of the strip are carried, in deck space, so a roll knows where it
+  // runs out whichever way it is going — and so an aeroplane parked at one end
+  // can turn round and find the other.
+  assert.ok(p.rollMax > p.rollMin, 'the strip has no length in deck space');
+  assert.equal(east.rollMin, p.rollMin);
+  assert.equal(east.rollMax, p.rollMax);
 });
 
 // ---------------------------------------------------------------------------
@@ -628,4 +639,47 @@ test('a textbook approach gets down on ordinary levels, not just the castle', ()
     assert.equal(sim.grounded, true, `${id}: not parked on the strip`);
     assert.equal(sim.squadron, 5, `${id}: landing cost an aircraft`);
   }
+});
+
+test('he can take off again from the strip he landed on', () => {
+  // THE OSCILLATION THIS FIXES: rotate, gear up, latch re-arms, the player's
+  // held gear toggle lowers the wheels, the strip lands him again — every tick,
+  // for ever, going straight down the island.
+  const { sim, r } = simOn('1-4');
+  arrive(sim, r);
+  sim.step({ gear: true });
+  for (let i = 0; i < 900 && sim.plane.mode === MODE.ROLL; i++) sim.step({ gear: true });
+  assert.equal(sim.plane.mode, MODE.DECK, 'never parked');
+
+  const y0 = sim.plane.y;
+  let modes = 0;
+  let was = sim.plane.mode;
+  // The gear toggle is HELD DOWN throughout, as a real pilot's is.
+  for (let i = 0; i < 200 && sim.plane.mode !== MODE.DOWN; i++) {
+    sim.step({ thrust: 1, pitch: 1, gear: true });
+    if (sim.plane.mode !== was) { modes++; was = sim.plane.mode; }
+    if (sim.plane.mode === MODE.AIR && sim.plane.y < y0 - 8) break;
+  }
+  assert.ok(sim.plane.y < y0 - 8, 'he never climbed away from the strip');
+  assert.ok(modes <= 2, `he bounced between rolling and flying ${modes} times`);
+});
+
+test('a hidden block is not something an aeroplane can hit', () => {
+  // "the plane explodes mid-air here... it is hitting the invisible brick that
+  // yields an extra life." '1' and 'C' are drawn by nothing at all, and being
+  // killed by something the screen does not show is a lie rather than a
+  // difficulty. They stay solid for everything else.
+  const level = getLevel('1-1');
+  const isle = new Island(level, ORIGIN);
+  let hidden = 0;
+  for (let ty = 0; ty < isle.h; ty++) {
+    for (let tx = 0; tx < isle.w; tx++) {
+      if (!'1C'.includes(isle.charAt(tx, ty))) continue;
+      hidden++;
+      assert.equal(isle.blocksTile(tx, ty), true, 'a hidden block stopped being solid');
+      assert.equal(isle.blocksAircraftTile(tx, ty), false,
+        `the aeroplane can still die on the hidden block at ${tx},${ty}`);
+    }
+  }
+  assert.ok(hidden > 0, '1-1 has no hidden blocks; this test proves nothing');
 });

@@ -277,6 +277,17 @@ function drawGear(ctx) {
   ctx.fill();
 }
 
+// WHERE THE CLAW IS, relative to the aeroplane's centre, in world pixels.
+//
+// The arrestor wire is drawn stretching to the HOOK — "the wire need to connect
+// with the hook at the back of the plane" — and the back of the aeroplane is
+// wherever its tail happens to be pointing. The scene rotates this by the
+// heading, so an aeroplane facing west trails its hook to the RIGHT.
+//
+// Read off drawHook below rather than guessed: the claw is the arc at
+// (TAIL - 6.6, 5.6) in the 52-unit authoring frame, scaled like everything else.
+export const HOOK_LOCAL = { x: (TAIL - 6.6) * PLANE_SCALE, y: 5.6 * PLANE_SCALE };
+
 function drawHook(ctx) {
   ctx.strokeStyle = PLANE.dark;
   ctx.lineWidth = 1.5;

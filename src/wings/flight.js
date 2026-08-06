@@ -238,7 +238,11 @@ export function createPlane(opts = {}) {
     // Which way a ground roll runs, and the x it ends at. Set on touchdown;
     // a takeoff is always eastbound to the bow, which is these defaults.
     rollDir: opts.rollDir === -1 ? -1 : 1,
-    rollEnd: opts.rollEnd != null ? opts.rollEnd : DECK_X1,
+    // BOTH ends of the surface he is rolling on, so turning round on the spot
+    // knows where the other one is. In deck space always; an island's strip is
+    // translated onto the deck for the duration of a step (see runway.js).
+    rollMin: opts.rollMin != null ? opts.rollMin : DECK_X0,
+    rollMax: opts.rollMax != null ? opts.rollMax : DECK_X1,
     x: opts.x != null ? opts.x : DECK_X0 + 16,
     y: opts.y != null ? opts.y : restY(DECK_SURFACE_Y),
     angle: opts.angle != null ? opts.angle : 0,
@@ -317,7 +321,24 @@ function stepRoll(p, pitch, thrust, F) {
   // spotted at the stern pointing down the deck — but a LANDING can now arrive
   // from either direction, and a westbound arrival has to roll west. `rollDir`
   // is set on touchdown and defaults to east for everything else.
-  const dir = p.rollDir === -1 ? -1 : 1;
+  let dir = p.rollDir === -1 ? -1 : 1;
+
+  // TURNING ROUND ON THE SPOT. "when standing on far end of the carrier or
+  // land, I need to be able to turn the plane around to try to start in the
+  // other direction." Stopped, with the stick held the way you want to go: the
+  // aeroplane swings round and the same press then accelerates it away, so
+  // turning and starting are one movement rather than a mode.
+  //
+  // Only at a standstill. In motion that same press is the brakes, which is
+  // what stops you in the first place — so the sequence is brake, stop, keep
+  // holding, and you are pointing the other way.
+  if (p.speed === 0 && thrust !== 0 && !p.arrested) {
+    const want = thrust > 0 ? 1 : -1;
+    if (want !== dir) {
+      dir = want;
+      p.rollDir = want;
+    }
+  }
   // Upright, pointing the way it is rolling. No stall turn survives a landing
   // or a respawn either.
   p.angle = dir === -1 ? Math.PI : 0;
@@ -325,6 +346,17 @@ function stepRoll(p, pitch, thrust, F) {
   p.turnStartAngle = null;
   p.turnDelta = null;
   p.y = restY(DECK_SURFACE_Y);
+  // STANDING ON THEM. An aeroplane on its wheels cannot raise them, and the
+  // hook hangs with them — so the deck asserts it every tick rather than
+  // trusting whatever the stick last said.
+  //
+  // Without this a respawn inherited the PLAYER'S stale toggle: spotOnDeck puts
+  // a fresh aeroplane down with the gear lowered, and the very next tick's
+  // input — still carrying "gear up" from the sortie that just ended — raised
+  // it again while it sat on the deck. "sometimes when starting again from
+  // carrier the hook and wheels are not down." Sometimes, because it depended
+  // on whether the last thing you did was retract them.
+  p.gear = true;
   // IN THE WIRE. The throttle is ignored and the arrestor does the work: a
   // constant, hard pull-up rather than proportional drag, because a wire takes
   // the same load whatever speed you hit it at — and because proportional drag
@@ -377,10 +409,11 @@ function stepRoll(p, pitch, thrust, F) {
   // could not have seen coming.
   // The end of the run is whichever end he is rolling towards: the bow going
   // east, the stern going west.
-  const past = dir === 1 ? p.x >= p.rollEnd : p.x <= p.rollEnd;
+  const end = dir === 1 ? p.rollMax : p.rollMin;
+  const past = dir === 1 ? p.x >= end : p.x <= end;
   if (past) {
     if (p.arrested) {
-      p.x = p.rollEnd;
+      p.x = end;
       p.speed = 0;
       return;
     }

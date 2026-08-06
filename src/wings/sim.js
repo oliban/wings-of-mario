@@ -385,7 +385,19 @@ export class WingsSim {
     // were about to accept, exactly as hitsHull is asked only once the deck box
     // has said no.
     const arrival = this.islandArrival();
+    // NOTHING UNDER HIM — no island, no strip, or nowhere near its surface. He
+    // is clear, so the latch re-arms and the next approach may land.
     if (!arrival) this.groundArmed = true;
+    // OVER A STRIP WITH THE WHEELS UP. Neither a landing nor a crash: a low
+    // pass, which is what a strafing run is, and reading it as an arrival gone
+    // wrong killed every one of them with `island-gear-up`.
+    //
+    // The latch is deliberately left ALONE rather than re-armed. Re-arming here
+    // is what made an island takeoff impossible: he rotates, the gear comes up,
+    // the latch re-arms — and the player's gear switch is a HELD toggle, still
+    // down, so the next tick lowers the wheels and the strip lands him again.
+    // Every tick, for ever, never climbing.
+    else if (arrival.verdict.outcome === ISLAND_OUTCOME.NONE) this.lastIslandVerdict = arrival.verdict;
     else if (this.groundArmed) {
       // Its own field rather than `lastVerdict`: that one is the deck's, the
       // HUD reads it against carrier.js's OUTCOME names, and an island verdict
@@ -402,7 +414,7 @@ export class WingsSim {
     // cloud is scenery an aeroplane passes straight through.
     const nose = nosePoint(p);
     const isle = this.islandAt(nose.x, nose.y);
-    if (isle && isle.blocksAt(nose.x, nose.y)) return this.lose('island');
+    if (isle && isle.blocksAircraftAt(nose.x, nose.y)) return this.lose('island');
 
     const verdict = landingVerdict(p);
     this.lastVerdict = verdict;

@@ -9,7 +9,7 @@ import {
   drawHull, drawDeck, drawIsland, drawCrew, drawDeckPark, WIRE,
   ISLAND_W, ISLAND_H, DECK_THICK,
 } from './art/carrier.js';
-import { drawPlane } from './art/plane.js';
+import { drawPlane, HOOK_LOCAL } from './art/plane.js';
 import { drawLandmass } from './art/land.js';
 import { drawBomb, drawTracer, drawRocket, drawFireball } from './art/ordnance.js';
 import {
@@ -393,7 +393,20 @@ export class Scene {
       // aeroplane is still running in the wire and then left where it stopped.
       // Read here rather than at draw time because drawShip is handed a camera
       // and a frame, not the simulation.
-      this.wire.hook = sim.plane.x + 2;
+      //
+      // THE CLAW, not the aeroplane's left edge. It used to be `plane.x + 2`,
+      // which is the nose end of the bounding box: the cable ran to a point in
+      // front of the aeroplane rather than to the tailhook trailing behind it,
+      // and going the other way it was on completely the wrong end. The hook's
+      // offset comes from the art (HOOK_LOCAL) and is rotated by the heading,
+      // so it follows the tail round.
+      const pl = sim.plane;
+      const cx = pl.x + PLANE_W / 2;
+      const cy = pl.y + PLANE_H / 2;
+      const ca = Math.cos(pl.angle);
+      const sa = Math.sin(pl.angle);
+      this.wire.hook = cx + HOOK_LOCAL.x * ca - HOOK_LOCAL.y * sa;
+      this.wire.hookY = cy + HOOK_LOCAL.x * sa + HOOK_LOCAL.y * ca;
       if (this.wire.t >= WIRE.TICKS) this.wire = null;
     }
     return this;

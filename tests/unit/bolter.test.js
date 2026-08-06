@@ -332,3 +332,66 @@ test('you cannot brake out of an arrestor wire', () => {
   assert.ok(Math.abs(withBrakes - (plain.plane.x - at2)) < 0.01,
     'the brakes changed the arrested run');
 });
+
+test('parked at the far end, holding the other way turns him round', () => {
+  // "when standing on far end of the carrier or land, I need to be able to turn
+  // the plane around to try to start in the other direction." Stopped, with the
+  // stick held the way you want to go: he swings round and the same press
+  // accelerates him away, so turning and starting are one movement.
+  const sim = new WingsSim({ islands: ['1-1'] });
+  const p = sim.plane;
+  // Trapped westbound, so he is parked facing west near the stern.
+  overTheDeck(sim, LANDING.APPROACH_SPEED, { x: DECK_X1 - 130, angle: Math.PI });
+  sim.step({});
+  for (let i = 0; i < 400 && p.mode !== MODE.DECK; i++) sim.step({});
+  assert.equal(p.mode, MODE.DECK);
+  assert.equal(p.rollDir, -1, 'he did not park facing west');
+  const parked = p.x;
+
+  // Hold EAST: he turns round rather than reversing up the deck backwards.
+  sim.step({ thrust: 1 });
+  assert.equal(p.rollDir, 1, 'he never turned round');
+  assert.equal(p.angle, 0, 'he is still pointing the old way');
+
+  // And keeps going, forwards, the new way.
+  for (let i = 0; i < 60; i++) sim.step({ thrust: 1 });
+  assert.ok(p.x > parked, 'he did not move off in the direction he now faces');
+});
+
+test('turning round is refused while he is still moving', () => {
+  // In motion that same press is the BRAKES. Pivoting under way would be a
+  // handbrake turn at landing speed.
+  const sim = new WingsSim({ islands: ['1-1'] });
+  const p = sim.plane;
+  overTheDeck(sim, LANDING.MAX_SPEED + 1, { gear: false }); // a rolling bolter
+  sim.step({});
+  assert.equal(p.mode, MODE.ROLL);
+  assert.ok(p.speed > 0);
+  sim.step({ thrust: -1 });
+  assert.equal(p.rollDir, 1, 'he spun round while still rolling');
+});
+
+test('a fresh aeroplane always has its wheels and hook down', () => {
+  // The gear switch is a HELD toggle on the pilot's side, so a sortie that
+  // ended with the gear up used to re-assert that on the fresh aeroplane the
+  // tick after it was spotted — it sat on the deck with its wheels retracted.
+  const sim = new WingsSim({ islands: ['1-1'] });
+  // Fly, retract, die.
+  sim.step({ thrust: 1, pitch: 1, gear: false });
+  sim.lose('sea');
+  sim.respawn();
+  assert.equal(sim.plane.gear, true, 'spotted with the gear up');
+
+  // And the stale toggle cannot take them up again while he is standing on
+  // them, which is what actually happened.
+  for (let i = 0; i < 30; i++) sim.step({ gear: false });
+  assert.equal(sim.plane.gear, true, 'the wheels came up while parked on the deck');
+  assert.equal(sim.plane.mode, MODE.DECK);
+
+  // They still come up on the way out, which is the one time they should.
+  for (let i = 0; i < 400 && sim.plane.mode !== MODE.AIR; i++) {
+    sim.step({ thrust: 1, pitch: 1, gear: false });
+  }
+  assert.equal(sim.plane.mode, MODE.AIR);
+  assert.equal(sim.plane.gear, false, 'the gear never retracted on takeoff');
+});
