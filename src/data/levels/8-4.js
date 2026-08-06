@@ -77,7 +77,7 @@ const WATER = {
 export default {
   id: '8-4',
   name: 'WORLD 8-4',
-  time: 400,
+  time: 300,
   theme: 'castle',
   music: 'castle',
   width: 317,
